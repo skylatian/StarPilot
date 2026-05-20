@@ -72,6 +72,7 @@ from openpilot.starpilot.common.testing_grounds import (
   TESTING_GROUNDS_SLOT_DEFINITIONS as SHARED_TESTING_GROUNDS_SLOT_DEFINITIONS,
   TESTING_GROUNDS_STATE_PATH as SHARED_TESTING_GROUNDS_STATE_PATH,
 )
+from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, update_recent_destinations
 from openpilot.starpilot.system.the_pond import utilities
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -3459,11 +3460,16 @@ def setup(app):
 
   @app.route("/api/navigation", methods=["POST"])
   def set_navigation():
-    params.remove("NavDestination")
+    destination = normalize_destination_payload(request.json)
+    if destination is None:
+      return {"message": "Invalid destination payload"}, 400
 
-    time.sleep(1)
-
-    params.put("NavDestination", json.dumps(request.json))
+    recent_destinations = update_recent_destinations(
+      params.get("ApiCache_NavDestinations", encoding="utf8") or "",
+      destination,
+    )
+    params.put("NavDestination", json.dumps(destination))
+    params.put("ApiCache_NavDestinations", json.dumps(recent_destinations))
     return {"message": "Destination set"}
 
   @app.route("/api/navigation/favorite", methods=["DELETE"])

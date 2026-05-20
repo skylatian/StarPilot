@@ -41,6 +41,7 @@ SAFE_MODE_MANAGED_KEYS = (
   "NNFF",
   "NNFFLite",
   "TurnDesires",
+  "NavDesiresAllowed",
   "QOLLateral",
   "PauseLateralSpeed",
   "PauseLateralOnSignal",

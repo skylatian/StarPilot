@@ -201,6 +201,14 @@
         "parent_key": "LateralTune"
       },
       {
+        "key": "NavDesiresAllowed",
+        "label": "Use Route Desires",
+        "description": "Allow an active navigation route to request keep-left, keep-right, and low-speed turn desires.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "LateralTune"
+      },
+      {
         "key": "NNFF",
         "label": "Neural Network Feedforward (NNFF)",
         "description": "Twilsonco's \"Neural Network FeedForward\" controller. Uses a trained neural network model to predict steering torque based on vehicle speed, roll, and past/future planned path data for smoother, model-based steering.",
