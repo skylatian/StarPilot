@@ -26,6 +26,10 @@ fi
 
 export STAGING_ROOT="/data/safe_staging"
 
+# Retrofit: force fingerprint for 2016 Corolla parts (no stock ECU to query)
+export FINGERPRINT="TOYOTA_COROLLA"
+export SKIP_FW_QUERY="1"
+
 # StarPilot variables (only available after StarPilot is installed to /data/openpilot)
 if [ -x /data/openpilot/starpilot/system/environment_variables ]; then
   eval "$(/data/openpilot/starpilot/system/environment_variables)"
