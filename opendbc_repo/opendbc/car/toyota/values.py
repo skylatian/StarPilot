@@ -57,6 +57,7 @@ class ToyotaSafetyFlags(IntFlag):
   LTA = (4 << 8)
   SECOC = (8 << 8)
   LONG_FILTER = (16 << 8)
+  GAS_INTERCEPTOR = (32 << 8)
 
 
 class ToyotaFlags(IntFlag):

@@ -47,6 +47,10 @@
   {0x343, 0, 8, .check_relay = true}, \
   {0x183, 0, 8, .check_relay = true},  /* ACC_CONTROL_2 */ \
 
+#define TOYOTA_GAS_INTERCEPTOR_ADDR_CHECK                                                                                            \
+  {.msg = {{0x201, 0, 6, 50U, .max_counter = 15U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, \
+           { 0 }, { 0 }}},                                                                                                          \
+
 #define TOYOTA_COMMON_RX_CHECKS(lta)                                                                                                       \
   {.msg = {{ 0xaa, 0, 8, 83U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0x260, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag=!(lta)}, { 0 }, { 0 }}},                           \
@@ -158,6 +162,13 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       if (toyota_alt_brake && (msg->addr == 0x224U)) {
         brake_pressed = GET_BIT(msg, 5U);  // BRAKE_MODULE.BRAKE_PRESSED (toyota_new_mc_pt_generated.dbc)
       }
+    }
+
+    // gas interceptor: override gas_pressed from interceptor when enabled
+    if ((msg->addr == 0x201U) && enable_gas_interceptor) {
+      int gas_interceptor = (((msg->data[0] << 8) + msg->data[1]) + ((msg->data[2] << 8) + msg->data[3])) / 2;
+      gas_pressed = gas_interceptor > 805;
+      gas_interceptor_prev = gas_interceptor;
     }
 
     // sample speed
@@ -353,6 +364,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // GAS: safety check (interceptor)
+  if (msg->addr == 0x200U) {
+    if (longitudinal_interceptor_checks(msg)) {
+      tx = false;
+    }
+  }
+
   // UDS: Only tester present ("\x0F\x02\x3E\x00\x00\x00\x00\x00") allowed on diagnostics address
   if (msg->addr == 0x750U) {
     // this address is sub-addressed. only allow tester present to radar (0xF)
@@ -380,8 +398,18 @@ static safety_config toyota_init(uint16_t param) {
     TOYOTA_COMMON_LONG_TX_MSGS
   };
 
+  static const CanMsg TOYOTA_LONG_INTERCEPTOR_TX_MSGS[] = {
+    TOYOTA_COMMON_LONG_TX_MSGS
+    {0x200, 0, 6, .check_relay = false},
+  };
+
   static const CanMsg TOYOTA_LONG_TX_MSGS_FILTER[] = {
     TOYOTA_COMMON_LONG_TX_MSGS_FILTER
+  };
+
+  static const CanMsg TOYOTA_LONG_INTERCEPTOR_TX_MSGS_FILTER[] = {
+    TOYOTA_COMMON_LONG_TX_MSGS_FILTER
+    {0x200, 0, 6, .check_relay = false},
   };
 
   static const CanMsg TOYOTA_SECOC_LONG_TX_MSGS[] = {
@@ -396,6 +424,7 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_STOCK_LONGITUDINAL = 2UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_LTA = 4UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_LONG_FILTER = 16UL << TOYOTA_PARAM_OFFSET;
+  const uint32_t TOYOTA_PARAM_GAS_INTERCEPTOR = 32UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -406,6 +435,7 @@ static safety_config toyota_init(uint16_t param) {
   toyota_stock_longitudinal = GET_FLAG(param, TOYOTA_PARAM_STOCK_LONGITUDINAL);
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_long_filter = GET_FLAG(param, TOYOTA_PARAM_LONG_FILTER);
+  enable_gas_interceptor = GET_FLAG(param, TOYOTA_PARAM_GAS_INTERCEPTOR);
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
@@ -420,9 +450,17 @@ static safety_config toyota_init(uint16_t param) {
       SET_TX_MSGS(TOYOTA_TX_MSGS, ret);
     } else {
       if (toyota_long_filter) {
-        SET_TX_MSGS(TOYOTA_LONG_TX_MSGS_FILTER, ret);
+        if (enable_gas_interceptor) {
+          SET_TX_MSGS(TOYOTA_LONG_INTERCEPTOR_TX_MSGS_FILTER, ret);
+        } else {
+          SET_TX_MSGS(TOYOTA_LONG_TX_MSGS_FILTER, ret);
+        }
       } else {
-        SET_TX_MSGS(TOYOTA_LONG_TX_MSGS, ret);
+        if (enable_gas_interceptor) {
+          SET_TX_MSGS(TOYOTA_LONG_INTERCEPTOR_TX_MSGS, ret);
+        } else {
+          SET_TX_MSGS(TOYOTA_LONG_TX_MSGS, ret);
+        }
       }
     }
   }
@@ -447,8 +485,22 @@ static safety_config toyota_init(uint16_t param) {
     static RxCheck toyota_lka_alt_brake_rx_checks[] = {
       TOYOTA_ALT_BRAKE_RX_CHECKS(false)
     };
+    static RxCheck toyota_lka_interceptor_rx_checks[] = {
+      TOYOTA_RX_CHECKS(false)
+      TOYOTA_GAS_INTERCEPTOR_ADDR_CHECK
+    };
+    static RxCheck toyota_lka_alt_brake_interceptor_rx_checks[] = {
+      TOYOTA_ALT_BRAKE_RX_CHECKS(false)
+      TOYOTA_GAS_INTERCEPTOR_ADDR_CHECK
+    };
 
-    if (!toyota_alt_brake) {
+    if (enable_gas_interceptor) {
+      if (!toyota_alt_brake) {
+        SET_RX_CHECKS(toyota_lka_interceptor_rx_checks, ret);
+      } else {
+        SET_RX_CHECKS(toyota_lka_alt_brake_interceptor_rx_checks, ret);
+      }
+    } else if (!toyota_alt_brake) {
       SET_RX_CHECKS(toyota_lka_rx_checks, ret);
     } else {
       SET_RX_CHECKS(toyota_lka_alt_brake_rx_checks, ret);
