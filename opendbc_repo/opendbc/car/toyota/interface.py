@@ -139,6 +139,14 @@ class CarInterface(CarInterfaceBase):
                                         candidate in (TSS2_CAR - RADAR_ACC_CAR) or
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
 
+    # Retrofit: no stock longitudinal (no DSU/smartDSU/TSS2) — OP owns longitudinal via Comma Pedal
+    # Must be after the stock detection logic above, which otherwise overwrites to False
+    # experimentalLongitudinalAvailable makes the toggle visible; alpha_long gates activation
+    if candidate == CAR.TOYOTA_COROLLA:
+      ret.alphaLongitudinalAvailable = True
+      if alpha_long:
+        ret.openpilotLongitudinalControl = True
+
     ret.autoResumeSng = ret.openpilotLongitudinalControl and candidate in NO_STOP_TIMER_CAR
     ret.enableGasInterceptorDEPRECATED = 0x201 in fingerprint[0] and ret.openpilotLongitudinalControl
 
