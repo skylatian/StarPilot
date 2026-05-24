@@ -78,10 +78,10 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     cp = can_parsers[Bus.pt]
-    cp_cam = can_parsers[Bus.cam]
+    cp_cam = can_parsers.get(Bus.cam)
 
     ret = structs.CarState()
-    cp_acc = cp_cam if self.CP.carFingerprint in (TSS2_CAR - RADAR_ACC_CAR) else cp
+    cp_acc = cp_cam if (cp_cam is not None and self.CP.carFingerprint in (TSS2_CAR - RADAR_ACC_CAR)) else cp
 
     if not self.CP.flags & ToyotaFlags.SECOC.value:
       self.gvc = cp.vl["VSC1S07"]["GVC"]
@@ -204,7 +204,7 @@ class CarState(CarStateBase):
       ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1)
       ret.rightBlindspot = (cp.vl["BSM"]["R_ADJACENT"] == 1) or (cp.vl["BSM"]["R_APPROACHING"] == 1)
 
-    if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V:
+    if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V and cp_cam is not None:
       self.lkas_hud = copy.copy(cp_cam.vl["LKAS_HUD"])
 
     if self.CP.carFingerprint not in UNSUPPORTED_DSU_CAR:
@@ -241,7 +241,7 @@ class CarState(CarStateBase):
       *create_button_events(self.pcm_acc_status == 10, False, {1: ButtonType.decelCruise}),
     ]
 
-    fp_ret.dashboardSpeedLimit = calculate_speed_limit(cp_cam)
+    fp_ret.dashboardSpeedLimit = calculate_speed_limit(cp_cam) if cp_cam is not None else 0
 
     if not self.CP.flags & ToyotaFlags.SECOC.value:
       fp_ret.ecoGear = cp.vl["GEAR_PACKET"]["ECON_ON"] == 1
@@ -276,7 +276,11 @@ class CarState(CarStateBase):
     if CP.enableGasInterceptorDEPRECATED:
       pt_messages.append(("GAS_SENSOR", 50))
 
-    return {
+    parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
-      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
     }
+
+    if CP.carFingerprint in TSS2_CAR:
+      parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2)
+
+    return parsers
