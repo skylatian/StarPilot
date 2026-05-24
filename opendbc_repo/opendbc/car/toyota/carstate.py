@@ -100,8 +100,8 @@ class CarState(CarStateBase):
       can_gear = int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"])
     else:
       if self.CP.enableGasInterceptorDEPRECATED:
-        ret.gas = (cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] + cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"]) / 2
-        ret.gasPressed = ret.gas > 805
+        gas = (cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] + cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"]) / 2
+        ret.gasPressed = gas > 805
       else:
         ret.gasPressed = cp.vl["PCM_CRUISE"]["GAS_RELEASED"] == 0  # TODO: these also have GAS_PEDAL, come back and unify
       can_gear = int(cp.vl["GEAR_PACKET"]["GEAR"])
