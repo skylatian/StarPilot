@@ -125,9 +125,6 @@ class CarController(CarControllerBase):
     if not (self.CP.enableGasInterceptorDEPRECATED and self.CP.openpilotLongitudinalControl and CC.longActive):
       return 0.0
 
-    if self.CP.minEnableSpeed < 0.0:
-      return 0.12 if CS.out.standstill and self.accel > 0.0 else 0.0
-
     max_interceptor_gas = 0.5
     if self.CP.carFingerprint == CAR.TOYOTA_RAV4:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.15, 0.3, 0.0]))
