@@ -23,6 +23,19 @@ The available buttons and axes will print showing their key mappings. In general
 
 Plug the joystick into your comma three aux USB-C port. Then, SSH into the device and start `joystick_control.py`.
 
+Alternatively, enable "Joystick Debug Mode" from the Developer Settings menu. **An openpilot restart is required** (not just on/off road — `tmux a` + Ctrl+C, then `./launch_openpilot.sh`) for changes to `joystick_control.py` to take effect when using the Developer menu toggle.
+
+#### Xbox controller mapping (on-device)
+
+| Control | Axis code | Action |
+|---------|-----------|--------|
+| Left stick X | `ABS_X` | Steering |
+| Right trigger | `ABS_Z` | Gas (accel) |
+| Left trigger | `ABS_RZ` | Brake (negative accel) |
+| Y button | `BTN_NORTH` | Cancel |
+
+**Important**: On first use, move each stick/trigger to its full limits before driving. The code auto-calibrates axis ranges from incoming values — until it sees the extremes, output will be clipped/inaccurate.
+
 ### Joystick on your laptop
 
 In order to use a joystick over the network, we need to run joystick_control locally from your laptop and have it send `testJoystick` packets over the network to the comma device.
