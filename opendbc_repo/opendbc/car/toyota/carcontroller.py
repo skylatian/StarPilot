@@ -13,6 +13,7 @@ from opendbc.car.toyota.values import CAR, MIN_ACC_SPEED, NO_STOP_TIMER_CAR, PED
                                         CarControllerParams, ToyotaFlags, \
                                         UNSUPPORTED_DSU_CAR
 from opendbc.can import CANPacker
+from openpilot.common.params import Params
 
 Ecu = structs.CarParams.Ecu
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -127,6 +128,7 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.doors_locked = False
+    self.param_store = Params()
 
   def _compute_interceptor_gas_cmd(self, CC, CS):
     if not (self.CP.enableGasInterceptorDEPRECATED and self.CP.openpilotLongitudinalControl and CC.longActive):
@@ -144,7 +146,8 @@ class CarController(CarControllerBase):
     else:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.4, 0.5, 0.0]))
 
-    pedal_offset = float(np.interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [-0.4, 0.0, 0.2]))
+    offset_low = self.param_store.get_float("RetrofitPedalOffsetStandstill", default=-0.1)
+    pedal_offset = float(np.interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [offset_low, 0.0, 0.2]))
     # Use current frame's actuators.accel (post-longcontrol), not self.accel (previous frame).
     # self.accel retains stale PID integral — if the no-target guard was blocking gas while PID
     # wound up, bumping the stalk would fire the accumulated value as a gas spike.

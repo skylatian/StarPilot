@@ -52,6 +52,11 @@ public:
     value->setText(val);
   }
 
+  void hideRowValue() {
+    value->hide();
+    value->setFixedWidth(0);
+  }
+
   const QString getDescription() {
     return description->text();
   }

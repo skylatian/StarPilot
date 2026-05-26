@@ -8,15 +8,18 @@ import cereal.messaging as messaging
 import numpy as np
 import time
 
+from openpilot.common.params import Params
+
 MIN_ACC_SPEED = 8.50   # 19 mph in m/s
 PEDAL_TRANSITION = 4.47  # 10 mph in m/s
 
 sm = messaging.SubMaster(['carControl', 'carState', 'carOutput', 'longitudinalPlan', 'controlsState'])
+params = Params()
 
 MS_TO_MPH = 2.23694
 
 print(f"{'longState':>10s} {'planner':>8s} {'cmdAccel':>8s} {'pidOut':>8s} "
-      f"{'gasCAN':>6s} {'gasOld':>6s} {'setMph':>6s} {'mph':>6s} {'cruiseOn':>8s} {'cruiseEn':>8s}")
+      f"{'gasCAN':>6s} {'gasOld':>6s} {'offset':>7s} {'setMph':>6s} {'mph':>6s} {'cruiseOn':>8s} {'cruiseEn':>8s}")
 print("-" * 100)
 
 while True:
@@ -36,7 +39,8 @@ while True:
 
     # Compute gas the way carcontroller now does it (using cmd_accel)
     pedal_scale = float(np.interp(v_ego, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.3, 0.4, 0.4]))
-    pedal_offset = float(np.interp(v_ego, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [-0.4, 0.0, 0.2]))
+    offset_low = params.get_float("RetrofitPedalOffsetStandstill", default=-0.1)
+    pedal_offset = float(np.interp(v_ego, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [offset_low, 0.0, 0.2]))
 
     # "Real" gas: what the code sends now (current-frame cmd_accel, with no-target guard)
     if set_spd < 0.1 or not cruise_enabled:
@@ -53,6 +57,6 @@ while True:
     long_state = str(cc.actuators.longControlState)
 
     print(f"{long_state:>10s} {lp.aTarget:>+8.3f} {cmd_accel:>+8.3f} {pid_accel:>+8.3f} "
-          f"{gas_real_can:>6d} {gas_old_can:>6d} {set_spd * MS_TO_MPH:>6.1f} {v_ego * MS_TO_MPH:>6.1f} "
+          f"{gas_real_can:>6d} {gas_old_can:>6d} {pedal_offset:>+7.3f} {set_spd * MS_TO_MPH:>6.1f} {v_ego * MS_TO_MPH:>6.1f} "
           f"{'YES' if cruise_available else 'no':>8s} {'YES' if cruise_enabled else 'no':>8s}")
     time.sleep(0.5)

@@ -21,9 +21,30 @@ class StarPilotRetrofitTuningLayout(_SettingsPage):
     self._build_view()
 
   def _build_view(self):
+    sections = [
+      SettingSection(tr_noop("Pedal"), [
+        SettingRow(
+          "RetrofitPedalOffsetStandstill",
+          "value",
+          tr_noop("Standstill Pedal Offset"),
+          subtitle=tr_noop(
+            "Low-speed deadband before pedal scaling. Less negative = gas sooner from a stop."
+          ),
+          get_value=lambda: f"{self._params.get_float('RetrofitPedalOffsetStandstill'):.2f}m/s²",
+          on_click=lambda: self._show_slider(
+            "RetrofitPedalOffsetStandstill",
+            -0.5,
+            0.2,
+            step=0.05,
+            unit="m/s²",
+            value_type="float",
+          ),
+        ),
+      ]),
+    ]
     self._manager_view = AetherSettingsView(
       self,
-      [],
+      sections,
       header_title=tr_noop("Retrofit Tuning"),
       header_subtitle=tr_noop("Pedal and retrofit-specific adjustments."),
       panel_style=PANEL_STYLE,

@@ -14,5 +14,9 @@ signals:
 private:
   bool forceOpenDescriptions;
 
+  StarPilotParamValueButtonControl *pedalOffsetToggle;
+
   StarPilotSettingsWindow *parent;
+
+  Params params;
 };

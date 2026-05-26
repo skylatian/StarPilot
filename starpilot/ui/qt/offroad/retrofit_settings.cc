@@ -15,19 +15,40 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   ScrollView *tuningPanel = new ScrollView(tuningList, this);
   retrofitLayout->addWidget(tuningPanel);
 
-  StarPilotManageControl *pedalTuningToggle = new StarPilotManageControl(
-      "RetrofitPedalTuning",
+  ButtonControl *pedalTuningButton = new ButtonControl(
       tr("Pedal Tuning"),
-      tr("<b>Interceptor pedal mapping for standstill launch and creep.</b>"),
-      "../../starpilot/assets/toggle_icons/icon_vehicle.png");
-  QObject::connect(pedalTuningToggle, &StarPilotManageControl::manageButtonClicked, [retrofitLayout, tuningPanel, this]() {
+      tr("MANAGE"),
+      tr("<b>Interceptor pedal mapping for standstill launch and creep.</b>"));
+  QObject::connect(pedalTuningButton, &ButtonControl::clicked, [retrofitLayout, tuningPanel, this]() {
     retrofitLayout->setCurrentWidget(tuningPanel);
     emit openSubPanel();
   });
   if (forceOpenDescriptions) {
-    pedalTuningToggle->showDescription();
+    pedalTuningButton->showDescription();
   }
-  retrofitList->addItem(pedalTuningToggle);
+  retrofitList->addItem(pedalTuningButton);
+
+  const float stockPedalOffsetStandstill = -0.4f;
+  const float defaultPedalOffsetStandstill = -0.1f;
+  std::vector<QString> pedalOffsetResetButton{tr("Reset")};
+  // Match advanced lateral Actuator Delay: no icon, Reset after +/-, default label width.
+  pedalOffsetToggle = new StarPilotParamValueButtonControl(
+      "RetrofitPedalOffsetStandstill",
+      tr("Pedal Offset (Default: %1)").arg(QString::number(stockPedalOffsetStandstill, 'f', 2)),
+      tr("<b>Low-speed deadband subtracted from accel before pedal scaling.</b> Less negative values apply gas sooner from a stop. Takes effect immediately while driving."),
+      "",
+      -0.5f, 0.2f, QString(), std::map<float, QString>(), 0.05f, false, {}, pedalOffsetResetButton, false, false);
+  if (forceOpenDescriptions) {
+    pedalOffsetToggle->showDescription();
+  }
+  tuningList->addItem(pedalOffsetToggle);
+
+  QObject::connect(pedalOffsetToggle, &StarPilotParamValueButtonControl::buttonClicked, [defaultPedalOffsetStandstill, this]() {
+    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Pedal Offset</b> to its default value?"), this)) {
+      params.putFloat("RetrofitPedalOffsetStandstill", defaultPedalOffsetStandstill);
+      pedalOffsetToggle->refresh();
+    }
+  });
 
   QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel]() {
     retrofitLayout->setCurrentWidget(retrofitPanel);
