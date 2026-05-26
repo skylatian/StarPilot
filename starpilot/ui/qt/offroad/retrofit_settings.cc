@@ -28,13 +28,22 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   }
   retrofitList->addItem(pedalTuningButton);
 
-  const float stockPedalOffsetStandstill = -0.4f;
+  ParamControl *pauseSteeringToggle = new ParamControl(
+      "RetrofitPauseSteering",
+      tr("Pause Steering"),
+      tr("<b>Disable openpilot steering while driving.</b> Longitudinal (Comma Pedal) can stay active if engaged. Takes effect immediately."),
+      "");
+  if (forceOpenDescriptions) {
+    pauseSteeringToggle->showDescription();
+  }
+  retrofitList->addItem(pauseSteeringToggle);
+
   const float defaultPedalOffsetStandstill = -0.1f;
   std::vector<QString> pedalOffsetResetButton{tr("Reset")};
   // Match advanced lateral Actuator Delay: no icon, Reset after +/-, default label width.
   pedalOffsetToggle = new StarPilotParamValueButtonControl(
       "RetrofitPedalOffsetStandstill",
-      tr("Pedal Offset (Default: %1)").arg(QString::number(stockPedalOffsetStandstill, 'f', 2)),
+      tr("Pedal Offset (Default: %1)").arg(QString::number(defaultPedalOffsetStandstill, 'f', 2)),
       tr("<b>Low-speed deadband subtracted from accel before pedal scaling.</b> Less negative values apply gas sooner from a stop. Takes effect immediately while driving."),
       "",
       -0.5f, 0.2f, QString(), std::map<float, QString>(), 0.05f, false, {}, pedalOffsetResetButton, false, false);

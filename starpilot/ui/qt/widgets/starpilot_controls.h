@@ -478,10 +478,6 @@ public:
     refresh();
   }
 
-  void setValueLabelWidth(int width) {
-    value_label->setFixedSize(QSize(width, 100));
-  }
-
   void updateDisplay() {
     QString displayText = QString::number(value) + label;
 
