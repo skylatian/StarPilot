@@ -145,7 +145,11 @@ class CarController(CarControllerBase):
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.4, 0.5, 0.0]))
 
     pedal_offset = float(np.interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [-0.4, 0.0, 0.2]))
-    pedal_command = pedal_scale * (self.accel + pedal_offset)
+    # Use current frame's actuators.accel (post-longcontrol), not self.accel (previous frame).
+    # self.accel retains stale PID integral — if the no-target guard was blocking gas while PID
+    # wound up, bumping the stalk would fire the accumulated value as a gas spike.
+    accel = CC.actuators.accel
+    pedal_command = pedal_scale * (accel + pedal_offset)
     return float(np.clip(pedal_command, 0.0, max_interceptor_gas))
 
   def _update_standstill_request(self, CC, CS, actuators, starpilot_toggles):
