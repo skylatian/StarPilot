@@ -53,7 +53,14 @@ def get_long_tune(CP, params):
   kiV = [0.5, 0.25]
   k_f = 1.0
 
-  if CP.carFingerprint == CAR.TOYOTA_PRIUS:
+  if CP.enableGasInterceptorDEPRECATED:
+    # Gas interceptor: PID output maps directly to throttle via pedal_scale.
+    # Stock non-TSS2 tuning (k_f=1.0, ki up to 3.6) is for commanding a PCM
+    # via ACC_CONTROL — the PCM absorbs aggressive inputs. With the pedal as
+    # sole actuator, that tuning slams gas to max. Use k_f=0 and default low
+    # ki gains to match FrogPilot 0.9.7 behavior (integral-only ramp).
+    k_f = 0.0
+  elif CP.carFingerprint == CAR.TOYOTA_PRIUS:
     k_f = 0.8
   elif CP.carFingerprint not in TSS2_CAR:
     kiBP = [0., 5., 35.]
@@ -123,6 +130,10 @@ class CarController(CarControllerBase):
 
   def _compute_interceptor_gas_cmd(self, CC, CS):
     if not (self.CP.enableGasInterceptorDEPRECATED and self.CP.openpilotLongitudinalControl and CC.longActive):
+      return 0.0
+
+    # Don't command gas if cruise has no real speed target (SET_SPEED=0 means engaged but no target yet)
+    if CS.out.cruiseState.speed < 0.1:
       return 0.0
 
     max_interceptor_gas = 0.5
