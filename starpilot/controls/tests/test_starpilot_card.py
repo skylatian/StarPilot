@@ -76,6 +76,45 @@ def make_car_state(available=False, enabled=False, button_events=None):
   )
 
 
+def test_retrofit_pause_steering_param_forces_pause_lateral(monkeypatch, tmp_path):
+  params = FakeParams()
+  params._store["RetrofitPauseSteering"] = True
+  monkeypatch.setattr(spc, "Params", lambda *args, **kwargs: params)
+  monkeypatch.setattr(spc, "is_FrogsGoMoo", lambda: False)
+  monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
+
+  card = spc.StarPilotCard(SimpleNamespace(brand="toyota"), SimpleNamespace(alternativeExperience=0))
+  car_state = make_car_state()
+  starpilot_car_state = SimpleNamespace(distancePressed=False)
+  sm = make_sm()
+
+  ret = card.update(car_state, starpilot_car_state, sm, make_toggles())
+
+  assert ret.pauseLateral is True
+  assert card.pause_lateral is False
+
+
+def test_retrofit_pause_steering_param_off_clears_latched_pause(monkeypatch, tmp_path):
+  params = FakeParams()
+  params._store["RetrofitPauseSteering"] = False
+  monkeypatch.setattr(spc, "Params", lambda *args, **kwargs: params)
+  monkeypatch.setattr(spc, "is_FrogsGoMoo", lambda: False)
+  monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
+
+  card = spc.StarPilotCard(SimpleNamespace(brand="toyota"), SimpleNamespace(alternativeExperience=0))
+  card.pause_lateral = True
+  card._prev_retrofit_pause = True
+
+  car_state = make_car_state()
+  starpilot_car_state = SimpleNamespace(distancePressed=False)
+  sm = make_sm()
+
+  ret = card.update(car_state, starpilot_car_state, sm, make_toggles())
+
+  assert ret.pauseLateral is False
+  assert card.pause_lateral is False
+
+
 def test_honda_lkas_button_can_toggle_always_on_lateral(monkeypatch, tmp_path):
   monkeypatch.setattr(spc, "Params", FakeParams)
   monkeypatch.setattr(spc, "is_FrogsGoMoo", lambda: False)

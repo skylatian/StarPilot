@@ -62,6 +62,18 @@ class StarPilotRetrofitLayout(_SettingsPage):
 
   def _build_view(self):
     sections = [
+      SettingSection(tr_noop("Controls"), [
+        SettingRow(
+          "RetrofitPauseSteering",
+          "toggle",
+          tr_noop("Pause Steering"),
+          subtitle=tr_noop(
+            "Disable openpilot steering while driving. Longitudinal can stay active if engaged."
+          ),
+          get_state=lambda: self._params.get_bool("RetrofitPauseSteering"),
+          set_state=lambda s: self._params.put_bool("RetrofitPauseSteering", s),
+        ),
+      ]),
       SettingSection(tr_noop("Longitudinal"), [
         SettingRow(
           "RetrofitTuningNav",

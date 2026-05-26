@@ -34,6 +34,7 @@ class StarPilotCard:
     self.custom_counter = 0
     self.pause_lateral = False
     self.pause_longitudinal = False
+    self._prev_retrofit_pause = False
     self.switchback_mode_enabled = self.params_memory.get_bool("SwitchbackModeEnabled")
     self.traffic_mode_enabled = False
 
@@ -201,6 +202,12 @@ class StarPilotCard:
 
     self.force_coast &= not (carState.brakePressed or carState.gasPressed)
 
+    retrofit_pause = self.params.get_bool("RetrofitPauseSteering")
+    # Older builds latched pause_lateral=True here; clear on param off so the toggle recovers.
+    if self._prev_retrofit_pause and not retrofit_pause:
+      self.pause_lateral = False
+    self._prev_retrofit_pause = retrofit_pause
+
     starpilotCarState.accelPressed = self.accel_pressed
     starpilotCarState.alwaysOnLateralAllowed = self.always_on_lateral_allowed
     starpilotCarState.alwaysOnLateralEnabled = self.always_on_lateral_enabled
@@ -211,7 +218,7 @@ class StarPilotCard:
     starpilotCarState.distanceVeryLongPressed = self.gap_counter >= self.very_long_press_threshold
     starpilotCarState.forceCoast = self.force_coast
     starpilotCarState.isParked = carState.gearShifter == GearShifter.park
-    starpilotCarState.pauseLateral = self.pause_lateral
+    starpilotCarState.pauseLateral = self.pause_lateral or retrofit_pause
     starpilotCarState.pauseLongitudinal = self.pause_longitudinal
     starpilotCarState.trafficModeEnabled = self.traffic_mode_enabled
 
