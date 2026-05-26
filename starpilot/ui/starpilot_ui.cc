@@ -41,7 +41,7 @@ static void update_state(StarPilotUIState *fs) {
     capnp::Text::Reader toggles = starpilotPlan.getStarpilotToggles();
     QByteArray current_toggles(toggles.cStr(), toggles.size());
     static QByteArray previous_toggles;
-    if (previous_toggles != current_toggles) {
+    if (!current_toggles.isEmpty() && previous_toggles != current_toggles) {
       QJsonParseError parse_error;
       QJsonDocument toggles_doc = QJsonDocument::fromJson(current_toggles, &parse_error);
       if (parse_error.error == QJsonParseError::NoError && toggles_doc.isObject()) {
