@@ -28,6 +28,7 @@ class StarPilotPanelType(IntEnum):
     VEHICLE = 10
     WHEEL = 11
     SYSTEM = 12
+    RETROFIT = 13
 
 
 @dataclass

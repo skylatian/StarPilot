@@ -6,6 +6,7 @@
 #include "starpilot/ui/qt/offroad/maps_settings.h"
 #include "starpilot/ui/qt/offroad/model_settings.h"
 #include "starpilot/ui/qt/offroad/navigation_settings.h"
+#include "starpilot/ui/qt/offroad/retrofit_settings.h"
 #include "starpilot/ui/qt/offroad/sounds_settings.h"
 #include "starpilot/ui/qt/offroad/theme_settings.h"
 #include "starpilot/ui/qt/offroad/utilities.h"
@@ -79,6 +80,7 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
   StarPilotVehiclesPanel *starpilotVehiclesPanel = new StarPilotVehiclesPanel(this, !shownDescriptions.value("StarPilotVehiclesPanel").toBool(false));
   StarPilotVisualsPanel *starpilotVisualsPanel = new StarPilotVisualsPanel(this, !shownDescriptions.value("StarPilotVisualsPanel").toBool(false));
   StarPilotWheelPanel *starpilotWheelPanel = new StarPilotWheelPanel(this, !shownDescriptions.value("StarPilotWheelPanel").toBool(false));
+  StarPilotRetrofitPanel *starpilotRetrofitPanel = new StarPilotRetrofitPanel(this, !shownDescriptions.value("StarPilotRetrofitPanel").toBool(false));
 
   std::vector<std::vector<std::tuple<QString, QWidget*>>> panelButtons = {
     {{tr("MANAGE"), starpilotSoundsPanel}},
@@ -86,7 +88,8 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
     {{tr("MAP DATA"), starpilotMapsPanel}, {tr("NAVIGATION"), starpilotNavigationPanel}},
     {{tr("DATA"), starpilotDataPanel}, {tr("DEVICE CONTROLS"), starpilotDevicePanel}, {tr("UTILITIES"), starpilotUtilitiesPanel}},
     {{tr("APPEARANCE"), starpilotVisualsPanel}, {tr("THEME"), starpilotThemesPanel}},
-    {{tr("VEHICLE SETTINGS"), starpilotVehiclesPanel}, {tr("WHEEL CONTROLS"), starpilotWheelPanel}}
+    {{tr("VEHICLE SETTINGS"), starpilotVehiclesPanel}, {tr("WHEEL CONTROLS"), starpilotWheelPanel}},
+    {{tr("CONFIGURE"), starpilotRetrofitPanel}}
   };
 
   std::vector<std::tuple<QString, QString, QString>> panelInfo = {
@@ -95,7 +98,8 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
     {tr("Navigation"), tr("<b>Download map data for the \"Speed Limit Controller\".</b>"), "../../starpilot/assets/toggle_icons/icon_navigate.png"},
     {tr("System Settings"), tr("<b>Manage backups, device settings, screen options, storage, and tools to keep StarPilot running smoothly.</b>"), "../../starpilot/assets/toggle_icons/icon_system.png"},
     {tr("Theme and Appearance"), tr("<b>Customize the look of the driving screen and interface, including themes!</b>"), "../../starpilot/assets/toggle_icons/icon_display.png"},
-    {tr("Vehicle Settings"), tr("<b>Configure car-specific options and steering wheel button mappings.</b>"), "../../starpilot/assets/toggle_icons/icon_vehicle.png"}
+    {tr("Vehicle Settings"), tr("<b>Configure car-specific options and steering wheel button mappings.</b>"), "../../starpilot/assets/toggle_icons/icon_vehicle.png"},
+    {tr("Retrofit Options"), tr("<b>Tuning for Comma Pedal and CAN emulator retrofits.</b>"), "../../starpilot/assets/toggle_icons/icon_vehicle.png"}
   };
 
   for (size_t i = 0; i < panelInfo.size(); ++i) {
@@ -166,6 +170,7 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
   QObject::connect(starpilotSoundsPanel, &StarPilotSoundsPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotThemesPanel, &StarPilotThemesPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotVehiclesPanel, &StarPilotVehiclesPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
+  QObject::connect(starpilotRetrofitPanel, &StarPilotRetrofitPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotVisualsPanel, &StarPilotVisualsPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotVisualsPanel, &StarPilotVisualsPanel::openSubSubPanel, this, &StarPilotSettingsWindow::openSubSubPanel);
 }

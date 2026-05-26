@@ -16,6 +16,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.maps import StarPilotMaps
 from openpilot.selfdrive.ui.layouts.settings.starpilot.system_settings import StarPilotSystemLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.appearance import StarPilotAppearanceLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.vehicle import StarPilotVehicleSettingsLayout
+from openpilot.selfdrive.ui.layouts.settings.starpilot.retrofit import StarPilotRetrofitLayout
 
 from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import TileGrid, HubTile, RadioTileGroup, SPACING
 
@@ -59,6 +60,12 @@ class StarPilotLayout(Widget):
       "panel": "VEHICLE",
       "color": "#64748B",
     },
+    {
+      "title": "Retrofit Options",
+      "icon": "icon_vehicle.png",
+      "panel": "RETROFIT",
+      "color": "#F59E0B",
+    },
   ]
 
   def __init__(self):
@@ -83,6 +90,7 @@ class StarPilotLayout(Widget):
       StarPilotPanelType.MAPS: StarPilotPanelInfo(tr_noop("Map Data"), StarPilotMapsLayout()),
       StarPilotPanelType.VISUALS: StarPilotPanelInfo(tr_noop("Appearance"), StarPilotAppearanceLayout()),
       StarPilotPanelType.VEHICLE: StarPilotPanelInfo(tr_noop("Vehicle Settings"), StarPilotVehicleSettingsLayout()),
+      StarPilotPanelType.RETROFIT: StarPilotPanelInfo(tr_noop("Retrofit Options"), StarPilotRetrofitLayout()),
     }
 
     self._setup_sub_panels(
@@ -93,6 +101,7 @@ class StarPilotLayout(Widget):
       StarPilotPanelType.MAPS,
       StarPilotPanelType.VISUALS,
       StarPilotPanelType.VEHICLE,
+      StarPilotPanelType.RETROFIT,
     )
 
     self._main_grid = TileGrid(columns=None, padding=SPACING.tile_gap)
@@ -180,6 +189,7 @@ class StarPilotLayout(Widget):
       "MAPS": StarPilotPanelType.MAPS,
       "VISUALS": StarPilotPanelType.VISUALS,
       "VEHICLE": StarPilotPanelType.VEHICLE,
+      "RETROFIT": StarPilotPanelType.RETROFIT,
     }
 
     if self._current_category_idx is None:
