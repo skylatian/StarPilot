@@ -42,6 +42,9 @@ MAX_STEER_RATE_FRAMES = 18  # tx control frames needed before torque can be cut
 # EPS allows user torque above threshold for 50 frames before permanently faulting
 MAX_USER_TORQUE = 500
 
+# Kill lateral if steering angle exceeds this limit (SAS/EPS protection for retrofit)
+MAX_STEER_ANGLE_DEG = 300
+
 PARK = structs.CarState.GearShifter.park
 
 # Lock / unlock door commands - Credit goes to AlexandreSato!
@@ -186,6 +189,10 @@ class CarController(CarControllerBase):
     hud_control = CC.hudControl
     pcm_cancel_cmd = CC.cruiseControl.cancel
     lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
+
+    # Retrofit safety: kill steering if angle exceeds ±300° (SAS/EPS protection)
+    if abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
+      lat_active = False
 
     if len(CC.orientationNED) == 3:
       self.pitch.update(CC.orientationNED[1])
