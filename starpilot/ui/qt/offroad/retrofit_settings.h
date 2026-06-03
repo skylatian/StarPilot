@@ -15,6 +15,7 @@ private:
   bool forceOpenDescriptions;
 
   StarPilotParamValueButtonControl *pedalOffsetToggle;
+  StarPilotParamValueButtonControl *sasOffsetToggle;
 
   StarPilotSettingsWindow *parent;
 

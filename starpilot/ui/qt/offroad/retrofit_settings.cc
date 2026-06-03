@@ -38,6 +38,31 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   }
   retrofitList->addItem(pauseSteeringToggle);
 
+  const float defaultSASOffset = 0.0f;
+  std::vector<QString> sasOffsetResetButton{tr("Reset")};
+  sasOffsetToggle = new StarPilotParamValueButtonControl(
+      "RetrofitSASOffset",
+      tr("SAS Offset (Default: %1°)").arg(QString::number(defaultSASOffset, 'f', 0)),
+      tr("<b>Corrects a physically misaligned steering angle sensor.</b> "
+         "Set to the raw angle your SAS reports when wheels are straight. "
+         "Takes effect immediately while driving."),
+      "",
+      -180.0f, 180.0f, QString("°"), std::map<float, QString>(), 1.0f,
+      false, {}, sasOffsetResetButton, false, false);
+  if (forceOpenDescriptions) {
+    sasOffsetToggle->showDescription();
+  }
+  retrofitList->addItem(sasOffsetToggle);
+
+  QObject::connect(sasOffsetToggle, &StarPilotParamValueButtonControl::buttonClicked,
+      [defaultSASOffset, this]() {
+    if (StarPilotConfirmationDialog::yesorno(
+        tr("Reset <b>SAS Offset</b> to its default value?"), this)) {
+      params.putFloat("RetrofitSASOffset", defaultSASOffset);
+      sasOffsetToggle->refresh();
+    }
+  });
+
   const float defaultPedalOffsetStandstill = -0.1f;
   std::vector<QString> pedalOffsetResetButton{tr("Reset")};
   // Match advanced lateral Actuator Delay: no icon, Reset after +/-, default label width.

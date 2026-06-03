@@ -74,6 +74,26 @@ class StarPilotRetrofitLayout(_SettingsPage):
           set_state=lambda s: self._params.put_bool("RetrofitPauseSteering", s),
         ),
       ]),
+      SettingSection(tr_noop("Steering"), [
+        SettingRow(
+          "RetrofitSASOffset",
+          "value",
+          tr_noop("SAS Offset"),
+          subtitle=tr_noop(
+            "Corrects a physically misaligned steering angle sensor. "
+            "Set to the raw angle your SAS reports when wheels are straight."
+          ),
+          get_value=lambda: f"{self._params.get_float('RetrofitSASOffset'):.0f}°",
+          on_click=lambda: self._show_slider(
+            "RetrofitSASOffset",
+            -180,
+            180,
+            step=1,
+            unit="°",
+            value_type="float",
+          ),
+        ),
+      ]),
       SettingSection(tr_noop("Longitudinal"), [
         SettingRow(
           "RetrofitTuningNav",
