@@ -130,6 +130,10 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
     if (title == tr("System Settings")) systemPanelButtons = panelButton;
     if (title == tr("Theme and Appearance")) themePanelButtons = panelButton;
     if (title == tr("Vehicle Settings")) vehiclePanelButtons = panelButton;
+    if (title == tr("Retrofit Options")) {
+      retrofitPanelButtons = panelButton;
+      panelButton->setVisible(false);
+    }
 
     if (forceOpenDescriptions) {
       panelButton->showDescription();
@@ -389,6 +393,7 @@ void StarPilotSettingsWindow::updateVariables() {
     isTorqueCar = CP.getLateralTuning().which() == cereal::CarParams::LateralTuning::TORQUE;
     isToyota = carMake == "toyota";
     isTSK = CP.getSecOcRequired();
+    isRetrofit = carFingerprint == "TOYOTA_COROLLA_RETROFIT";
     isVolt = carFingerprint.rfind("CHEVROLET_VOLT", 0) == 0;
     latAccelFactor = CP.getLateralTuning().getTorque().getLatAccelFactor();
     hasModeStarButtons = starpilot_toggles.contains("has_canfd_media_buttons") ? starpilot_toggles.value("has_canfd_media_buttons").toBool() : isHKGCanFd;
@@ -480,6 +485,8 @@ void StarPilotSettingsWindow::updateVariables() {
   systemPanelButtons->setVisibleButton(1, showAllToggles || tuningLevel >= starpilotToggleLevels.value("DeviceManagement").toDouble() || tuningLevel >= starpilotToggleLevels.value("ScreenManagement").toDouble());
 
   vehiclePanelButtons->setVisibleButton(1, showAllToggles || tuningLevel >= starpilotToggleLevels.value("WheelControls").toDouble());
+
+  retrofitPanelButtons->setVisible(showAllToggles || isRetrofit);
 
   update();
 }

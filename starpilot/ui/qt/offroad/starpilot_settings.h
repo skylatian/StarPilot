@@ -39,6 +39,7 @@ public:
   bool isGM = true;
   bool isHKG = true;
   bool isHKGCanFd = true;
+  bool isRetrofit = false;
   bool isSubaru = false;
   bool isTorqueCar = false;
   bool isToyota = true;
@@ -93,6 +94,7 @@ private:
   StarPilotButtonsControl *systemPanelButtons;
   StarPilotButtonsControl *themePanelButtons;
   StarPilotButtonsControl *togglePreset;
+  StarPilotButtonsControl *retrofitPanelButtons;
   StarPilotButtonsControl *vehiclePanelButtons;
 
   Params params;
