@@ -191,7 +191,7 @@ class CarController(CarControllerBase):
     lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
 
     # Retrofit safety: kill steering if angle exceeds ±300° (SAS/EPS protection)
-    if abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
       lat_active = False
 
     if len(CC.orientationNED) == 3:
