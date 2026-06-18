@@ -280,7 +280,7 @@ class TestToyotaCarController:
   def test_interceptor_uses_retrofit_pedal_offset_param(self):
     controller = self._make_controller()
     controller.CP.enableGasInterceptorDEPRECATED = True
-    controller.CP.carFingerprint = CAR.TOYOTA_COROLLA
+    controller.CP.carFingerprint = CAR.TOYOTA_COROLLA_RETROFIT
     controller.param_store = SimpleNamespace(get_float=lambda key, default=-0.1: -0.2)
 
     gas_cmd = controller._compute_interceptor_gas_cmd(

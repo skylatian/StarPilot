@@ -113,7 +113,7 @@ class CarInterface(CarInterfaceBase):
     ret.radarUnavailable = Bus.radar not in DBC[candidate] or candidate in (NO_DSU_CAR - TSS2_CAR)
 
     # Retrofit: no radar hardware installed
-    if candidate == CAR.TOYOTA_COROLLA:
+    if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
       ret.radarUnavailable = True
 
     # Since we don't yet parse radar on TSS2/TSS-P radar-based ACC cars, gate
@@ -142,7 +142,7 @@ class CarInterface(CarInterfaceBase):
     # Retrofit: no stock longitudinal (no DSU/smartDSU/TSS2) — OP owns longitudinal via Comma Pedal
     # Must be after the stock detection logic above, which otherwise overwrites to False
     # experimentalLongitudinalAvailable makes the toggle visible; alpha_long gates activation
-    if candidate == CAR.TOYOTA_COROLLA:
+    if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
       ret.alphaLongitudinalAvailable = True
       if alpha_long:
         ret.openpilotLongitudinalControl = True
