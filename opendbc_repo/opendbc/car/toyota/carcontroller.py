@@ -43,7 +43,7 @@ MAX_STEER_RATE_FRAMES = 18  # tx control frames needed before torque can be cut
 MAX_USER_TORQUE = 500
 
 # Kill lateral if steering angle exceeds this limit (SAS/EPS protection for retrofit)
-MAX_STEER_ANGLE_DEG = 300
+MAX_STEER_ANGLE_DEG = 350
 
 PARK = structs.CarState.GearShifter.park
 
