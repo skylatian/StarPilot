@@ -205,7 +205,7 @@ class CAR(Platforms):
   TOYOTA_COROLLA_RETROFIT = PlatformConfig(
     [ToyotaCarDocs("Toyota Corolla 2005 Retrofit (2016 EPS)")],
     CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=18.27, tireStiffnessFactor=0.444),
-    dbc_dict('toyota_new_mc_pt_generated', None),
+    {Bus.pt: 'toyota_new_mc_pt_generated'},
   )
   # LSS2 Lexus UX Hybrid is same as a TSS2 Corolla Hybrid
   TOYOTA_COROLLA_TSS2 = ToyotaTSS2PlatformConfig(

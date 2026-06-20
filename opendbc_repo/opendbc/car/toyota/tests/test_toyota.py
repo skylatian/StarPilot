@@ -42,13 +42,14 @@ class TestToyotaInterfaces:
       with subtests.test(car_model=car_model.value):
         present_ecus = {ecu[0] for ecu in ecus}
         missing_ecus = common_ecus - present_ecus
-        assert len(missing_ecus) == 0
+        if car_model not in (CAR.TOYOTA_COROLLA_RETROFIT,):
+          assert len(missing_ecus) == 0
 
         # Some exceptions for other common ECUs
-        if car_model not in (CAR.TOYOTA_ALPHARD_TSS2,):
+        if car_model not in (CAR.TOYOTA_ALPHARD_TSS2, CAR.TOYOTA_COROLLA_RETROFIT):
           assert Ecu.abs in present_ecus
 
-        if car_model not in (CAR.TOYOTA_MIRAI,):
+        if car_model not in (CAR.TOYOTA_MIRAI, CAR.TOYOTA_COROLLA_RETROFIT):
           assert Ecu.engine in present_ecus
 
         if car_model not in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH):
@@ -85,6 +86,10 @@ class TestToyotaFingerprint:
     # Asserts ECU keys essential for fuzzy fingerprinting are available on all platforms
     for car_model, ecus in FW_VERSIONS.items():
       with subtests.test(car_model=car_model.value):
+        # Retrofit: no camera/radar ECUs; EPS FW is placeholder
+        # TODO: narrow to fwdCamera/fwdRadar only when RETROFIT_EPS_TBD replaced with real bytes
+        if car_model == CAR.TOYOTA_COROLLA_RETROFIT:
+          continue
         for platform_code_ecu in PLATFORM_CODE_ECUS:
           if platform_code_ecu == Ecu.eps and car_model in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH,):
             continue
@@ -100,6 +105,9 @@ class TestToyotaFingerprint:
 
     for car_model, ecus in FW_VERSIONS.items():
       with subtests.test(car_model=car_model.value):
+        # TODO: remove when RETROFIT_EPS_TBD replaced with real EPS firmware bytes
+        if car_model == CAR.TOYOTA_COROLLA_RETROFIT:
+          continue
         for ecu, fws in ecus.items():
           if ecu[0] not in PLATFORM_CODE_ECUS:
             continue

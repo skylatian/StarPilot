@@ -149,7 +149,7 @@ class CarController(CarControllerBase):
     else:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.4, 0.5, 0.0]))
 
-    offset_low = self.param_store.get_float("RetrofitPedalOffsetStandstill", default=-0.1)
+    offset_low = self.param_store.get_float("RetrofitPedalOffsetStandstill", default=-0.1) if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT else -0.1
     pedal_offset = float(np.interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [offset_low, 0.0, 0.2]))
     # Use current frame's actuators.accel (post-longcontrol), not self.accel (previous frame).
     # self.accel retains stale PID integral — if the no-target guard was blocking gas while PID
