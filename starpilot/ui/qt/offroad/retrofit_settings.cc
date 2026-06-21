@@ -48,7 +48,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "Takes effect immediately while driving."),
       "",
       -180.0f, 180.0f, QString("°"), std::map<float, QString>(), 1.0f,
-      false, {}, sasOffsetResetButton, false, false);
+      true, {}, sasOffsetResetButton, false, false);
   if (forceOpenDescriptions) {
     sasOffsetToggle->showDescription();
   }
