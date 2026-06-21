@@ -179,7 +179,7 @@ def create_ecm_cruise_control_command(packer, bus, enabled, target_speed_kph):
   return CanData(0x3D1, bytes(dat), bus)
 
 
-def create_friction_brake_command(packer, bus, apply_brake, idx, enabled, near_stop, at_full_stop, CP):
+def get_friction_brake_mode(apply_brake, enabled, near_stop, at_full_stop, CP, allow_near_stop_mode=False):
   mode = 0x1
 
   # TODO: Understand this better. Volts and ICE Camera ACC cars are 0x1 when enabled with no brake
@@ -190,11 +190,17 @@ def create_friction_brake_command(packer, bus, apply_brake, idx, enabled, near_s
     mode = 0xa
     if at_full_stop:
       mode = 0xd
+    elif allow_near_stop_mode and near_stop:
+      # Stock Volt auto hold can run with cruise main on but ACC inactive, so
+      # there is no stock STANDSTILL state to promote 0xa -> 0xd. Restore the
+      # older near-stop hold mode only for that path.
+      mode = 0xb
 
-    # TODO: this is to have GM bringing the car to complete stop,
-    # but currently it conflicts with OP controls, so turned off. Not set by all cars
-    #elif near_stop:
-    #  mode = 0xb
+  return mode
+
+
+def create_friction_brake_command(packer, bus, apply_brake, idx, enabled, near_stop, at_full_stop, CP, allow_near_stop_mode=False):
+  mode = get_friction_brake_mode(apply_brake, enabled, near_stop, at_full_stop, CP, allow_near_stop_mode)
 
   brake = (0x1000 - apply_brake) & 0xfff
   checksum = (0x10000 - (mode << 12) - brake - idx) & 0xffff
@@ -209,7 +215,7 @@ def create_friction_brake_command(packer, bus, apply_brake, idx, enabled, near_s
   return packer.make_can_msg("EBCMFrictionBrakeCmd", bus, values)
 
 
-def create_acc_dashboard_command(packer, bus, enabled, target_speed_kph, hud_control, fcw):
+def create_acc_dashboard_command(packer, bus, enabled, target_speed_kph, hud_control, fcw_alert):
   target_speed = min(target_speed_kph, 255)
 
   values = {
@@ -220,7 +226,7 @@ def create_acc_dashboard_command(packer, bus, enabled, target_speed_kph, hud_con
     "ACCCmdActive": enabled,
     "ACCAlwaysOne2": 1,
     "ACCLeadCar": hud_control.leadVisible,
-    "FCWAlert": 0x3 if fcw else 0
+    "FCWAlert": int(fcw_alert) & 0x3,
   }
 
   return packer.make_can_msg("ASCMActiveCruiseControlStatus", bus, values)

@@ -58,6 +58,18 @@ NON_LINEAR_TORQUE_PARAMS = {
     "left": [3.8, 0.81, 0.24, 0.0465122],
     "right": [3.8, 0.81, 0.24, 0.0465122],
   },
+  CAR.CHEVROLET_SILVERADO_CC: {
+    "left": [3.8, 0.81, 0.24, 0.0465122],
+    "right": [3.8, 0.81, 0.24, 0.0465122],
+  },
+  CAR.CADILLAC_XT4: {
+    "left": [2.4, 0.95, 0.28, 0.0],
+    "right": [2.4, 0.95, 0.28, 0.0],
+  },
+  CAR.CHEVROLET_VOLT: {
+    "left": [1.525, 1.05, 0.155, 0.0],
+    "right": [1.525, 0.95, 0.150, 0.0],
+  },
 }
 
 PEDAL_MSG = 0x201
@@ -78,6 +90,14 @@ VOLT_LIKE_CARS = {
 }
 
 VOLT_LONG_TEST_TUNE_CARS = {
+  CAR.CHEVROLET_VOLT,
+  CAR.CHEVROLET_VOLT_2019,
+  CAR.CHEVROLET_VOLT_ASCM,
+  CAR.CHEVROLET_VOLT_CAMERA,
+  CAR.CHEVROLET_VOLT_CC,
+}
+
+VOLT_BSM_CARS = {
   CAR.CHEVROLET_VOLT,
   CAR.CHEVROLET_VOLT_2019,
   CAR.CHEVROLET_VOLT_ASCM,
@@ -197,11 +217,16 @@ class CarInterface(CarInterfaceBase):
       gm_auto_hold = params.get_bool("GMAutoHold")
     except UnknownKeyName:
       gm_auto_hold = False
+    try:
+      volt_one_pedal_mode = params.get_bool("VoltOnePedalMode")
+    except UnknownKeyName:
+      volt_one_pedal_mode = False
 
     ret.brand = "gm"
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.gm)]
     ret.autoResumeSng = False
-    ret.enableBsm = 0x142 in fingerprint[CanBus.POWERTRAIN]
+    # Some Volt installs don't expose the BSM frame during startup fingerprinting.
+    ret.enableBsm = 0x142 in fingerprint[CanBus.POWERTRAIN] or candidate in VOLT_BSM_CARS
     has_sascm = 0x2FF in fingerprint[CanBus.POWERTRAIN]
     if has_sascm:
       ret.flags |= GMFlags.SASCM.value
@@ -393,8 +418,8 @@ class CarInterface(CarInterfaceBase):
       ret.steerActuatorDelay = 0.2
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
-    elif candidate == CAR.BUICK_LACROSSE:
-      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+    elif candidate in (CAR.BUICK_LACROSSE, CAR.BUICK_LACROSSE_ASCM):
+      CarInterfaceBase.configure_torque_tune(CAR.BUICK_LACROSSE, ret.lateralTuning)
 
     elif candidate == CAR.CADILLAC_ESCALADE:
       ret.minEnableSpeed = -1.  # engage speed is decided by pcm
@@ -452,7 +477,7 @@ class CarInterface(CarInterfaceBase):
         # ACC Bolts use pedal for full longitudinal control, not just SNG.
         ret.flags |= GMFlags.PEDAL_LONG.value
 
-    elif candidate == CAR.CHEVROLET_SILVERADO:
+    elif candidate in (CAR.CHEVROLET_SILVERADO, CAR.CHEVROLET_SILVERADO_CC):
       # On the Bolt, the ECM and camera independently check that you are either above 5 kph or at a stop
       # with foot on brake to allow engagement, but this platform only has that check in the camera.
       # TODO: check if this is split by EV/ICE with more platforms in the future
@@ -489,7 +514,7 @@ class CarInterface(CarInterfaceBase):
       ret.minSteerSpeed = 7 * CV.MPH_TO_MS
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
-    elif candidate == CAR.CADILLAC_XT5_CC:
+    elif candidate in (CAR.CADILLAC_XT5, CAR.CADILLAC_XT5_CC):
       ret.steerActuatorDelay = 0.2
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
@@ -499,6 +524,10 @@ class CarInterface(CarInterfaceBase):
         ret.minEnableSpeed = -1.
       if candidate == CAR.CHEVROLET_BLAZER:
         ret.minEnableSpeed = 5 * CV.KPH_TO_MS
+        ret.stoppingDecelRate = 1.2
+        ret.vEgoStopping = 0.35
+        ret.vEgoStarting = 0.35
+        ret.stopAccel = -0.40
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.BUICK_BABYENCLAVE:
@@ -592,6 +621,12 @@ class CarInterface(CarInterfaceBase):
       ret.startAccel = 1.15
       ret.vEgoStarting = max(ret.vEgoStarting, 0.35)
 
+    if ret.openpilotLongitudinalControl and candidate in (CAR.CHEVROLET_SILVERADO, CAR.CHEVROLET_SILVERADO_CC) and not ret.enableGasInterceptorDEPRECATED:
+      ret.longitudinalTuning.kpBP = [0.0, 5.0, 15.0, 35.0]
+      ret.longitudinalTuning.kpV = [0.02, 0.03, 0.028, 0.022]
+      ret.longitudinalTuning.kiBP = [0.0, 5.0, 15.0, 35.0]
+      ret.longitudinalTuning.kiV = [0.28, 0.26, 0.20, 0.16]
+
     elif candidate in CC_ONLY_CAR and not ret.enableGasInterceptorDEPRECATED:
       ret.flags |= GMFlags.CC_LONG.value
       ret.alphaLongitudinalAvailable = False
@@ -622,7 +657,7 @@ class CarInterface(CarInterfaceBase):
 
     # Exception for flashed cars, or cars whose camera was removed.
     missing_camera_msg = CAM_MSG not in fingerprint.get(CanBus.CAMERA, {})
-    if (ret.networkLocation == NetworkLocation.fwdCamera or candidate in CC_ONLY_CAR) and missing_camera_msg and candidate not in SDGM_CAR:
+    if (ret.networkLocation == NetworkLocation.fwdCamera or candidate in CC_ONLY_CAR) and missing_camera_msg and candidate not in (ASCM_INT | SDGM_CAR):
       ret.flags |= GMFlags.NO_CAMERA.value
       ret.safetyConfigs[0].safetyParam |= GMSafetyFlags.FLAG_GM_NO_CAMERA.value
 
@@ -640,9 +675,8 @@ class CarInterface(CarInterfaceBase):
     if remote_start_boots_comma:
       ret.safetyConfigs[0].safetyParam |= GMSafetyFlags.FLAG_GM_REMOTE_START_BOOTS_COMMA.value
 
-    volt_stock_auto_hold_safety = (
-      gm_auto_hold and
-      not ret.openpilotLongitudinalControl and
+    volt_stock_friction_brake_safety = (
+      (gm_auto_hold or volt_one_pedal_mode) and
       candidate in {
         CAR.CHEVROLET_VOLT,
         CAR.CHEVROLET_VOLT_2019,
@@ -650,9 +684,11 @@ class CarInterface(CarInterfaceBase):
         CAR.CHEVROLET_VOLT_CAMERA,
       }
     )
-    if volt_stock_auto_hold_safety:
-      # Reuse the paddle-scheduler safety bit as a stock-Volt auto-hold marker on
-      # non-pedal paths. The scheduler logic remains inactive without pedal-long.
+    if volt_stock_friction_brake_safety:
+      # Reuse the paddle-scheduler safety bit as a Volt stock friction-brake
+      # marker on non-pedal paths. Both auto hold and one-pedal can run while
+      # OP longitudinal is configured but not currently active, so the bit must
+      # be present regardless of the current long-control mode.
       ret.safetyConfigs[0].safetyParam |= GMSafetyFlags.FLAG_GM_PANDA_PADDLE_SCHED.value
 
     use_panda_3d1_sched = (

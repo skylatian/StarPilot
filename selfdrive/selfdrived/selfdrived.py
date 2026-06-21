@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import time
 import threading
@@ -18,6 +19,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
+from openpilot.selfdrive.car.cruise_state import should_flag_cruise_mismatch
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -50,6 +52,47 @@ StarPilotEventName = custom.StarPilotOnroadEvent.EventName
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
+def should_loud_blindspot_alert_without_lateral(CS, sm, starpilot_toggles) -> bool:
+  if not (getattr(starpilot_toggles, "loud_blindspot_alert", False) and
+          getattr(starpilot_toggles, "loud_blindspot_alert_when_disengaged", False)):
+    return False
+
+  left_signal_blocked = bool(CS.leftBlinker and CS.leftBlindspot)
+  right_signal_blocked = bool(CS.rightBlinker and CS.rightBlindspot)
+  one_blinker = bool(CS.leftBlinker) != bool(CS.rightBlinker)
+  if not (one_blinker and (left_signal_blocked or right_signal_blocked)):
+    return False
+
+  if sm['modelV2'].meta.laneChangeState == LaneChangeState.preLaneChange:
+    direction = sm['modelV2'].meta.laneChangeDirection
+    normal_lane_change_alert = (
+      (left_signal_blocked and direction == LaneChangeDirection.left) or
+      (right_signal_blocked and direction == LaneChangeDirection.right)
+    )
+    if normal_lane_change_alert:
+      return False
+
+  return (
+    not sm['carControl'].latActive or
+    not sm['starpilotPlan'].lateralCheck or
+    sm['starpilotCarState'].pauseLateral
+  )
+
+
+def get_starpilot_alert_filters(current_alert_types: list[str], clear_event_types: set[str], starpilot_events: Events) -> tuple[list[str], set[str]]:
+  starpilot_alert_types = list(current_alert_types)
+  starpilot_clear_event_types = set(clear_event_types)
+
+  # This alert is explicitly allowed while lateral is paused/off. The state
+  # machine only exposes WARNING while active/AOL, so let this warning through.
+  if StarPilotEventName.laneChangeBlockedLoud in starpilot_events.names:
+    if ET.WARNING not in starpilot_alert_types:
+      starpilot_alert_types.append(ET.WARNING)
+    starpilot_clear_event_types.discard(ET.WARNING)
+
+  return starpilot_alert_types, starpilot_clear_event_types
+
+
 class SelfdriveD:
   def __init__(self, CP=None):
     self.params = Params()
@@ -70,6 +113,9 @@ class SelfdriveD:
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
     self.excessive_actuation_check = ExcessiveActuationCheck()
+    self.allow_impossible_acceleration = self.params.get_bool("AllowImpossibleAcceleration")
+    if self.allow_impossible_acceleration:
+      self.clear_longitudinal_excessive_actuation_alert()
     self.excessive_actuation = self.params.get("Offroad_ExcessiveActuation") is not None
 
     # Setup sockets
@@ -161,7 +207,6 @@ class SelfdriveD:
 
     self.cancel_pressed_previously = False
     self.distance_pressed_previously = False
-
     self.display_timer = 0
     self.last_below_steer_speed_alert_time = -float("inf")
     self.last_steer_saturated_alert_time = -float("inf")
@@ -171,6 +216,32 @@ class SelfdriveD:
     self.has_menu = self.CP.brand == "gm" and not (self.CP.flags & GMFlags.NO_CAMERA.value)
 
     self.FPCP = messaging.log_from_bytes(self.params.get("StarPilotCarParams", block=True), custom.StarPilotCarParams)
+
+  def clear_longitudinal_excessive_actuation_alert(self):
+    alert = self.params.get("Offroad_ExcessiveActuation")
+    if not alert:
+      return
+
+    if isinstance(alert, bytes):
+      try:
+        alert = json.loads(alert.decode("utf-8", errors="replace"))
+      except json.JSONDecodeError:
+        return
+    elif isinstance(alert, str):
+      try:
+        alert = json.loads(alert)
+      except json.JSONDecodeError:
+        return
+
+    if not isinstance(alert, dict):
+      return
+
+    extra = alert.get("extra", "")
+    if isinstance(extra, bytes):
+      extra = extra.decode("utf-8", errors="replace")
+
+    if str(extra).strip().lower() == "longitudinal":
+      self.params.remove("Offroad_ExcessiveActuation")
 
   def update_events(self, CS):
     """Compute onroadEvents from carState"""
@@ -221,7 +292,7 @@ class SelfdriveD:
       return
 
     # Block resume if cruise never previously enabled
-    resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
+    resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.accelHardCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
 
@@ -332,7 +403,9 @@ class SelfdriveD:
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
     if self.calibrated_pose is not None:
-      excessive_actuation = self.excessive_actuation_check.update(self.sm, CS, self.calibrated_pose)
+      excessive_actuation = self.excessive_actuation_check.update(
+        self.sm, CS, self.calibrated_pose, self.allow_impossible_acceleration
+      )
       if not self.excessive_actuation and excessive_actuation is not None:
         set_offroad_alert("Offroad_ExcessiveActuation", True, extra_text=str(excessive_actuation))
         self.excessive_actuation = True
@@ -342,10 +415,12 @@ class SelfdriveD:
     # ******************************************************************************************
 
     # Handle lane change
+    blindspot_alert_added = False
     if self.sm['modelV2'].meta.laneChangeState == LaneChangeState.preLaneChange:
       direction = self.sm['modelV2'].meta.laneChangeDirection
       if (CS.leftBlindspot and direction == LaneChangeDirection.left) or \
          (CS.rightBlindspot and direction == LaneChangeDirection.right):
+        blindspot_alert_added = True
         if self.starpilot_toggles.loud_blindspot_alert:
           self.starpilot_events.add(StarPilotEventName.laneChangeBlockedLoud)
         else:
@@ -365,6 +440,9 @@ class SelfdriveD:
     elif self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.laneChangeStarting,
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
+
+    if not blindspot_alert_added and should_loud_blindspot_alert_without_lateral(CS, self.sm, self.starpilot_toggles):
+      self.starpilot_events.add(StarPilotEventName.laneChangeBlockedLoud)
 
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
@@ -464,7 +542,8 @@ class SelfdriveD:
         self.CP.openpilotLongitudinalControl and not self.CP.pcmCruise
       )
       effective_pcm_cruise = self.CP.pcmCruise or preap_software_cruise
-      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not effective_pcm_cruise) and not pacifica_hybrid_aol
+      cruise_mismatch = should_flag_cruise_mismatch(self.CP, CS.cruiseState.enabled, self.enabled,
+                                                    effective_pcm_cruise) and not pacifica_hybrid_aol
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)
@@ -560,7 +639,7 @@ class SelfdriveD:
 
     self.starpilot_events.add_from_msg(self.sm['starpilotPlan'].starpilotEvents)
 
-    if self.starpilot_toggles.conditional_experimental_mode:
+    if self.starpilot_toggles.conditional_experimental_mode or getattr(self.starpilot_toggles, "conditional_chill_mode", False):
       self.experimental_mode = self.sm['starpilotPlan'].experimentalMode
     else:
       self.experimental_mode |= self.sm['starpilotPlan'].experimentalMode
@@ -626,11 +705,14 @@ class SelfdriveD:
     self.AM.add_many(self.sm.frame, alerts)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
 
-    starpilot_alerts = self.starpilot_events.create_alerts(self.state_machine.current_alert_types, [self.CP, CS, self.sm, self.is_metric,
+    starpilot_alert_types, starpilot_clear_event_types = get_starpilot_alert_filters(
+      self.state_machine.current_alert_types, clear_event_types, self.starpilot_events
+    )
+    starpilot_alerts = self.starpilot_events.create_alerts(starpilot_alert_types, [self.CP, CS, self.sm, self.is_metric,
                                                                                                     self.state_machine.soft_disable_timer, pers,
                                                                                                     self.starpilot_toggles])
     self.starpilot_AM.add_many(self.sm.frame, starpilot_alerts)
-    self.starpilot_AM.process_alerts(self.sm.frame, clear_event_types)
+    self.starpilot_AM.process_alerts(self.sm.frame, starpilot_clear_event_types)
 
   def publish_selfdriveState(self, CS):
     # selfdriveState
@@ -722,7 +804,12 @@ class SelfdriveD:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  # Run on core 5 (plannerd/radard, ~50% peak, FIFO prio 51) instead of sharing
+  # the saturated core 4 with card+controlsd. Core 4 at 100% was starving
+  # selfdrived's 100 Hz loop and firing selfdrivedLagging. selfdrived's higher
+  # FIFO prio (53 > 51) lets it preempt the 20 Hz planner/radar when needed.
+  # (Core 6 = camerad, core 7 = modeld are both timing-critical — avoid.)
+  config_realtime_process(5, Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 

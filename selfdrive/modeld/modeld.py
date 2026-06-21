@@ -23,11 +23,17 @@ from openpilot.system import sentry
 from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan_tomb_raider, smooth_value
+from openpilot.selfdrive.modeld.camera_offset import CameraOffset, DEFAULT_CAMERA_HEIGHT
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState, get_curvature_from_output
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.models.commonmodel_pyx import DrivingModelFrame, CLContext
 from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from_opencl_address
+from openpilot.starpilot.common.model_versions import (
+  is_tinygrad_model_version,
+  uses_combined_driving_artifacts,
+  uses_split_off_policy_artifacts,
+)
 from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles, MODELS_PATH, params_memory
 
 
@@ -309,7 +315,7 @@ class ModelState:
     self.is_v14 = (self.policy_generation == "v14")
     self.is_v15 = (self.policy_generation == "v15")
     self.is_v9 = (self.policy_generation == "v9")
-    self.mlsim = (self.policy_generation in ("v8", "v10", "v11", "v12", "v13", "v14", "v15"))
+    self.mlsim = is_tinygrad_model_version(self.policy_generation)
     self.policy_has_plan = 'plan' in self.policy_output_slices
 
     self.frames = {name: DrivingModelFrame(context, ModelConstants.TEMPORAL_SKIP) for name in self.vision_input_names}
@@ -334,7 +340,7 @@ class ModelState:
     self.off_policy_output: np.ndarray | None = None
 
     off_policy_metadata = None
-    if self.policy_generation in ("v12", "v13", "v14", "v15") or OFF_POLICY_METADATA_PATH.is_file() or OFF_POLICY_PKL_PATH.is_file():
+    if uses_split_off_policy_artifacts(self.policy_generation) or OFF_POLICY_METADATA_PATH.is_file() or OFF_POLICY_PKL_PATH.is_file():
       resolved_off_policy_meta = ensure_artifact(OFF_POLICY_METADATA_PATH, "driving_off_policy_metadata.pkl", optional=True)
       if resolved_off_policy_meta is not None:
         with open(resolved_off_policy_meta, 'rb') as f:
@@ -453,14 +459,14 @@ class ModelState:
       self.full_prev_desired_curv[0,-1,:] = policy_outputs_dict['desired_curvature'][0, :]
 
       if self.prev_desired_curv_key is not None:
-        # v9/v10/v11/v12/v13/v14/v15 models expect zeros for prev_desired_curv(s); others use history
-        if self.is_v9 or self.is_v10 or self.is_v11 or self.is_v12 or self.is_v13 or self.is_v14 or self.is_v15:
+        # Tinygrad-era policy models expect zeros for prev_desired_curv(s); older ones use history.
+        if is_tinygrad_model_version(self.policy_generation):
           self.numpy_inputs[self.prev_desired_curv_key][:] = 0 * self.full_prev_desired_curv[0, self.temporal_idxs]
         else:
           self.numpy_inputs[self.prev_desired_curv_key][:] = self.full_prev_desired_curv[0, self.temporal_idxs]
 
       if self.off_policy_enabled and self.off_policy_prev_desired_curv_key is not None:
-        if self.is_v9 or self.is_v12 or self.is_v13 or self.is_v14 or self.is_v15:
+        if self.is_v9 or uses_split_off_policy_artifacts(self.policy_generation) or uses_combined_driving_artifacts(self.policy_generation):
           self.off_policy_numpy_inputs[self.off_policy_prev_desired_curv_key][:] = 0 * self.full_prev_desired_curv[0, self.temporal_idxs]
         else:
           self.off_policy_numpy_inputs[self.off_policy_prev_desired_curv_key][:] = self.full_prev_desired_curv[0, self.temporal_idxs]
@@ -486,6 +492,13 @@ class ModelState:
 
 
 def main(demo=False):
+  params = Params()
+  selected_version = _resolve_mirrored_param(params, "ModelVersion", "DrivingModelVersion")
+  if uses_combined_driving_artifacts(selected_version):
+    from openpilot.selfdrive.modeld.modeld_v16 import main as combined_main
+
+    return combined_main(demo=demo)
+
   cloudlog.warning("modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)
@@ -527,8 +540,6 @@ def main(demo=False):
   sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay", "starpilotPlan"])
 
   publish_state = PublishState()
-  params = Params()
-
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / ModelConstants.MODEL_FREQ)
   frame_id = 0
@@ -541,6 +552,8 @@ def main(demo=False):
   buf_main, buf_extra = None, None
   meta_main = FrameMeta()
   meta_extra = FrameMeta()
+  camera_offset = CameraOffset()
+  camera_offset.set_target(params.get_float("CameraOffset", return_default=True))
 
 
   if demo:
@@ -598,11 +611,23 @@ def main(demo=False):
     v_ego = max(sm["carState"].vEgo, 0.)
     lat_delay = sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
     lateral_control_params = np.array([v_ego, lat_delay], dtype=np.float32)
+    if sm.frame % 60 == 0:
+      camera_offset.set_target(params.get_float("CameraOffset", return_default=True))
+
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
       model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
       model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
+      camera_height = sm["liveCalibration"].height[0] if sm["liveCalibration"].height else DEFAULT_CAMERA_HEIGHT
+      model_transform_main, model_transform_extra = camera_offset.update(
+        model_transform_main,
+        model_transform_extra,
+        str(sm["deviceState"].deviceType),
+        str(sm["roadCameraState"].sensor),
+        camera_height,
+        main_wide_camera,
+      )
       live_calib_seen = True
 
     traffic_convention = np.zeros(2)
@@ -674,7 +699,7 @@ def main(demo=False):
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
       r_lane_change_prob = desire_state[log.Desire.laneChangeRight]
       lane_change_prob = l_lane_change_prob + r_lane_change_prob
-      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, sm['starpilotPlan'], starpilot_toggles)
+      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, sm['starpilotPlan'], starpilot_toggles, sm['carControl'].enabled)
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       starpilot_modelv2_send.starpilotModelV2.turnDirection = DH.turn_direction

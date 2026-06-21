@@ -56,7 +56,9 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
   {.msg = {{0x91,  0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
 
 #define HYUNDAI_LDA_BUTTON_ADDR_CHECK \
-  {.msg = {{0x391, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
+  {.msg = {{0x391, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, \
+           {0x50C, 0, 8, 50U,  .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, \
+           {0x50C, 1, 8, 50U,  .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}}}, \
 
 #define HYUNDAI_NON_SCC_HEV_ADDR_CHECK \
   {.msg = {{0x595U, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
@@ -66,6 +68,13 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
 
 static const CanMsg HYUNDAI_TX_MSGS[] = {
   HYUNDAI_COMMON_TX_MSGS(0)
+};
+
+static const CanMsg HYUNDAI_LONG_TX_MSGS[] = {
+  HYUNDAI_LONG_COMMON_TX_MSGS(0)
+  {0x38D, 0, 8, .check_relay = false}, // FCA11 Bus 0
+  {0x483, 0, 8, .check_relay = false}, // FCA12 Bus 0
+  {0x7D0, 0, 8, .check_relay = false}, // radar UDS TX addr Bus 0 (for radar disable)
 };
 
 static bool hyundai_legacy = false;
@@ -226,6 +235,10 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
     if (msg->addr == 0x391U) {
       hyundai_lkas_button_check(GET_BIT(msg, 4U));
     }
+
+    if ((msg->addr == 0x50CU) && ((msg->bus == 0U) || (msg->bus == 1U))) {
+      hyundai_lkas_button_check(GET_BIT(msg, 56U));
+    }
   }
 
   hyundai_common_reset_acc_main_on_mismatches();
@@ -316,13 +329,6 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
 }
 
 static safety_config hyundai_init(uint16_t param) {
-  static const CanMsg HYUNDAI_LONG_TX_MSGS[] = {
-    HYUNDAI_LONG_COMMON_TX_MSGS(0)
-    {0x38D, 0, 8, .check_relay = false}, // FCA11 Bus 0
-    {0x483, 0, 8, .check_relay = false}, // FCA12 Bus 0
-    {0x7D0, 0, 8, .check_relay = false}, // radar UDS TX addr Bus 0 (for radar disable)
-  };
-
   static const CanMsg HYUNDAI_CAMERA_SCC_TX_MSGS[] = {
     HYUNDAI_COMMON_TX_MSGS(2)
   };
@@ -550,9 +556,9 @@ static safety_config hyundai_legacy_init(uint16_t param) {
 
   hyundai_common_init(param);
   hyundai_legacy = true;
-  hyundai_longitudinal = false;
   hyundai_camera_scc = false;
-  return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
+  return hyundai_longitudinal ? BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_LONG_TX_MSGS) :
+                                BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
 }
 
 const safety_hooks hyundai_hooks = {

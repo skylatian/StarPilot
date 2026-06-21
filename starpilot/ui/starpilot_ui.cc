@@ -7,7 +7,6 @@
 #include <QJsonParseError>
 
 #include "system/hardware/hw.h"
-#include "common/timing.h"
 
 static void update_state(StarPilotUIState *fs) {
   StarPilotUIScene &starpilot_scene = fs->starpilot_scene;
@@ -41,34 +40,33 @@ static void update_state(StarPilotUIState *fs) {
     }
     capnp::Text::Reader toggles = starpilotPlan.getStarpilotToggles();
     QByteArray current_toggles(toggles.cStr(), toggles.size());
-    static QByteArray previous_toggles;
-    if (!current_toggles.isEmpty() && previous_toggles != current_toggles) {
-      QJsonParseError parse_error;
-      QJsonDocument toggles_doc = QJsonDocument::fromJson(current_toggles, &parse_error);
-      if (parse_error.error == QJsonParseError::NoError && toggles_doc.isObject()) {
-        QJsonObject updated_toggles = starpilot_scene.starpilot_toggles;
-        const QJsonObject parsed_toggles = toggles_doc.object();
-        for (auto it = parsed_toggles.begin(); it != parsed_toggles.end(); ++it) {
-          updated_toggles.insert(it.key(), it.value());
+    // starpilot_process only broadcasts the full toggles JSON periodically and
+    // sends an empty string on every other frame. Skip the empty broadcasts so
+    // we don't parse "" (QJsonParseError "illegal value") every frame.
+    if (!current_toggles.trimmed().isEmpty()) {
+      static QByteArray previous_toggles;
+      if (previous_toggles != current_toggles) {
+        QJsonParseError parse_error;
+        QJsonDocument toggles_doc = QJsonDocument::fromJson(current_toggles, &parse_error);
+        if (parse_error.error == QJsonParseError::NoError && toggles_doc.isObject()) {
+          QJsonObject updated_toggles = starpilot_scene.starpilot_toggles;
+          const QJsonObject parsed_toggles = toggles_doc.object();
+          for (auto it = parsed_toggles.begin(); it != parsed_toggles.end(); ++it) {
+            updated_toggles.insert(it.key(), it.value());
+          }
+          starpilot_scene.starpilot_toggles = updated_toggles;
+        } else {
+          qWarning() << "Ignoring invalid StarPilot toggles JSON:" << parse_error.errorString();
         }
-        starpilot_scene.starpilot_toggles = updated_toggles;
-      } else {
-        qWarning() << "Ignoring invalid StarPilot toggles JSON:" << parse_error.errorString();
+        previous_toggles = current_toggles;
       }
-      previous_toggles = current_toggles;
     }
   }
 
-  // Rate-limit force drive-state param reads to avoid flock contention on
-  // the main thread (was every frame — caused 5s+ UI freezes under lock
-  // pressure). 250ms is imperceptible for user-toggled settings.
-  static uint64_t last_force_check_ns = 0;
-  const uint64_t now = nanos_since_boot();
-  if (now - last_force_check_ns > 250'000'000ULL) {
-    starpilot_scene.starpilot_toggles["force_offroad"] = fs->params.getBool("ForceOffroad");
-    starpilot_scene.starpilot_toggles["force_onroad"] = fs->params.getBool("ForceOnroad");
-    last_force_check_ns = now;
-  }
+  // Keep force drive-state toggles authoritative from params so UI state
+  // switches immediately even if starpilotPlan is delayed.
+  starpilot_scene.starpilot_toggles["force_offroad"] = fs->params.getBool("ForceOffroad");
+  starpilot_scene.starpilot_toggles["force_onroad"] = fs->params.getBool("ForceOnroad");
 
   if (fpsm.updated("selfdriveState")) {
     const cereal::SelfdriveState::Reader &selfdriveState = fpsm["selfdriveState"].getSelfdriveState();
@@ -116,6 +114,11 @@ StarPilotUIState *starpilotUIState() {
 void StarPilotUIState::update() {
   update_state(this);
 
-  starpilot_scene.conditional_status = starpilot_scene.enabled ? params_memory.getInt("CEStatus") : 0;
+  if (starpilot_scene.enabled && starpilot_scene.starpilot_toggles.value("conditional_chill_mode").toBool() &&
+      !starpilot_scene.starpilot_toggles.value("conditional_experimental_mode").toBool()) {
+    starpilot_scene.conditional_status = params_memory.getInt("CCStatus");
+  } else {
+    starpilot_scene.conditional_status = starpilot_scene.enabled ? params_memory.getInt("CEStatus") : 0;
+  }
   starpilot_scene.driver_camera_timer = starpilot_scene.reverse && starpilot_scene.starpilot_toggles.value("driver_camera_in_reverse").toBool() ? starpilot_scene.driver_camera_timer + 1 : 0;
 }

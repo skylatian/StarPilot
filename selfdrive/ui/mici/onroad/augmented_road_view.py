@@ -18,10 +18,12 @@ from openpilot.selfdrive.ui.mici.onroad.starpilot_status import (
   TRAFFIC_COLOR,
   get_border_color,
 )
-from openpilot.selfdrive.ui.lib.starpilot_mode_banner import ModeTransitionBanner
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.lib.starpilot_visuals import get_border_width
+from openpilot.starpilot.common.favorite_slots import load_favorite_slots, toggle_favorite_slot
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent
+from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.wrap_text import wrap_text
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import BounceFilter
@@ -41,6 +43,7 @@ CAMERA_VIEW_AUTO = 0
 CAMERA_VIEW_DRIVER = 1
 CAMERA_VIEW_STANDARD = 2
 CAMERA_VIEW_WIDE = 3
+CAMERA_VIEW_NONE = 4
 
 
 class BookmarkState(IntEnum):
@@ -145,6 +148,114 @@ class BookmarkIcon(Widget):
       icon_x = self.rect.x + self.rect.width - round(self._offset_filter.x)
       icon_y = self.rect.y + (self.rect.height - self._icon.height) / 2  # Vertically centered
       rl.draw_texture(self._icon, int(icon_x), int(icon_y), rl.WHITE)
+
+
+class FavoriteSlotsOverlay(Widget):
+  EDGE_MARGIN = 8
+  BUTTON_GAP = 8
+  MAX_BUTTON_SIZE = 208
+  INDICATOR_SIZE = 18
+
+  def __init__(self):
+    super().__init__()
+    self._font = gui_app.font(FontWeight.SEMI_BOLD)
+    self._button_rects: list[tuple[int, rl.Rectangle]] = []
+    self._pressed_slot: int | None = None
+    self._interacting = False
+
+  def interacting(self):
+    interacting, self._interacting = self._interacting, False
+    return interacting
+
+  def _visible_slots(self) -> list[tuple[int, dict]]:
+    visible = []
+    for index, slot in enumerate(load_favorite_slots(ui_state.params)):
+      if slot.get("enabled") and slot.get("show_onroad") and slot.get("key"):
+        visible.append((index, slot))
+    return visible
+
+  def _slot_rects(self, rect: rl.Rectangle, slots: list[tuple[int, dict]]) -> list[tuple[int, rl.Rectangle]]:
+    if not slots:
+      return []
+
+    slot_count = len(slots)
+    available_width = rect.width - (2 * self.EDGE_MARGIN) - ((slot_count - 1) * self.BUTTON_GAP)
+    available_height = rect.height - (2 * self.EDGE_MARGIN)
+    button_size = min(self.MAX_BUTTON_SIZE, available_height, available_width / slot_count)
+    row_width = slot_count * button_size + (slot_count - 1) * self.BUTTON_GAP
+    x = rect.x + (rect.width - row_width) / 2
+    y = rect.y + (rect.height - button_size) / 2
+
+    return [
+      (slot_index, rl.Rectangle(x + draw_index * (button_size + self.BUTTON_GAP), y, button_size, button_size))
+      for draw_index, (slot_index, _slot) in enumerate(slots)
+    ]
+
+  def _fit_label(self, label: str, max_width: float, max_height: float) -> tuple[list[str], int]:
+    label = label or "Favorite"
+    lines = [label]
+    for font_size in range(30, 17, -1):
+      if any(measure_text_cached(self._font, word, font_size).x > max_width for word in label.split()):
+        continue
+      lines = wrap_text(self._font, label, font_size, int(max_width)) or [label]
+      line_height = font_size * 1.12
+      if len(lines) <= 3 and len(lines) * line_height <= max_height:
+        return lines, font_size
+    return lines[:3], 18
+
+  def _render(self, rect: rl.Rectangle):
+    visible_slots = self._visible_slots()
+    self._button_rects = self._slot_rects(rect, visible_slots)
+    slot_by_index = dict(visible_slots)
+
+    for slot_index, button_rect in self._button_rects:
+      slot = slot_by_index[slot_index]
+      pressed = self._pressed_slot == slot_index
+      bg = rl.Color(0, 0, 0, 190 if pressed else 166)
+      border = rl.Color(255, 255, 255, 120 if pressed else 78)
+      rl.draw_rectangle_rounded(button_rect, 0.18, 12, bg)
+      rl.draw_rectangle_rounded_lines_ex(button_rect, 0.18, 12, 2, border)
+
+      key = slot.get("key")
+      active = ui_state.params.get_bool(key) if key else False
+      indicator = rl.Color(48, 255, 156, 255) if active else rl.Color(135, 135, 135, 255)
+      indicator_x = button_rect.x + button_rect.width - self.INDICATOR_SIZE - 12
+      indicator_y = button_rect.y + 12
+      rl.draw_circle(int(indicator_x + self.INDICATOR_SIZE / 2), int(indicator_y + self.INDICATOR_SIZE / 2), self.INDICATOR_SIZE / 2, indicator)
+
+      slot_text = f"#{slot_index + 1}"
+      rl.draw_text_ex(self._font, slot_text, rl.Vector2(button_rect.x + 12, button_rect.y + 9), 22, 0, rl.Color(255, 255, 255, 180))
+
+      lines, font_size = self._fit_label(
+        slot.get("label") or key or "Favorite",
+        button_rect.width - 24,
+        button_rect.height - 54,
+      )
+      line_height = font_size * 1.12
+      text_y = button_rect.y + 38 + (button_rect.height - 50 - len(lines) * line_height) / 2
+      for line in lines:
+        text_size = rl.measure_text_ex(self._font, line, font_size, 0)
+        text_x = button_rect.x + (button_rect.width - text_size.x) / 2
+        rl.draw_text_ex(self._font, line, rl.Vector2(text_x, text_y), font_size, 0, rl.Color(255, 255, 255, 242))
+        text_y += line_height
+
+  def _slot_at(self, pos: MousePos) -> int | None:
+    for slot_index, rect in self._button_rects:
+      if rl.check_collision_point_rec(pos, rect):
+        return slot_index
+    return None
+
+  def _handle_mouse_press(self, mouse_pos: MousePos):
+    self._pressed_slot = self._slot_at(mouse_pos)
+    if self._pressed_slot is not None:
+      self._interacting = True
+
+  def _handle_mouse_release(self, mouse_pos: MousePos):
+    released_slot = self._slot_at(mouse_pos)
+    if self._pressed_slot is not None and released_slot == self._pressed_slot:
+      toggle_favorite_slot(self._pressed_slot, ui_state.params, ui_state.params_memory)
+      self._interacting = True
+    self._pressed_slot = None
 
 
 class MinSteerSpeedBanner(Widget):
@@ -372,9 +483,9 @@ class AugmentedRoadView(CameraView):
     self._alert_renderer = AlertRenderer()
     self._driver_state_renderer = DriverStateRenderer()
     self._confidence_ball = ConfidenceBall()
-    self._mode_transition_banner = ModeTransitionBanner()
     self._min_steer_speed_banner = MinSteerSpeedBanner()
     self._standstill_timer = StandstillTimerOverlay()
+    self._favorite_slots = self._child(FavoriteSlotsOverlay())
     self._offroad_label = UnifiedLabel("start the car to\nuse openpilot", 54, FontWeight.DISPLAY,
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
@@ -416,13 +527,15 @@ class AugmentedRoadView(CameraView):
       self._offroad_label.set_text("start the car to\nuse openpilot")
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
-    # Don't trigger click callback if bookmark was triggered
-    if not self._bookmark_icon.interacting():
+    # Don't trigger click callback if bookmark or HUD widgets consumed the tap.
+    if not self._bookmark_icon.interacting() and not self._hud_renderer.user_interacting() and not self._favorite_slots.interacting():
       super()._handle_mouse_release(mouse_pos)
 
   def _render(self, _):
     start_draw = time.monotonic()
-    self._switch_stream_if_needed(ui_state.sm)
+    camera_view = self._camera_view()
+    camera_view_none = camera_view == CAMERA_VIEW_NONE
+    self._switch_stream_if_needed(ui_state.sm, camera_view)
 
     # Update calibration before rendering
     self._update_calibration()
@@ -445,7 +558,10 @@ class AugmentedRoadView(CameraView):
     )
 
     # Render the base camera view
-    super()._render(self._content_rect)
+    if camera_view_none:
+      rl.draw_rectangle_rec(self._content_rect, rl.BLACK)
+    else:
+      super()._render(self._content_rect)
 
     waiting_for_controls = ui_state.started and not self._controls_ready()
     if waiting_for_controls:
@@ -464,42 +580,41 @@ class AugmentedRoadView(CameraView):
 
     in_reverse = self._is_in_reverse()
     is_driver_stream = self.stream_type == DRIVER_CAM
+    draw_road_overlays = not in_reverse and not is_driver_stream and not camera_view_none
+    draw_hud_controls = camera_view_none or (not in_reverse and not is_driver_stream)
     self._hud_renderer.prepare(self._content_rect)
 
     # Draw all UI overlays
-    if not in_reverse and not is_driver_stream:
+    if draw_road_overlays:
       self._model_renderer.render(self._content_rect)
 
     # Fade out bottom of overlays for looks
     rl.draw_texture_ex(self._fade_texture, rl.Vector2(self._content_rect.x, self._content_rect.y), 0.0, 1.0, rl.WHITE)
-    if not in_reverse and not is_driver_stream:
+    if draw_hud_controls:
       self._hud_renderer.render_background()
 
     alert_to_render, not_animating_out = self._alert_renderer.will_render()
 
     should_draw_dmoji = ui_state.is_onroad() and (
-      is_driver_stream or ((not in_reverse) and (not self._hud_renderer.drawing_top_icons()))
+      is_driver_stream or camera_view_none or ((not in_reverse) and (not self._hud_renderer.drawing_top_icons()))
     )
     self._driver_state_renderer.set_should_draw(should_draw_dmoji)
     self._driver_state_renderer.set_position(self._rect.x + 16, self._rect.y + 10)
-    if is_driver_stream or not in_reverse:
+    if camera_view_none or is_driver_stream or not in_reverse:
       self._driver_state_renderer.render()
 
-    self._hud_renderer.set_can_draw_top_icons((not in_reverse) and (not is_driver_stream) and (alert_to_render is None))
-    self._hud_renderer.set_wheel_critical_icon((not in_reverse) and (not is_driver_stream) and alert_to_render is not None and not not_animating_out and
+    self._hud_renderer.set_can_draw_top_icons(draw_hud_controls and (alert_to_render is None))
+    self._hud_renderer.set_wheel_critical_icon(draw_hud_controls and alert_to_render is not None and not not_animating_out and
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
-    self._mode_transition_banner.update()
     # TODO: have alert renderer draw offroad mici label below
     if ui_state.started:
       self._alert_renderer.render(self._content_rect)
-    if not in_reverse and not is_driver_stream:
+    if draw_hud_controls:
       self._hud_renderer.render_foreground()
-    if (not in_reverse) and (not is_driver_stream) and alert_to_render is None:
-      self._mode_transition_banner.render(self._content_rect)
     rendered_standstill_timer = False
-    if not in_reverse and not is_driver_stream:
+    if draw_hud_controls:
       rendered_standstill_timer = self._standstill_timer.render(self._content_rect, in_reverse)
-    if not in_reverse and not is_driver_stream and not rendered_standstill_timer:
+    if draw_hud_controls and not rendered_standstill_timer:
       self._min_steer_speed_banner.render(self._content_rect)
 
     # End clipping region
@@ -507,9 +622,11 @@ class AugmentedRoadView(CameraView):
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
-    if not in_reverse and not is_driver_stream:
+    if draw_road_overlays:
       self._confidence_ball.render(self.rect)
-    if is_driver_stream or not in_reverse:
+    if draw_hud_controls and (camera_view_none or is_driver_stream or not in_reverse):
+      self._favorite_slots.render(self._content_rect)
+    if camera_view_none or is_driver_stream or not in_reverse:
       self._draw_border()
 
     self._bookmark_icon.render(self.rect)
@@ -560,23 +677,31 @@ class AugmentedRoadView(CameraView):
   def is_in_reverse(self) -> bool:
     return self._is_in_reverse()
 
-  def _switch_stream_if_needed(self, sm):
+  @staticmethod
+  def _camera_view() -> int:
+    camera_view = ui_state.params.get_int("CameraView", return_default=True, default=CAMERA_VIEW_WIDE)
+    if camera_view not in (CAMERA_VIEW_AUTO, CAMERA_VIEW_DRIVER, CAMERA_VIEW_STANDARD, CAMERA_VIEW_WIDE, CAMERA_VIEW_NONE):
+      return CAMERA_VIEW_WIDE
+    return camera_view
+
+  def _switch_stream_if_needed(self, sm, camera_view: int):
+    if camera_view == CAMERA_VIEW_NONE:
+      self._reverse_driver_camera_frames = 0
+      self._reverse_driver_camera_active = False
+      return
+
     if self._update_reverse_driver_camera_state():
       target = DRIVER_CAM
       if self.stream_type != target:
         self.switch_stream(target)
       return
 
-    camera_view = ui_state.params.get_int("CameraView", return_default=True, default=CAMERA_VIEW_WIDE)
-    if camera_view not in (CAMERA_VIEW_AUTO, CAMERA_VIEW_DRIVER, CAMERA_VIEW_STANDARD, CAMERA_VIEW_WIDE):
-      camera_view = CAMERA_VIEW_WIDE
-
     if camera_view == CAMERA_VIEW_DRIVER:
       target = DRIVER_CAM
     elif camera_view == CAMERA_VIEW_STANDARD:
       target = ROAD_CAM
     elif camera_view == CAMERA_VIEW_WIDE:
-      target = WIDE_CAM
+      target = WIDE_CAM if WIDE_CAM in self.available_streams else ROAD_CAM
     elif sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
