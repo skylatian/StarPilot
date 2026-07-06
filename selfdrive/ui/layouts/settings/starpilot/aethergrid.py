@@ -19,7 +19,7 @@ GEOMETRY_OFFSET = 10
 PLATE_TAU = 0.060
 TILE_RADIUS = 0.08
 TILE_SEGMENTS = 12
-SLIDER_BUTTON_SIZE = 60
+SLIDER_BUTTON_SIZE = 87
 TILE_INSET = 1.0
 TILE_RADIUS_PX = 18.0
 TILE_SIGNAL_WIDTH = 1
@@ -64,7 +64,7 @@ def aether_end_scissor_mode() -> None:
 
 # Custom vector icon layout constants (scribble.py coordinate system)
 CUSTOM_ICON_BASE_SIZE = 100.0
-CUSTOM_ICON_SCALE_MULT = 1.25
+CUSTOM_ICON_SCALE_MULT = 1.60
 CUSTOM_ICON_CANVAS_SIZE = 60.0
 
 
@@ -289,30 +289,30 @@ class AetherListMetrics:
   panel_padding_bottom: int = 22
   header_height: int = 0
   section_gap: int = 28
-  section_header_height: int = 34
+  section_header_height: int = 87
   section_header_gap: int = 12
-  row_height: int = 122
-  utility_row_height: int = 88
+  row_height: int = 177
+  utility_row_height: int = 128
   row_radius: float = 0.12
-  action_width: int = 188
-  header_button_height: int = 58
-  header_button_gap: int = 10  # noqa: used implicitly by driving_model
+  action_width: int = 235
+  header_button_height: int = 84
+  header_button_gap: int = 14  # noqa: used implicitly by driving_model
   fade_height: int = 24
   content_right_gutter: int = 18
-  toggle_width: int = 78
-  toggle_height: int = 42
-  toggle_right_inset: int = 34
-  adjustor_row_height: int = 94
-  adjustor_row_active_height: int = 154
-  adjustor_preset_height: int = 44
-  adjustor_preset_gap: int = 10
-  adjustor_scrubber_height: int = 52
-  adjustor_value_pill_height: int = 36
-  adjustor_value_pill_width: int = 144
-  utility_value_right: int = 270
-  utility_value_width: int = 220
-  utility_chevron_right: int = 62
-  menu_button_font_size: int = 18
+  toggle_width: int = 113
+  toggle_height: int = 61
+  toggle_right_inset: int = 49
+  adjustor_row_height: int = 136
+  adjustor_row_active_height: int = 223
+  adjustor_preset_height: int = 64
+  adjustor_preset_gap: int = 14
+  adjustor_scrubber_height: int = 75
+  adjustor_value_pill_height: int = 52
+  adjustor_value_pill_width: int = 209
+  utility_value_right: int = 391
+  utility_value_width: int = 319
+  utility_chevron_right: int = 90
+  menu_button_font_size: int = 46
   menu_button_roundness: float = 0.35
   menu_button_segments: int = 12
 
@@ -435,11 +435,11 @@ def draw_list_panel_shell(frame: AetherListFrame, style: PanelStyle | None = Non
     border = style.shell_border
     glow = style.shell_glow
   shell = snap_rect(frame.shell)
-  draw_rounded_fill(shell, bg, radius_px=22)
-  draw_rounded_stroke(shell, border, radius_px=22)
+  draw_rounded_fill(shell, bg, radius_px=32)
+  draw_rounded_stroke(shell, border, radius_px=32)
   if glow.a > 0:
     glow_rect = _inset_rect(shell, 2)
-    draw_rounded_stroke(glow_rect, with_alpha(glow, 14), radius_px=20)
+    draw_rounded_stroke(glow_rect, with_alpha(glow, 14), radius_px=29)
 
 
 def init_list_panel(rect: rl.Rectangle, style: PanelStyle | None = None, metrics: AetherListMetrics = AETHER_LIST_METRICS) -> tuple[AetherListFrame, rl.Rectangle, float]:
@@ -1167,11 +1167,11 @@ class BreadcrumbController:
     target = 1.0 if self._expanded else 0.0
     self._expand_alpha += (target - self._expand_alpha) * ANIM_LERP
 
-    ACTIVE_SIZE   = 44
-    PAST_SIZE     = 36
-    CHEVRON_SIZE  = 26
-    CHEVRON_W     = 22
-    GAP           = 16
+    ACTIVE_SIZE   = 64
+    PAST_SIZE     = 52
+    CHEVRON_SIZE  = 38
+    CHEVRON_W     = 32
+    GAP           = 23
 
     center_y = rect.y + rect.height / 2
 
@@ -1221,7 +1221,7 @@ class BreadcrumbController:
           current_x += GAP
           continue
 
-        capsule_w, capsule_h = 70, 40
+        capsule_w, capsule_h = 102, 58
         cap_rect = rl.Rectangle(current_x, center_y - capsule_h / 2, capsule_w, capsule_h)
         hovered = point_hits(mouse_pos, cap_rect, None, pad_x=4, pad_y=6)
         
@@ -1254,10 +1254,10 @@ class BreadcrumbController:
           rl.draw_rectangle_rounded_lines_ex(cap_rect, 1.0, 16, 1.0, outline)
 
           font_dots = gui_app.font(FontWeight.BOLD)
-          dots_ts = measure_text_cached(font_dots, "...", 28)
+          dots_ts = measure_text_cached(font_dots, "...", 41)
           rl.draw_text_ex(font_dots, "...",
             rl.Vector2(cap_rect.x + (cap_rect.width - dots_ts.x) / 2, center_y - dots_ts.y / 2),
-            28, 0, dots_c)
+            41, 0, dots_c)
         current_x += capsule_w + GAP
 
       else:
@@ -1283,7 +1283,7 @@ class BreadcrumbController:
           c_pressed = rl.Color(past_pressed.r, past_pressed.g, past_pressed.b, item_alpha)
 
         ts = measure_text_cached(font, text, font_size)
-        hit_rect = rl.Rectangle(current_x - 6, center_y - 30, ts.x + 12, 60)
+        hit_rect = rl.Rectangle(current_x - 9, center_y - 44, ts.x + 17, 87)
         hovered  = point_hits(mouse_pos, hit_rect, None, pad_x=0, pad_y=0)
         
         # Only add to interactive rects if it's visible within the bounds
@@ -1293,7 +1293,7 @@ class BreadcrumbController:
         color = c_pressed if pressed else (c_hover if hovered else c_normal)
 
         if hovered and not is_last:
-          rl.draw_rectangle_rounded(hit_rect, 0.4, 8, rl.Color(255, 255, 255, int(12 * item_alpha / 255)))
+          rl.draw_rectangle_rounded(hit_rect, 0.4, 12, rl.Color(255, 255, 255, int(12 * item_alpha / 255)))
 
         text_y = center_y - ts.y / 2
         rl.draw_text_ex(font, text, rl.Vector2(current_x, text_y), font_size, 0, color)
@@ -1314,8 +1314,8 @@ class BreadcrumbController:
     aether_end_scissor_mode()
 PANEL_HEADER_TITLE_Y: int = 34
 PANEL_HEADER_SUBTITLE_Y: int = 78
-PANEL_HEADER_TITLE_FONT_SIZE: int = 40
-PANEL_HEADER_SUBTITLE_FONT_SIZE: int = 20
+PANEL_HEADER_TITLE_FONT_SIZE: int = 58
+PANEL_HEADER_SUBTITLE_FONT_SIZE: int = 29
 PANEL_HEADER_TITLE_FONT: FontWeight = FontWeight.SEMI_BOLD
 PANEL_HEADER_SUBTITLE_FONT: FontWeight = FontWeight.NORMAL
 
@@ -1357,10 +1357,10 @@ def draw_status_badges(
   items: list[str],
   style: PanelStyle,
   *,
-  height: float = 28.0,
-  font_size: int = 17,
-  gap: float = 8.0,
-  padding_x: float = 18.0,
+  height: float = 64.0,
+  font_size: int = 40,
+  gap: float = 12.0,
+  padding_x: float = 26.0,
   text_color: rl.Color = AetherListColors.HEADER,
 ):
   badge_x = start_x
@@ -1372,8 +1372,8 @@ def draw_status_badges(
 
     fill_color = with_alpha(style.accent, 24)
     border_color = with_alpha(style.accent, 80)
-    draw_rounded_fill(badge_rect, fill_color, radius_px=8)
-    draw_rounded_stroke(badge_rect, border_color, radius_px=8)
+    draw_rounded_fill(badge_rect, fill_color, radius_px=12)
+    draw_rounded_stroke(badge_rect, border_color, radius_px=12)
 
     text_x = badge_rect.x + (badge_rect.width - text_size.x) / 2
     text_y = badge_rect.y + (badge_rect.height - text_size.y) / 2
@@ -1468,8 +1468,8 @@ def draw_busy_ring(
   accent_color: rl.Color,
   *,
   track_color: rl.Color = rl.Color(255, 255, 255, 26),
-  inner_radius: float = 20,
-  outer_radius: float = 26,
+  inner_radius: float = 29,
+  outer_radius: float = 38,
   sweep: float = 260,
   thickness: int = 48,
 ):
@@ -1500,7 +1500,7 @@ def draw_standard_toggle_row(
     pressed=pressed,
     is_last=is_last,
     show_chevron=False,
-    title_size=34, subtitle_size=22,
+    title_size=49, subtitle_size=32,
     style=style,
   )
 
@@ -1627,7 +1627,7 @@ def draw_toggle_switch(
   width: int = AETHER_LIST_METRICS.toggle_width,
   height: int = AETHER_LIST_METRICS.toggle_height,
   right_inset: int = AETHER_LIST_METRICS.toggle_right_inset,
-  knob_offset: int = 20,
+  knob_offset: int = 29,
   seed_id: str = "",
   radius_px: float = TILE_RADIUS_PX,
   bg_color: rl.Color | None = None,
@@ -1661,7 +1661,7 @@ def draw_toggle_switch(
         rl.draw_line_ex(rl.Vector2(nx, ny), rl.Vector2(knob_x, knob_y), 1.2, tether_col)
 
   # Nearly-square slider thumb — physical button sliding across the starfield
-  knob_w = 30.0
+  knob_w = 44.0
   knob_h = toggle_rect.height - 8.0  # 4px inset top + bottom = 34px
   knob_roundness = 0.65              # ≈10px corner radius on 30px width — rect, not pill
   knob_segments = 8
@@ -1702,7 +1702,7 @@ def draw_action_pill(
   )
 
 
-def draw_chevron_icon(rect: rl.Rectangle, color: rl.Color, *, thickness: float = 3.0, direction: str = "right"):
+def draw_chevron_icon(rect: rl.Rectangle, color: rl.Color, *, thickness: float = 4.0, direction: str = "right"):
   snapped = snap_rect(rect)
   center_x = snapped.x + snapped.width / 2
   center_y = snapped.y + snapped.height / 2
@@ -1723,9 +1723,9 @@ def draw_chevron_icon(rect: rl.Rectangle, color: rl.Color, *, thickness: float =
     rl.draw_line_ex(rl.Vector2(left_x, bottom_y), rl.Vector2(right_x, center_y), thickness, color)
 
 
-TAB_HEIGHT = 68
-TAB_GAP = 10
-TAB_BOTTOM_GAP = 18
+TAB_HEIGHT = 98
+TAB_GAP = 14
+TAB_BOTTOM_GAP = 26
 
 
 def draw_tab_bar(
@@ -1755,7 +1755,7 @@ def draw_tab_bar(
       tab_rect, tab["title"], subtitle,
       current=active_tab_key == tab["id"],
       hovered=hovered, pressed=pressed,
-      title_size=26, subtitle_size=17, show_underline=True, style=style,
+      title_size=38, subtitle_size=25, show_underline=True, style=style,
     )
   return rect.y + tab_height + tab_bottom_gap
 
@@ -1768,8 +1768,8 @@ def draw_tab_card(
   current: bool = False,
   hovered: bool = False,
   pressed: bool = False,
-  title_size: int = 19,
-  subtitle_size: int = 14,
+  title_size: int = 28,
+  subtitle_size: int = 20,
   show_underline: bool = False,
   underline_inset: int = 18,
   title_color: rl.Color | None = None,
@@ -1832,15 +1832,15 @@ def draw_metric_strip(
   rect: rl.Rectangle,
   metrics: list[tuple[str, str]],
   *,
-  gap: int = 18,
-  min_col_width: float = 72.0,
-  label_size: int = 16,
-  value_size: int = 19,
+  gap: int = 26,
+  min_col_width: float = 104.0,
+  label_size: int = 23,
+  value_size: int = 28,
   style: PanelStyle = DEFAULT_PANEL_STYLE,
   label_top_offset: int = 0,
-  value_top_offset: int = 14,
-  divider_top_offset: int = 2,
-  divider_bottom_offset: int = 16,
+  value_top_offset: int = 20,
+  divider_top_offset: int = 3,
+  divider_bottom_offset: int = 23,
 ):
   if not metrics:
     return
@@ -1881,12 +1881,15 @@ def draw_metric_strip(
 
 GROUP_HEADER_HEIGHT = 20.0
 GROUP_HEADER_GAP = 2.0
-GROUP_HAIRLINE_COLOR = rl.Color(255, 255, 255, 10)
-GROUP_HEADER_COLOR = rl.Color(255, 255, 255, 90)
+GROUP_HEADER_LINE_GAP = 2.0
+GROUP_OVERHEAD = 8.0 + GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
+GROUP_HAIRLINE_COLOR = rl.Color(255, 255, 255, 30)
+GROUP_HEADER_COLOR = AetherListColors.HEADER
+
 
 def draw_group_header(x: float, y: float, width: float, label: str) -> float:
-  gui_label(rl.Rectangle(x, y, width, GROUP_HEADER_HEIGHT), label, 16, GROUP_HEADER_COLOR, FontWeight.MEDIUM)
-  y += GROUP_HEADER_HEIGHT
+  gui_label(rl.Rectangle(x, y, max(1.0, width), GROUP_HEADER_HEIGHT), label, 16, GROUP_HEADER_COLOR, FontWeight.MEDIUM)
+  y += GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP
   rl.draw_line(int(x), int(y), int(x + width), int(y), GROUP_HAIRLINE_COLOR)
   return y + GROUP_HEADER_GAP
 
@@ -1896,8 +1899,8 @@ def draw_section_header(
   title: str = "",
   *,
   trailing_text: str = "",
-  title_size: int = 26,
-  trailing_size: int = 20,
+  title_size: int = 58,
+  trailing_size: int = 52,
   title_color: rl.Color | None = None,
   trailing_color: rl.Color | None = None,
   style: PanelStyle = DEFAULT_PANEL_STYLE,
@@ -1924,10 +1927,10 @@ def draw_empty_state_card(
   title: str,
   body: str,
   *,
-  title_size: int = 30,
-  body_size: int = 22,
-  body_inset_x: int = 48,
-  title_gap: int = 14,
+  title_size: int = 44,
+  body_size: int = 32,
+  body_inset_x: int = 70,
+  title_gap: int = 20,
   title_top_padding: float | None = None,
   body_height: float | None = None,
   fill: rl.Color | None = None,
@@ -1941,11 +1944,11 @@ def draw_empty_state_card(
   resolved_border = border if border is not None else style.surface_border
   draw_soft_card(card_rect, resolved_fill, resolved_border, radius=radius, segments=segments)
 
-  title_h = max(34.0, title_size + 8)
-  title_y = card_rect.y + (title_top_padding if title_top_padding is not None else max(24.0, min(42.0, card_rect.height * 0.22)))
+  title_h = max(49.0, title_size + 12)
+  title_y = card_rect.y + (title_top_padding if title_top_padding is not None else max(35.0, min(61.0, card_rect.height * 0.22)))
   inset_x = min(float(body_inset_x), max(18.0, card_rect.width * 0.22))
   body_y = title_y + title_h + title_gap
-  resolved_body_h = body_height if body_height is not None else max(40.0, card_rect.height - (body_y - card_rect.y) - 24.0)
+  resolved_body_h = body_height if body_height is not None else max(40.0, card_rect.height - (body_y - card_rect.y) - 35.0)
 
   gui_label(
     rl.Rectangle(card_rect.x, title_y, card_rect.width, title_h),
@@ -1989,9 +1992,9 @@ def draw_settings_list_row(
   pressed: bool = False,
   is_last: bool = False,
   show_chevron: bool = True,
-  title_size: int = 28,
-  subtitle_size: int = 20,
-  value_size: int = 24,
+  title_size: int = 49,
+  subtitle_size: int = 38,
+  value_size: int = 44,
   separator_inset: int = 22,
   title_color: rl.Color | None = None,
   subtitle_color: rl.Color | None = None,
@@ -2036,7 +2039,7 @@ def draw_settings_list_row(
   if subtitle:
     draw_text_fit_common(
       gui_app.font(FontWeight.NORMAL), subtitle,
-      rl.Vector2(text_left, draw_rect.y + 54),
+      rl.Vector2(text_left, draw_rect.y + 64),
       text_width, subtitle_size,
       color=resolved_subtitle_color,
     )
@@ -2063,7 +2066,7 @@ def draw_settings_list_row(
   if value:
     value_left = draw_rect.x + draw_rect.width - AETHER_LIST_METRICS.utility_value_right
     value_right = chevron_rect.x - 16 if show_chevron else draw_rect.x + draw_rect.width - 24
-    value_rect = rl.Rectangle(value_left, draw_rect.y + 20, max(48.0, value_right - value_left), 28)
+    value_rect = rl.Rectangle(value_left, draw_rect.y + 20, max(48.0, value_right - value_left), 34)
     gui_label(
       value_rect,
       value,
@@ -2304,7 +2307,7 @@ class AetherInlineRangeControl(Widget):
       label,
       rl.Vector2(rect.x + 10, rect.y + (rect.height - 22) / 2),
       max(1.0, rect.width - 20),
-      22,
+      22,  # font_size in draw_button
       align_center=True,
       color=AetherListColors.HEADER,
     )
@@ -2317,17 +2320,17 @@ class AetherInlineRangeControl(Widget):
     thumb_target = 1.0 if self._is_dragging or self._pending_drag else 0.0
     self._thumb_focus += (thumb_target - self._thumb_focus) * (1 - math.exp(-dt / 0.070))
 
-    button_size = min(rect.height, 44)
+    button_size = min(rect.height, 64)
     button_y = rect.y + (rect.height - button_size) / 2
     self._minus_rect = snap_rect(rl.Rectangle(rect.x, button_y, button_size, button_size))
     self._plus_rect = snap_rect(rl.Rectangle(rect.x + rect.width - button_size, button_y, button_size, button_size))
     self._draw_button(self._minus_rect, "-", pressed=self._pressed_button < 0)
     self._draw_button(self._plus_rect, "+", pressed=self._pressed_button > 0)
 
-    track_x = self._minus_rect.x + self._minus_rect.width + 14
-    track_w = max(1.0, self._plus_rect.x - 14 - track_x)
+    track_x = self._minus_rect.x + self._minus_rect.width + 20
+    track_w = max(1.0, self._plus_rect.x - 20 - track_x)
     lane_h = rect.height
-    track_h = 4.0
+    track_h = 6.0
     track_y = rect.y + (lane_h - track_h) / 2
     self._track_rect = snap_rect(rl.Rectangle(track_x, track_y, track_w, track_h))
 
@@ -2336,7 +2339,7 @@ class AetherInlineRangeControl(Widget):
       for index in range(self._major_tick_count):
         frac = index / max(1, self._major_tick_count - 1)
         tick_x = self._track_rect.x + frac * self._track_rect.width
-        rl.draw_rectangle_rec(rl.Rectangle(tick_x - 1, rect.y + rect.height / 2 - 8, 2, 16), rl.Color(255, 255, 255, 24))
+        rl.draw_rectangle_rec(rl.Rectangle(tick_x - 1, rect.y + rect.height / 2 - 8, 3, 23), rl.Color(255, 255, 255, 24))
 
     fill_frac = self._value_fraction(self._smooth_value)
     fill_w = fill_frac * self._track_rect.width
@@ -2344,8 +2347,8 @@ class AetherInlineRangeControl(Widget):
       fill_rect = snap_rect(rl.Rectangle(self._track_rect.x, self._track_rect.y, fill_w, self._track_rect.height))
       rl.draw_rectangle_rounded(fill_rect, 1.0, 12, with_alpha(self._color, 220))
 
-    thumb_w = 22 + self._thumb_focus * 4
-    thumb_h = 28 + self._thumb_focus * 4
+    thumb_w = 32 + self._thumb_focus * 4
+    thumb_h = 41 + self._thumb_focus * 4
     thumb_center_x = self._track_rect.x + fill_frac * self._track_rect.width
     thumb_center_y = rect.y + rect.height / 2
     self._thumb_rect = snap_rect(rl.Rectangle(thumb_center_x - thumb_w / 2, thumb_center_y - thumb_h / 2, thumb_w, thumb_h))
@@ -2357,8 +2360,8 @@ class AetherInlineRangeControl(Widget):
 
     if self._is_dragging or self._pressed_button != 0:
       bubble_text = format_adjustor_value(self.current_val, step=self.step, unit=self._unit, labels=self._labels)
-      bubble_w = max(80.0, min(132.0, 44.0 + len(bubble_text) * 10.0))
-      bubble_rect = snap_rect(rl.Rectangle(thumb_center_x - bubble_w / 2, rect.y - 40, bubble_w, 32))
+      bubble_w = max(116.0, min(191.0, 44.0 + len(bubble_text) * 10.0))
+      bubble_rect = snap_rect(rl.Rectangle(thumb_center_x - bubble_w / 2, rect.y - 58, bubble_w, 46))
       bubble_fill = mix_colors(rl.Color(18, 22, 28, 255), self._color, 0.18)
       bubble_border = with_alpha(self._color, 70)
       draw_rounded_fill(bubble_rect, bubble_fill, radius_px=14)
@@ -2368,18 +2371,13 @@ class AetherInlineRangeControl(Widget):
         bubble_text,
         rl.Vector2(bubble_rect.x + 10, bubble_rect.y + 7),
         max(1.0, bubble_rect.width - 20),
-        16,
+        23,
         align_center=True,
         color=AetherListColors.HEADER,
       )
 
 
-_ICON_CHARS: dict[str, str] = {
-  # Swap to "\u26A0"/"\u24D8" after fonts regenerated with process.py
-  "alert_critical": "!",
-  "alert_state": "\u25CF",
-  "alert_info": "\u25CB",
-}
+
 
 
 class AetherAdjustorRow(Widget):
@@ -2579,48 +2577,29 @@ class AetherAdjustorRow(Widget):
       current_border=current_border,
     )
 
-    scale_y = rect.height / 94.0
-    title_fs = max(16, int(24 * scale_y)) if rect.height < 94 else 24
-    sub_fs = max(14, int(20 * scale_y)) if rect.height < 94 else 20
-    val_fs = max(14, int(20 * scale_y)) if rect.height < 94 else 20
+    title_fs = 24
+    sub_fs = 20
+    val_fs = 20
 
     value_pill_w = min(float(AETHER_LIST_METRICS.adjustor_value_pill_width), max(118.0, rect.width * 0.22))
-    value_pill_h = max(24.0, 36.0 * scale_y) if rect.height < 94 else AETHER_LIST_METRICS.adjustor_value_pill_height
-    value_y = rect.y + 14.0 * scale_y if rect.height < 94 else rect.y + 14
+    value_pill_h = float(AETHER_LIST_METRICS.adjustor_value_pill_height)
+    value_y = rect.y + 14
 
     self._header_rect = rl.Rectangle(rect.x, rect.y, rect.width, min(rect.height, 78))
     self._value_rect = snap_rect(rl.Rectangle(rect.x + rect.width - value_pill_w - 18, value_y, value_pill_w, value_pill_h))
     content_right = self._value_rect.x - 18
 
-    if self._icon_key:
-      icon_char = _ICON_CHARS.get(self._icon_key)
-      if icon_char:
-        icon_fs = max(18, int(28 * max(0.65, rect.height / 94.0)))
-        font = gui_app.font(FontWeight.BOLD)
-        ts = measure_text_cached(font, icon_char, icon_fs)
-        icon_x = rect.x + 12 + (40.0 - ts.x) / 2
-        icon_y = rect.y + (rect.height - ts.y) / 2
-        rl.draw_text_ex(font, icon_char, rl.Vector2(icon_x, icon_y), icon_fs, 0, mix_colors(rl.WHITE, self._color, 0.08))
-        content_left = rect.x + 12 + 40.0 + 12
-      else:
-        s = (51.0 / 60.0) * max(0.65, rect.height / 94.0) * 1.25
-        icon_w = 60.0 * s
-        icon_x = rect.x + 12
-        icon_y = rect.y + (rect.height - icon_w) / 2
-        draw_custom_icon(self._icon_key, icon_x, icon_y, s, mix_colors(rl.WHITE, self._color, 0.08))
-        content_left = rect.x + 12 + icon_w + 12
-    else:
-      content_left = rect.x + 24
+    content_left = rect.x + 24
 
     content_width = max(120.0, content_right - content_left)
 
-    title_y = rect.y + 14.0 * scale_y if rect.height < 94 else rect.y + 14
-    title_h = max(18.0, 28.0 * scale_y) if rect.height < 94 else 28
+    title_y = rect.y + 14
+    title_h = 28
     gui_label(rl.Rectangle(content_left, title_y, content_width, title_h), self._title, title_fs, self._style.title_color, FontWeight.MEDIUM)
 
     if self._subtitle:
-      sub_y = rect.y + 44.0 * scale_y if rect.height < 94 else rect.y + 44
-      sub_h = max(14.0, 22.0 * scale_y) if rect.height < 94 else 22
+      sub_y = rect.y + 44
+      sub_h = 22
       gui_label(rl.Rectangle(content_left, sub_y, content_width, sub_h), self._subtitle, sub_fs, self._style.subtitle_color, FontWeight.NORMAL)
 
     pill_fill = rl.Color(255, 255, 255, 5)
@@ -2628,8 +2607,8 @@ class AetherAdjustorRow(Widget):
     if active:
       pill_fill = mix_colors(rl.Color(18, 22, 28, 255), self._color, 0.20, alpha=255)
       pill_border = with_alpha(self._color, 64)
-    draw_rounded_fill(self._value_rect, pill_fill, radius_px=16 * scale_y if rect.height < 94 else 16)
-    draw_rounded_stroke(self._value_rect, pill_border, radius_px=16 * scale_y if rect.height < 94 else 16)
+    draw_rounded_fill(self._value_rect, pill_fill, radius_px=16)
+    draw_rounded_stroke(self._value_rect, pill_border, radius_px=16)
     val_text_y = self._value_rect.y + (self._value_rect.height - val_fs) / 2 - 2
     draw_text_fit_common(
       self._font_value,
@@ -2641,8 +2620,10 @@ class AetherAdjustorRow(Widget):
       color=self._style.title_color,
     )
 
-    hint_y = rect.y + rect.height - 18.0 * scale_y if rect.height < 94 else rect.y + 76
-    hint_h = max(6.0, 8.0 * scale_y) if rect.height < 94 else 8
+    hint_h = 8
+    value_bottom = self._value_rect.y + self._value_rect.height
+    gap_below = (rect.y + rect.height) - value_bottom
+    hint_y = value_bottom + gap_below / 2 - hint_h / 2
     self._hint_rect = snap_rect(rl.Rectangle(content_left, hint_y, rect.x + rect.width - 24 - content_left, hint_h + 4))
     hint_track = snap_rect(rl.Rectangle(self._hint_rect.x, self._hint_rect.y + 2, self._hint_rect.width, hint_h))
     rl.draw_rectangle_rounded(hint_track, 1.0, 10, rl.Color(255, 255, 255, 10))
@@ -2694,10 +2675,10 @@ def draw_selection_list_row(
   action_width: int = AETHER_LIST_METRICS.action_width,
   action_chip: bool = False,
   action_pill: bool = False,
-  title_size: int = 30,
-  subtitle_size: int = 20,
-  action_text_size: int = 18,
-  action_pill_height: int = 44,
+  title_size: int = 44,
+  subtitle_size: int = 29,
+  action_text_size: int = 26,
+  action_pill_height: int = 64,
   action_pill_width: float | None = None,
   title_color: rl.Color = AetherListColors.HEADER,
   subtitle_color: rl.Color = AetherListColors.SUBTEXT,
@@ -2805,24 +2786,24 @@ def draw_selection_list_row(
 def draw_status_led(center: rl.Vector2, enabled: bool):
   if enabled:
     led_color = rl.Color(110, 175, 245, 255)
-    rl.draw_circle(int(center.x), int(center.y), 11, rl.Color(110, 175, 245, 24))
-    rl.draw_circle(int(center.x), int(center.y), 6, led_color)
+    rl.draw_circle(int(center.x), int(center.y), 16, rl.Color(110, 175, 245, 24))
+    rl.draw_circle(int(center.x), int(center.y), 9, led_color)
   else:
-    rl.draw_circle(int(center.x), int(center.y), 7, rl.Color(14, 16, 22, 255))
-    rl.draw_ring(center, 5, 6, 0, 360, 24, rl.Color(70, 78, 95, 140))
+    rl.draw_circle(int(center.x), int(center.y), 10, rl.Color(14, 16, 22, 255))
+    rl.draw_ring(center, 7, 9, 0, 360, 24, rl.Color(70, 78, 95, 140))
 
 
 def draw_overflow_dots(center: rl.Vector2, color: rl.Color):
-  dot_r = 4
-  gap = 12
+  dot_r = 6
+  gap = 17
   for i in range(3):
     rl.draw_circle(int(center.x + (i - 1) * gap), int(center.y), dot_r, color)
 
 
 
 def draw_heart_icon(center: rl.Vector2, color: rl.Color):
-  rl.draw_circle(int(center.x - 5), int(center.y - 3), 7, color)
-  rl.draw_circle(int(center.x + 5), int(center.y - 3), 7, color)
+  rl.draw_circle(int(center.x - 5), int(center.y - 3), 10, color)
+  rl.draw_circle(int(center.x + 5), int(center.y - 3), 10, color)
   rl.draw_triangle(
     rl.Vector2(center.x + 13, center.y + 1),
     rl.Vector2(center.x - 13, center.y + 1),
@@ -2838,10 +2819,10 @@ def draw_download_icon(center: rl.Vector2, color: rl.Color):
   right_head = rl.Vector2(center.x + 11, center.y - 2)
   tray_left = rl.Vector2(center.x - 14, center.y + 18)
   tray_right = rl.Vector2(center.x + 14, center.y + 18)
-  rl.draw_line_ex(shaft_top, shaft_bottom, 4, color)
-  rl.draw_line_ex(left_head, shaft_bottom, 4, color)
-  rl.draw_line_ex(right_head, shaft_bottom, 4, color)
-  rl.draw_line_ex(tray_left, tray_right, 4, color)
+  rl.draw_line_ex(shaft_top, shaft_bottom, 6, color)
+  rl.draw_line_ex(left_head, shaft_bottom, 6, color)
+  rl.draw_line_ex(right_head, shaft_bottom, 6, color)
+  rl.draw_line_ex(tray_left, tray_right, 6, color)
 
 
 class AetherButton(Widget):
@@ -2851,7 +2832,7 @@ class AetherButton(Widget):
     click_callback: Callable[[], None] | None = None,
     enabled: bool | Callable[[], bool] = True,
     emphasized: bool = False,
-    font_size: int = 24,
+    font_size: int = 34,
     accent_color: rl.Color | None = None,
   ):
     super().__init__()
@@ -2907,7 +2888,7 @@ class AetherButton(Widget):
 
 
 class AetherChip:
-  def __init__(self, text: str | Callable[[], str], fill: rl.Color, border: rl.Color, text_color: rl.Color, pill: bool = False, font_size: int = 18):
+  def __init__(self, text: str | Callable[[], str], fill: rl.Color, border: rl.Color, text_color: rl.Color, pill: bool = False, font_size: int = 26):
     self._text = text
     self._fill = fill
     self._border = border
@@ -2942,7 +2923,7 @@ class AetherScrollbar:
     track_width: int = 4,
     track_inset_x: int = 7,
     track_inset_y: int = 8,
-    min_thumb_height: float = 46.0,
+    min_thumb_height: float = 67.0,
   ):
     self._track_color = track_color
     self._thumb_color = thumb_color
@@ -3015,9 +2996,9 @@ class ParentToggle:
 class AetherSettingsView(PanelManagerView):
   """Reusable list-panel manager for toggle/value/action settings pages."""
 
-  TAB_HEIGHT = 68
-  TAB_GAP = 10
-  TAB_BOTTOM_GAP = 18
+  TAB_HEIGHT = 98
+  TAB_GAP = 14
+  TAB_BOTTOM_GAP = 26
   COLUMN_GAP = 22
   TWO_COLUMN_BREAKPOINT = 1180
 
@@ -3159,7 +3140,7 @@ class AetherSettingsView(PanelManagerView):
 
       toggle_take = AETHER_LIST_METRICS.toggle_width + AETHER_LIST_METRICS.toggle_right_inset + 16
       text_rect = rl.Rectangle(rect.x, rect.y, max(100.0, rect.width - toggle_take), rect.height)
-      draw_settings_panel_header(text_rect, display_title, subtitle_text, title_size=32, subtitle_size=20)
+      draw_settings_panel_header(text_rect, display_title, subtitle_text, title_size=46, subtitle_size=29)
 
       toggle_id = f"parent_toggle:{toggle.label}"
       tw = AETHER_LIST_METRICS.toggle_width
@@ -3180,7 +3161,7 @@ class AetherSettingsView(PanelManagerView):
         bg_color=rl.Color(12, 10, 18, 255),
       )
     else:
-      draw_settings_panel_header(rect, title, subtitle, title_size=32, subtitle_size=20)
+      draw_settings_panel_header(rect, title, subtitle, title_size=46, subtitle_size=29)
 
   def _active_sections(self) -> list[SettingSection]:
     if self._tab_defs and self._active_tab_key:
@@ -3372,13 +3353,13 @@ class AetherSettingsView(PanelManagerView):
 
 
 def draw_back_button(pill_rect: rl.Rectangle, center_y: float, pressed: bool, hovered: bool) -> rl.Rectangle:
-  back_size = 38
-  back_x = pill_rect.x + 8
+  back_size = 55
+  back_x = pill_rect.x + 12
   btn = rl.Rectangle(back_x, center_y - back_size / 2, back_size, back_size)
   if pressed or hovered:
     bg = rl.Color(255, 255, 255, 24) if pressed else rl.Color(255, 255, 255, 10)
-    rl.draw_rectangle_rounded(btn, 0.4, 8, bg)
-  chev_size = 14
+    rl.draw_rectangle_rounded(btn, 0.4, 12, bg)
+  chev_size = 20
   chev_r = rl.Rectangle(back_x + (back_size - chev_size) / 2, center_y - chev_size / 2, chev_size, chev_size)
   chev_c = rl.Color(200, 200, 210, 200) if pressed else rl.Color(160, 170, 185, 180)
   draw_chevron_icon(chev_r, chev_c, thickness=2.0, direction="left")
@@ -4067,9 +4048,9 @@ class HubTile(AetherTile):
     text_scale = max(0.82, min(1.12, min(rw / 360.0, rh / 205.0)))
     gap = SPACING.line_gap
 
-    title_size = max(20, int(round(24 * text_scale)))
+    title_size = max(58, int(round(64 * text_scale)))
     desc_to_render = status_text
-    desc_size = max(17, int(round(18 * text_scale))) if desc_to_render else 0
+    desc_size = max(46, int(round(52 * text_scale))) if desc_to_render else 0
 
     icon_h = 0.0
     if self.custom_icon_key:
@@ -4104,7 +4085,7 @@ class HubTile(AetherTile):
       if m:
         ratio = min(1.0, max(0.0, float(m.group(1)) / 100.0))
         if ratio > 0.05:
-          meter_h = 6
+          meter_h = 9
           meter_rect = rl.Rectangle(rx + content_pad, ry + rh - content_pad - meter_h, rw - content_pad * 2, meter_h)
           fill_rect = rl.Rectangle(meter_rect.x, meter_rect.y, meter_rect.width * ratio, meter_h)
           rl.draw_rectangle_rec(snap_rect(meter_rect), rl.Color(255, 255, 255, 14))
@@ -4174,7 +4155,7 @@ class ToggleTile(AetherTile):
       self._draw_signal_edge(face, signal_color, width=TILE_SIGNAL_WIDTH, alpha=alpha)
       self._render_tile_stack(face, title=self.title, primary=state_text, desc=self.desc,
                               title_font=self._font, primary_font=self._font, desc_font=self._font_desc,
-                              title_size=28, primary_size=30)
+                              title_size=41, primary_size=30)
       return
 
     # --- HUD toggle path (show_led) ---
@@ -4187,11 +4168,11 @@ class ToggleTile(AetherTile):
     content_pad = SPACING.tile_content
     max_w = rw - content_pad * 2
     text_scale = max(0.82, min(1.12, rh / 205.0))
-    title_size = max(22, int(round(28 * text_scale)))
+    title_size = max(32, int(round(41 * text_scale)))
 
     if not enabled:
       title_lines = self._wrap_text(self._font, self.title, max_w, title_size, max_lines=2)
-      desc_size = max(17, int(round(18 * text_scale)))
+      desc_size = max(25, int(round(26 * text_scale)))
       disabled_text = tr(self._disabled_label) if self._disabled_label else tr("LOCKED")
       desc_lines = self._wrap_text(self._font_desc, disabled_text, max_w, desc_size, max_lines=2)
 
@@ -4210,7 +4191,7 @@ class ToggleTile(AetherTile):
       title_color = rl.WHITE if active else _HUD_TEXT_DIM
       if self.desc:
         title_lines = self._wrap_text(self._font, self.title, max_w, title_size, max_lines=2)
-        desc_size = max(17, int(round(18 * text_scale)))
+        desc_size = max(25, int(round(26 * text_scale)))
         desc_lines = self._wrap_text(self._font_desc, self.desc, max_w, desc_size, max_lines=2)
 
         if len(title_lines) == 1:
@@ -4230,10 +4211,10 @@ class ToggleTile(AetherTile):
           curr_y += desc_size + 2
 
         led_cx = rx + rw // 2
-        led_cy = ry + rh - 22
+        led_cy = ry + rh - 32
       else:
         title_lines = self._wrap_text(self._font, self.title, max_w, title_size, max_lines=2)
-        led_cy = ry + rh - 24
+        led_cy = ry + rh - 35
         total_text_h = len(title_lines) * (title_size + 4)
         title_y = ry + (rh - 24 - total_text_h) / 2
 
@@ -4245,11 +4226,11 @@ class ToggleTile(AetherTile):
         led_cx = rx + rw // 2
 
       if active:
-        rl.draw_circle(int(led_cx), int(led_cy), 11, rl.Color(accent.r, accent.g, accent.b, 24))
-        rl.draw_circle(int(led_cx), int(led_cy), 6, accent)
+        rl.draw_circle(int(led_cx), int(led_cy), 16, rl.Color(accent.r, accent.g, accent.b, 24))
+        rl.draw_circle(int(led_cx), int(led_cy), 9, accent)
       else:
-        rl.draw_circle(int(led_cx), int(led_cy), 7, rl.Color(14, 16, 22, 255))
-        rl.draw_ring(rl.Vector2(led_cx, led_cy), 5, 6, 0, 360, 24, rl.Color(70, 78, 95, 140))
+        rl.draw_circle(int(led_cx), int(led_cy), 10, rl.Color(14, 16, 22, 255))
+        rl.draw_ring(rl.Vector2(led_cx, led_cy), 7, 9, 0, 360, 24, rl.Color(70, 78, 95, 140))
 
 
 class RowToggleTile(ToggleTile):
@@ -4335,14 +4316,14 @@ class ValueTile(AetherTile):
     text_scale = min(rw / 360.0, rh / 205.0)
 
     # Title
-    title_size = max(18, int(round(22 * text_scale)))
+    title_size = max(26, int(round(32 * text_scale)))
     self._draw_text_fit(self._font, self.title,
                         rl.Vector2(rx + content_pad, ry + int(rh * 0.35)),
                         max_w, title_size, align_center=True, color=_HUD_TEXT_DIM)
 
     # Value
     val_text = self.get_value()
-    val_size = max(18, int(round(24 * text_scale)))
+    val_size = max(26, int(round(35 * text_scale)))
     val_color = accent if enabled else _HUD_TEXT_DIM
     self._draw_text_fit(self._font, val_text,
                         rl.Vector2(rx + content_pad, ry + int(rh * 0.58)),
@@ -4503,14 +4484,14 @@ class SliderTile(AetherTile):
         text_scale = min(rw / 360.0, rh / 205.0)
 
         # Title
-        title_size = max(18, int(round(22 * text_scale)))
+        title_size = max(26, int(round(32 * text_scale)))
         self._draw_text_fit(self._font, self.title,
                             rl.Vector2(rx + content_pad, ry + int(rh * 0.30)),
                             max_w, title_size, align_center=True, color=_HUD_TEXT_DIM)
 
         # Value text
         val_str = self.labels.get(current_val, f"{int(current_val)}{self.unit}")
-        val_size = max(18, int(round(24 * text_scale)))
+        val_size = max(26, int(round(35 * text_scale)))
         val_color = accent if enabled else _HUD_TEXT_DIM
         self._draw_text_fit(self._font, val_str,
                             rl.Vector2(rx + content_pad, ry + int(rh * 0.52)),
@@ -4519,7 +4500,7 @@ class SliderTile(AetherTile):
         # Slider meter
         value_range = self.max_val - self.min_val
         frac = 0.0 if value_range == 0 else max(0.0, min(1.0, (self._smooth_value - self.min_val) / value_range))
-        meter_h = 6
+        meter_h = 9
         meter_rect = rl.Rectangle(rx + content_pad, ry + rh - content_pad - meter_h, rw - content_pad * 2, meter_h)
         fill_w = meter_rect.width * frac
         rl.draw_rectangle_rec(snap_rect(meter_rect), rl.Color(255, 255, 255, 14))
@@ -4624,11 +4605,11 @@ class AetherSlider(Widget):
     return clamp_and_snap(val, self.min_val, self.max_val, self.step)
 
   def _button_width(self, rect: rl.Rectangle) -> int:
-    return min(SLIDER_BUTTON_SIZE, max(44, int(rect.width * 0.14)))
+    return min(SLIDER_BUTTON_SIZE, max(64, int(rect.width * 0.14)))
 
   def _thumb_size(self, rect: rl.Rectangle, track_h: int | None = None) -> tuple[int, int]:
-    effective_track_h = track_h if track_h is not None else max(12, int(rect.height * 0.22))
-    return max(18, int(effective_track_h * 0.95)), max(34, int(rect.height * 0.50))
+    effective_track_h = track_h if track_h is not None else max(17, int(rect.height * 0.22))
+    return max(26, int(effective_track_h * 0.95)), max(49, int(rect.height * 0.50))
 
   def _get_thumb_x(self, rect: rl.Rectangle) -> float:
     button_w = self._button_width(rect)
@@ -4650,10 +4631,10 @@ class AetherSlider(Widget):
     face_rect = snap_rect(rl.Rectangle(face_x, face_y, rect.width, rect.height))
     btn_color = rl.Color(34, 38, 48, 255)
     border_color = rl.Color(255, 255, 255, 28)
-    draw_rounded_fill(face_rect, btn_color, radius_px=16)
-    draw_rounded_stroke(face_rect, border_color, radius_px=16)
+    draw_rounded_fill(face_rect, btn_color, radius_px=23)
+    draw_rounded_stroke(face_rect, border_color, radius_px=23)
     rl.draw_rectangle_rec(rl.Rectangle(face_rect.x, face_rect.y, face_rect.width, 1), rl.Color(255, 255, 255, 16))
-    font_size = max(22, int(round(min(rect.width, rect.height) * 0.52)))
+    font_size = max(32, int(round(min(rect.width, rect.height) * 0.52)))
     ts = measure_text_cached(self._font, label, font_size)
     label_pos = rl.Vector2(face_x + (rect.width - ts.x) / 2, face_y + (rect.height - ts.y) / 2)
     rl.draw_text_ex(self._font, label, rl.Vector2(round(label_pos.x), round(label_pos.y)), font_size, 0, rl.WHITE)
@@ -4673,7 +4654,7 @@ class AetherSlider(Widget):
     self._draw_slider_button(plus_rect, "+")
     track_x = rect.x + button_w
     track_w = rect.width - 2 * button_w
-    track_h = max(12, int(rect.height * 0.22))
+    track_h = max(17, int(rect.height * 0.22))
     track_rect = snap_rect(rl.Rectangle(track_x, rect.y + (rect.height - track_h) / 2, track_w, track_h))
     draw_rounded_fill(track_rect, rl.Color(34, 38, 48, 255), radius_px=track_h / 2)
     draw_rounded_stroke(track_rect, rl.Color(255, 255, 255, 20), radius_px=track_h / 2)
@@ -4697,12 +4678,12 @@ class AetherSlider(Widget):
     thumb_y = rect.y + (rect.height - thumb_h) / 2
     thumb_offset = GEOMETRY_OFFSET * self._thumb_offset
     t_face_rect = snap_rect(rl.Rectangle(thumb_x, thumb_y + min(1.0, thumb_offset), thumb_w, thumb_h))
-    draw_rounded_fill(t_face_rect, rl.Color(230, 235, 242, 255), radius_px=12)
-    draw_rounded_stroke(t_face_rect, rl.Color(20, 22, 28, 46), radius_px=12)
+    draw_rounded_fill(t_face_rect, rl.Color(230, 235, 242, 255), radius_px=17)
+    draw_rounded_stroke(t_face_rect, rl.Color(20, 22, 28, 46), radius_px=17)
     rl.draw_rectangle_rec(rl.Rectangle(t_face_rect.x, t_face_rect.y, t_face_rect.width, 1), rl.Color(255, 255, 255, 40))
     if self.show_value_label:
       val_str = self.labels.get(self.current_val, f"{self.current_val:.2f}".rstrip('0').rstrip('.') + self.unit)
-      label_size = max(18, int(round(rect.height * 0.38)))
+      label_size = max(26, int(round(rect.height * 0.38)))
       ts = measure_text_cached(self._font, val_str, label_size)
       val_x = max(rect.x, min(thumb_x + (thumb_w - ts.x) / 2, rect.x + rect.width - ts.x))
       val_pos = rl.Vector2(val_x, thumb_y - label_size - 10)
@@ -4862,7 +4843,7 @@ class AetherSliderDialog(Widget):
       self._pressed_zone = "plus"
       return
 
-    hit_track = _inflate_rect(self._track_rect, 0, 36)
+    hit_track = _inflate_rect(self._track_rect, 0, 52)
     if rl.check_collision_point_rec(mouse_pos, hit_track):
       self._is_dragging = True
       self._update_val_from_mouse(mouse_pos)
@@ -4931,9 +4912,9 @@ class AetherSliderDialog(Widget):
     draw_text_fit_common(
       gui_app.font(FontWeight.MEDIUM),
       text,
-      rl.Vector2(rect.x + 10, rect.y + (rect.height - 28) / 2),
-      max(1.0, rect.width - 20),
-      28,
+      rl.Vector2(rect.x + 14, rect.y + (rect.height - 41) / 2),
+      max(1.0, rect.width - 28),
+      41,
       align_center=True,
       color=text_color,
     )
@@ -4945,36 +4926,36 @@ class AetherSliderDialog(Widget):
     rl.draw_rectangle(0, 0, gui_app.width, gui_app.height, rl.Color(0, 0, 0, 160))
 
     has_presets = len(self._presets) > 0
-    dialog_w = 1600
-    dialog_h = 840 if has_presets else 700
-    button_height = 110
-    button_width = 600
+    dialog_w = min(2320, int(rect.width - 40))
+    dialog_h = min(1218 if has_presets else 1015, int(rect.height - 40))
+    button_height = 160
+    button_width = 870
 
     dx, dy = rect.x + (rect.width - dialog_w) / 2, rect.y + (rect.height - dialog_h) / 2
-    self._ok_rect = rl.Rectangle(dx + dialog_w - button_width - 80, dy + dialog_h - button_height - 60, button_width, button_height)
-    self._cancel_rect = rl.Rectangle(dx + 80, dy + dialog_h - button_height - 60, button_width, button_height)
+    self._ok_rect = rl.Rectangle(dx + dialog_w - button_width - 116, dy + dialog_h - button_height - 87, button_width, button_height)
+    self._cancel_rect = rl.Rectangle(dx + 116, dy + dialog_h - button_height - 87, button_width, button_height)
 
     d_rect = snap_rect(rl.Rectangle(dx, dy, dialog_w, dialog_h))
-    draw_rounded_fill(d_rect, rl.Color(10, 12, 16, 255), radius_px=24)
-    draw_rounded_stroke(d_rect, rl.Color(255, 255, 255, 16), radius_px=24)
+    draw_rounded_fill(d_rect, rl.Color(10, 12, 16, 255), radius_px=35)
+    draw_rounded_stroke(d_rect, rl.Color(255, 255, 255, 16), radius_px=35)
     rl.draw_rectangle_rec(rl.Rectangle(d_rect.x, d_rect.y, d_rect.width, 3), self._color)
 
-    title_size = 44
+    title_size = 64
     ts = measure_text_cached(self._font_title, self.title, title_size)
-    rl.draw_text_ex(self._font_title, self.title, rl.Vector2(round(dx + (dialog_w - ts.x) / 2), round(dy + 60)), title_size, 0, rl.WHITE)
+    rl.draw_text_ex(self._font_title, self.title, rl.Vector2(round(dx + (dialog_w - ts.x) / 2), round(dy + 87)), title_size, 0, rl.WHITE)
 
     # Large value display below title
     val_str = self.formatted_value()
-    val_size = 96
+    val_size = 139
     vts = measure_text_cached(self._font_value, val_str, val_size)
-    rl.draw_text_ex(self._font_value, val_str, rl.Vector2(round(dx + (dialog_w - vts.x) / 2), round(dy + 140)), val_size, 0, self._color)
+    rl.draw_text_ex(self._font_value, val_str, rl.Vector2(round(dx + (dialog_w - vts.x) / 2), round(dy + 203)), val_size, 0, self._color)
 
     # Render presets below the value display (if any)
-    presets_y = dy + 270
+    presets_y = dy + 392
     self._preset_rects.clear()
     if has_presets:
-      chip_h = 84.0
-      chip_gap = 24.0
+      chip_h = 122.0
+      chip_gap = 35.0
       chip_w = max(90.0, (dialog_w - 80 * 2 - chip_gap * (len(self._presets) - 1)) / max(1, len(self._presets)))
       for index, val in enumerate(self._presets):
         chip_x = dx + 80 + index * (chip_w + chip_gap)
@@ -4987,38 +4968,38 @@ class AetherSliderDialog(Widget):
           current=abs(self._current_val - val) <= 0.5 * self.step,
           pressed=self._pressed_zone == f"preset:{val}",
         )
-      slider_y = dy + 470
+      slider_y = dy + 682
     else:
-      slider_y = dy + 330
+      slider_y = dy + 479
 
     # Slider
-    btn_size = 110
+    btn_size = 160
     self._minus_rect = snap_rect(rl.Rectangle(dx + 80, slider_y - btn_size / 2, btn_size, btn_size))
     self._plus_rect = snap_rect(rl.Rectangle(dx + dialog_w - 80 - btn_size, slider_y - btn_size / 2, btn_size, btn_size))
 
     # Draw minus button
     minus_pressed = self._pressed_zone == "minus"
-    draw_rounded_fill(self._minus_rect, rl.Color(255, 255, 255, 14 if minus_pressed else 8), radius_px=55)
-    draw_rounded_stroke(self._minus_rect, rl.Color(255, 255, 255, 28 if minus_pressed else 18), radius_px=55)
-    mts = measure_text_cached(self._font_btn, "-", 44)
-    rl.draw_text_ex(self._font_btn, "-", rl.Vector2(round(self._minus_rect.x + (btn_size - mts.x) / 2), round(self._minus_rect.y + (btn_size - mts.y) / 2)), 44, 0, rl.WHITE)
+    draw_rounded_fill(self._minus_rect, rl.Color(255, 255, 255, 14 if minus_pressed else 8), radius_px=80)
+    draw_rounded_stroke(self._minus_rect, rl.Color(255, 255, 255, 28 if minus_pressed else 18), radius_px=80)
+    mts = measure_text_cached(self._font_btn, "-", 64)
+    rl.draw_text_ex(self._font_btn, "-", rl.Vector2(round(self._minus_rect.x + (btn_size - mts.x) / 2), round(self._minus_rect.y + (btn_size - mts.y) / 2)), 64, 0, rl.WHITE)
 
     # Draw plus button
     plus_pressed = self._pressed_zone == "plus"
-    draw_rounded_fill(self._plus_rect, rl.Color(255, 255, 255, 14 if plus_pressed else 8), radius_px=55)
-    draw_rounded_stroke(self._plus_rect, rl.Color(255, 255, 255, 28 if plus_pressed else 18), radius_px=55)
-    pts = measure_text_cached(self._font_btn, "+", 44)
-    rl.draw_text_ex(self._font_btn, "+", rl.Vector2(round(self._plus_rect.x + (btn_size - pts.x) / 2), round(self._plus_rect.y + (btn_size - pts.y) / 2)), 44, 0, rl.WHITE)
+    draw_rounded_fill(self._plus_rect, rl.Color(255, 255, 255, 14 if plus_pressed else 8), radius_px=80)
+    draw_rounded_stroke(self._plus_rect, rl.Color(255, 255, 255, 28 if plus_pressed else 18), radius_px=80)
+    pts = measure_text_cached(self._font_btn, "+", 64)
+    rl.draw_text_ex(self._font_btn, "+", rl.Vector2(round(self._plus_rect.x + (btn_size - pts.x) / 2), round(self._plus_rect.y + (btn_size - pts.y) / 2)), 64, 0, rl.WHITE)
 
     # Draw track
     track_x = self._minus_rect.x + btn_size + 36
     track_w = self._plus_rect.x - 36 - track_x
-    track_h = 16
+    track_h = 23
     track_y = slider_y - track_h / 2
     self._track_rect = snap_rect(rl.Rectangle(track_x, track_y, track_w, track_h))
 
-    draw_rounded_fill(self._track_rect, rl.Color(255, 255, 255, 14), radius_px=8)
-    draw_rounded_stroke(self._track_rect, rl.Color(255, 255, 255, 8), radius_px=8)
+    draw_rounded_fill(self._track_rect, rl.Color(255, 255, 255, 14), radius_px=12)
+    draw_rounded_stroke(self._track_rect, rl.Color(255, 255, 255, 8), radius_px=12)
 
     # Draw ticks at preset values (or custom ticks if no presets)
     ticks_to_draw = self._presets
@@ -5028,40 +5009,40 @@ class AetherSliderDialog(Widget):
     for val in ticks_to_draw:
       frac = self._value_fraction(val)
       tick_x = track_x + frac * track_w
-      rl.draw_rectangle_rec(rl.Rectangle(tick_x - 1, track_y - 7, 3, 30), rl.Color(255, 255, 255, 28))
+      rl.draw_rectangle_rec(rl.Rectangle(tick_x - 2, track_y - 7, 4, 44), rl.Color(255, 255, 255, 28))
 
     # Draw active fill
     fill_frac = self._value_fraction(self._current_val)
     fill_w = fill_frac * track_w
     if fill_w > 0:
       fill_rect = snap_rect(rl.Rectangle(track_x, track_y, fill_w, track_h))
-      draw_rounded_fill(fill_rect, self._color, radius_px=8)
+      draw_rounded_fill(fill_rect, self._color, radius_px=12)
 
     # Draw thumb
-    thumb_w = 32
-    thumb_h = 64
+    thumb_w = 46
+    thumb_h = 93
     thumb_x = track_x + fill_frac * track_w
     self._thumb_rect = snap_rect(rl.Rectangle(thumb_x - thumb_w / 2, slider_y - thumb_h / 2, thumb_w, thumb_h))
-    draw_rounded_fill(self._thumb_rect, rl.WHITE, radius_px=16)
-    draw_rounded_stroke(self._thumb_rect, rl.Color(20, 22, 28, 46), radius_px=16)
+    draw_rounded_fill(self._thumb_rect, rl.WHITE, radius_px=23)
+    draw_rounded_stroke(self._thumb_rect, rl.Color(20, 22, 28, 46), radius_px=23)
 
     # Cancel Button
     c_face_x = self._cancel_rect.x
     c_face_y = self._cancel_rect.y + min(1.0, GEOMETRY_OFFSET * self._cancel_offset * 0.1)
     c_face = snap_rect(rl.Rectangle(c_face_x, c_face_y, button_width, button_height))
-    draw_rounded_fill(c_face, rl.Color(34, 38, 48, 255), radius_px=28)
-    draw_rounded_stroke(c_face, rl.Color(255, 255, 255, 20), radius_px=28)
-    cts = measure_text_cached(self._font_btn, tr("CANCEL"), 34)
-    rl.draw_text_ex(self._font_btn, tr("CANCEL"), rl.Vector2(round(c_face_x + (button_width - cts.x) / 2), round(c_face_y + (button_height - cts.y) / 2)), 34, 0, rl.WHITE)
+    draw_rounded_fill(c_face, rl.Color(34, 38, 48, 255), radius_px=41)
+    draw_rounded_stroke(c_face, rl.Color(255, 255, 255, 20), radius_px=41)
+    cts = measure_text_cached(self._font_btn, tr("CANCEL"), 49)
+    rl.draw_text_ex(self._font_btn, tr("CANCEL"), rl.Vector2(round(c_face_x + (button_width - cts.x) / 2), round(c_face_y + (button_height - cts.y) / 2)), 49, 0, rl.WHITE)
 
     # OK Button
     o_face_x = self._ok_rect.x
     o_face_y = self._ok_rect.y + min(1.0, GEOMETRY_OFFSET * self._ok_offset * 0.1)
     o_face = snap_rect(rl.Rectangle(o_face_x, o_face_y, button_width, button_height))
-    draw_rounded_fill(o_face, self._color, radius_px=28)
-    draw_rounded_stroke(o_face, with_alpha(self._color, 150), radius_px=28)
-    ots = measure_text_cached(self._font_btn, tr("OK"), 34)
-    rl.draw_text_ex(self._font_btn, tr("OK"), rl.Vector2(round(o_face_x + (button_width - ots.x) / 2), round(o_face_y + (button_height - ots.y) / 2)), 34, 0, rl.WHITE)
+    draw_rounded_fill(o_face, self._color, radius_px=41)
+    draw_rounded_stroke(o_face, with_alpha(self._color, 150), radius_px=41)
+    ots = measure_text_cached(self._font_btn, tr("OK"), 49)
+    rl.draw_text_ex(self._font_btn, tr("OK"), rl.Vector2(round(o_face_x + (button_width - ots.x) / 2), round(o_face_y + (button_height - ots.y) / 2)), 49, 0, rl.WHITE)
     return DialogResult.NO_ACTION
 
 
@@ -5114,8 +5095,8 @@ class RadioTileGroup(Widget):
     option_w = (rect.width - max(0, len(self.options) - 1) * gap) / max(1, len(self.options))
     total_width = len(self.options) * option_w + max(0, len(self.options) - 1) * gap
     if self.title:
-      title_size = measure_text_cached(self._font_title, self.title, 40)
-      rl.draw_text_ex(self._font_title, self.title, rl.Vector2(round(rect.x), round(rect.y + (rect.height - title_size.y) / 2)), 40, 0, rl.WHITE)
+      title_size = measure_text_cached(self._font_title, self.title, 58)
+      rl.draw_text_ex(self._font_title, self.title, rl.Vector2(round(rect.x), round(rect.y + (rect.height - title_size.y) / 2)), 58, 0, rl.WHITE)
       start_x = rect.x + rect.width - total_width
     else:
       start_x = rect.x + (rect.width - total_width) / 2
@@ -5129,10 +5110,10 @@ class RadioTileGroup(Widget):
       face_x = r.x
       face_y = r.y + min(1.0, offset)
       face_rect = snap_rect(rl.Rectangle(face_x, face_y, r.width, r.height))
-      draw_rounded_fill(face_rect, fill, radius_px=16)
-      draw_rounded_stroke(face_rect, border, radius_px=16)
+      draw_rounded_fill(face_rect, fill, radius_px=23)
+      draw_rounded_stroke(face_rect, border, radius_px=23)
       rl.draw_rectangle_rec(rl.Rectangle(face_rect.x, face_rect.y, face_rect.width, 1), rl.Color(255, 255, 255, 16))
-      font_size = max(18, min(30, int(r.height * 0.34)))
+      font_size = max(26, min(44, int(r.height * 0.34)))
       spacing = round(font_size * 0.05)
       max_width = r.width - (SPACING.lg + SPACING.xs)
       ts = measure_text_cached(self._font, opt, font_size, spacing=spacing)
@@ -5495,8 +5476,8 @@ class AetherSegmentedControl(Widget):
     if not self._suppress_background:
       draw_soft_card(rect, rl.Color(255, 255, 255, 4), rl.Color(255, 255, 255, 14))
 
-    inner_pad = 4 if self._compact else 5
-    gap = 4 if self._compact else 6
+    inner_pad = 6 if self._compact else 7
+    gap = 6 if self._compact else 9
     inner_rect = rl.Rectangle(rect.x + inner_pad, rect.y + inner_pad, rect.width - inner_pad * 2, rect.height - inner_pad * 2)
     option_w = (inner_rect.width - max(0, len(self._options) - 1) * gap) / max(1, len(self._options))
     has_status = any(str(_resolve_value(status, "")) for status in self._statuses)
@@ -5521,23 +5502,23 @@ class AetherSegmentedControl(Widget):
         title_color = AetherListColors.HEADER if is_active else AetherListColors.SUBTEXT
         status_color = AetherListColors.MUTED
 
-      draw_rounded_fill(face_rect, fill, radius_px=16)
-      draw_rounded_stroke(face_rect, border, radius_px=16)
+      draw_rounded_fill(face_rect, fill, radius_px=23)
+      draw_rounded_stroke(face_rect, border, radius_px=23)
       rl.draw_rectangle_rec(rl.Rectangle(face_rect.x, face_rect.y, face_rect.width, 1), rl.Color(255, 255, 255, 18 if is_active else 10))
 
       label = str(_resolve_value(option, ""))
       status = str(_resolve_value(self._statuses[i], ""))
-      title_size = max(18, min(24, int(face_rect.height * (0.28 if has_status else 0.36))))
-      status_size = max(14, min(17, int(face_rect.height * 0.22)))
+      title_size = max(26, min(35, int(face_rect.height * (0.28 if has_status else 0.36))))
+      status_size = max(20, min(25, int(face_rect.height * 0.22)))
 
       if has_status:
-        title_y = face_rect.y + max(9.0, min(14.0, face_rect.height * 0.18))
-        status_y = face_rect.y + face_rect.height - status_size - max(9.0, min(14.0, face_rect.height * 0.18))
+        title_y = face_rect.y + max(13.0, min(20.0, face_rect.height * 0.18))
+        status_y = face_rect.y + face_rect.height - status_size - max(13.0, min(20.0, face_rect.height * 0.18))
         draw_text_fit_common(
           self._font,
           label,
-          rl.Vector2(face_rect.x + 16, title_y),
-          face_rect.width - 32,
+          rl.Vector2(face_rect.x + 23, title_y),
+          face_rect.width - 46,
           title_size,
           align_center=True,
           color=title_color,

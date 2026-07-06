@@ -160,7 +160,7 @@ class LongitudinalManagerView(AetherSettingsView):
         "on_click": lambda: self._controller._navigate_to("personality")
       },
       {
-        "title": tr("Daily QOL & Weather"),
+        "title": tr("Quality of Life"),
         "desc": tr("Configure cruise intervals, standstill behaviors, gear mapping, and weather presets."),
         "icon": "sound",
         "color": "#8B5CF6",
@@ -220,8 +220,8 @@ class ConditionalDriveModeView(PanelManagerView):
     panel_padding_bottom=14,
     header_height=0,
   )
-  TAB_HEIGHT = 68
-  TAB_BOTTOM_GAP = 18
+  TAB_HEIGHT = 98
+  TAB_BOTTOM_GAP = 26
 
   @property
   def vertical_scrolling_disabled(self) -> bool:
@@ -275,7 +275,7 @@ class ConditionalDriveModeView(PanelManagerView):
     self._update_pagination()
 
   def _init_toggles(self):
-    self._toggle_grid = TileGrid(columns=2, padding=12, force_square=True, min_tile_height=130.0)
+    self._toggle_grid = TileGrid(columns=2, padding=12, min_tile_height=130.0)
     self._child(self._toggle_grid)
     self.register_page_grid(self._toggle_grid)
 
@@ -452,7 +452,7 @@ class ConditionalDriveModeView(PanelManagerView):
         
       max_container_h = available_h
       
-      left_row_h = max(60.0, (max_container_h - 16.0) / max(1, len(keys)))
+      left_row_h = max(80.0, (max_container_h - 16.0) / max(1, len(keys)))
       for key in keys:
         self._adjustor_rows[key].custom_row_height = left_row_h
         

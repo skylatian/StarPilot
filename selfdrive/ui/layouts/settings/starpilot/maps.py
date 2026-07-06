@@ -214,7 +214,7 @@ class MapStatusCard(Widget):
         with_alpha(AetherListColors.SUCCESS_SOFT, 22),
         AetherListColors.SUCCESS_SOFT,
         AetherListColors.HEADER,
-        font_size=18,
+        font_size=26,
       )
     gui_text_box(
       rl.Rectangle(content_x, title_y + 28, summary_w, 44),
@@ -279,7 +279,7 @@ class MapStatusCard(Widget):
       with_alpha(AetherListColors.DANGER_SOFT, 26 if enabled else 12),
       with_alpha(AetherListColors.DANGER, 58 if enabled else 24),
       AetherListColors.HEADER if enabled else AetherListColors.MUTED,
-      font_size=18,
+      font_size=26,
     )
 
     if self._controller._download_state.active:
@@ -444,13 +444,13 @@ class MapBrowserCard(Widget):
         hovered=hovered,
         pressed=self._pressed_target == target_key,
         is_last=index == len(regions) - 1,
-        action_width=188,
+        action_width=AETHER_LIST_METRICS.action_width,
         action_pill=True,
-        action_text_size=18,
-        action_pill_height=44,
-        action_pill_width=132 if selected else 108,
-        title_size=34,
-        subtitle_size=22,
+        action_text_size=26,
+        action_pill_height=64,
+        action_pill_width=191 if selected else 156,
+        title_size=49,
+        subtitle_size=32,
         row_separator=PANEL_STYLE.divider_color,
         current_bg=PANEL_STYLE.current_fill,
         current_border=PANEL_STYLE.current_border,
@@ -463,7 +463,7 @@ class MapBrowserCard(Widget):
     return self._controller._browse_regions_for_active_group()
 
   def _render_section_header(self, rect: rl.Rectangle, title: str, *, count_text: str | None = None):
-    draw_section_header(rect, title, trailing_text=count_text or "", title_size=34, trailing_size=22, style=PANEL_STYLE)
+    draw_section_header(rect, title, trailing_text=count_text or "", title_size=49, trailing_size=32, style=PANEL_STYLE)
 
   def _measure_height(self, width: float) -> float:
     total = 10.0
@@ -545,7 +545,6 @@ class StarPilotMapsLayout(StarPilotPanel):
         self._on_primary_action,
         enabled=self._primary_action_enabled,
         emphasized=True,
-        font_size=24,
       )
     )
     self._schedule_button = self._child(
@@ -553,7 +552,6 @@ class StarPilotMapsLayout(StarPilotPanel):
         lambda: tr("Update: {}").format(_localized_schedule_label(self._params.get('PreferredSchedule'))),
         self._on_schedule,
         emphasized=False,
-        font_size=21,
       )
     )
 

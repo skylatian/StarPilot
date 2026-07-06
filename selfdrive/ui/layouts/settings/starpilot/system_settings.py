@@ -35,11 +35,11 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   TileGrid,
   ToggleTile,
   draw_list_group_shell,
-  draw_section_header,
   draw_selection_list_row,
   draw_settings_panel_header,
   draw_soft_card,
   GROUP_HEADER_GAP,
+  GROUP_HEADER_LINE_GAP,
   GROUP_HEADER_HEIGHT,
   draw_group_header,
   draw_tab_bar,
@@ -52,8 +52,6 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   draw_text_fit_common,
   wrap_text,
   SECTION_GAP,
-  SECTION_HEADER_HEIGHT,
-  SECTION_HEADER_GAP,
   ROW_HEIGHT,
 )
 from openpilot.starpilot.common.connect_server import prepare_konik_server_switch
@@ -108,9 +106,9 @@ class SystemSettingsManagerView(PanelManagerView):
   HEADER_SUBTITLE_HEIGHT = 24
   HEADER_SUMMARY_GAP = 6
   HEADER_CARD_HEIGHT = 140
-  TAB_HEIGHT = 68
-  TAB_GAP = 10
-  TAB_BOTTOM_GAP = 18
+  TAB_HEIGHT = 98
+  TAB_GAP = 14
+  TAB_BOTTOM_GAP = 26
   ACTION_PILL_WIDTH = 132
   DANGER_PILL_WIDTH = 112
   _TOPBAR_HEIGHT = 76.0
@@ -138,7 +136,7 @@ class SystemSettingsManagerView(PanelManagerView):
     self._slider_specs: dict[str, dict[str, Any]] = {
       "ScreenBrightness": {
         "title": tr("Offroad Brightness"),
-        "subtitle": tr("Primary screen brightness while parked."),
+        "subtitle": "",
         "unit": "%",
         "labels": brightness_labels,
         "min": 0,
@@ -151,7 +149,7 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       "ScreenBrightnessOnroad": {
         "title": tr("Onroad Brightness"),
-        "subtitle": tr("Screen brightness while driving."),
+        "subtitle": "",
         "unit": "%",
         "labels": brightness_labels,
         "min": 0,
@@ -164,7 +162,7 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       "ScreenTimeout": {
         "title": tr("Offroad Screen Timeout"),
-        "subtitle": tr("How long the display stays awake while parked."),
+        "subtitle": "",
         "unit": "s",
         "labels": {},
         "min": 5,
@@ -177,7 +175,7 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       "ScreenTimeoutOnroad": {
         "title": tr("Onroad Screen Timeout"),
-        "subtitle": tr("How long the display stays on while driving."),
+        "subtitle": "",
         "unit": "s",
         "labels": {},
         "min": 5,
@@ -190,7 +188,7 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       "DeviceShutdown": {
         "title": tr("Shutdown Delay"),
-        "subtitle": tr("How long the device waits before powering down."),
+        "subtitle": "",
         "unit": "",
         "labels": shutdown_labels,
         "min": 0,
@@ -203,7 +201,7 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       "LowVoltageShutdown": {
         "title": tr("Low Voltage Shutdown"),
-        "subtitle": tr("Voltage threshold that protects the car battery."),
+        "subtitle": "",
         "unit": "V",
         "labels": {},
         "min": 11.8,
@@ -245,37 +243,37 @@ class SystemSettingsManagerView(PanelManagerView):
     self._toggle_defs = [
       {
         "title": tr("Standby Mode"),
-        "subtitle": tr("Keep the device ready for faster wake-ups."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("StandbyMode"),
         "set_state": lambda v: self._controller._params.put_bool("StandbyMode", v),
       },
       {
         "title": tr("Use Konik Server"),
-        "subtitle": tr("Switch remote services to the Konik endpoint."),
+        "subtitle": "",
         "get_state": self._controller._get_konik_state,
         "set_state": self._controller._on_konik_toggle,
       },
       {
         "title": tr("Debug Mode"),
-        "subtitle": tr("Expose additional debugging and developer toggles."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("DebugMode"),
         "set_state": lambda v: self._controller._params.put_bool("DebugMode", v),
       },
       {
         "title": tr("Show FPS"),
-        "subtitle": tr("Display screen refresh rate and system performance metrics onroad."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("ShowFPS"),
         "set_state": lambda v: self._controller._params.put_bool("ShowFPS", v),
       },
       {
         "title": tr("Disable Uploads"),
-        "subtitle": tr("Stop all cloud uploads from this device."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("NoUploads"),
         "set_state": lambda v: self._controller._params.put_bool("NoUploads", v),
       },
       {
         "title": tr("Disable Onroad Uploads"),
-        "subtitle": tr("Block uploads while the car is onroad."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("DisableOnroadUploads"),
         "set_state": lambda v: self._controller._params.put_bool("DisableOnroadUploads", v),
         "is_enabled": lambda: not self._controller._params.get_bool("NoUploads"),
@@ -283,13 +281,13 @@ class SystemSettingsManagerView(PanelManagerView):
       },
       {
         "title": tr("Disable Logging"),
-        "subtitle": tr("Stop writing standard log data to storage."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("NoLogging"),
         "set_state": lambda v: self._controller._params.put_bool("NoLogging", v),
       },
       {
         "title": tr("High Bitrate Recording"),
-        "subtitle": tr("Capture higher-quality onroad footage."),
+        "subtitle": "",
         "get_state": lambda: self._controller._params.get_bool("HigherBitrate"),
         "set_state": self._controller._on_higher_bitrate_toggle,
         "is_enabled": lambda: not self._controller._params.get_bool("DisableOnroadUploads") and not self._controller._params.get_bool("NoUploads"),
@@ -299,7 +297,7 @@ class SystemSettingsManagerView(PanelManagerView):
 
     self._basics_tile_grid_h = 0.0
 
-    self._connectivity_tile_grid = TileGrid(columns=2, padding=12, force_square=True, min_tile_height=130.0)
+    self._connectivity_tile_grid = TileGrid(columns=2, padding=12, min_tile_height=130.0)
     for toggle_def in self._toggle_defs:
       tile = self._make_toggle_tile(toggle_def)
       self._connectivity_tile_grid.add_tile(tile)
@@ -483,8 +481,9 @@ class SystemSettingsManagerView(PanelManagerView):
     self._scroll_rect.height = max(0.0, self._scroll_rect.height - total_offset)
 
   def _measure_content_height(self, width: float) -> float:
-    display_h = self._section_block_height(self._slider_section_height(self._display_slider_keys, width))
-    power_h = self._section_block_height(self._slider_section_height(self._power_slider_keys, width))
+    hdr_h = GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
+    display_h = self._slider_section_height(self._display_slider_keys, width) + 8 + hdr_h
+    power_h = self._slider_section_height(self._power_slider_keys, width) + 8 + hdr_h
 
     if self._uses_two_columns(width):
       column_w = self._column_width(width)
@@ -497,7 +496,7 @@ class SystemSettingsManagerView(PanelManagerView):
       display_container_h = self._slider_section_height(self._display_slider_keys, column_w)
       power_container_h = self._slider_section_height(self._power_slider_keys, column_w)
 
-      left_overhead = 8.0 + 2 * (GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP) + SECTION_GAP
+      left_overhead = 8.0 + 2 * (GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP) + SECTION_GAP
       left_natural_content_h = left_overhead + display_container_h + power_container_h
       
       tiles_content_h = self.measure_page_grid_height(self._connectivity_tile_grid, column_w - 24)
@@ -516,7 +515,7 @@ class SystemSettingsManagerView(PanelManagerView):
       # Scale adjustors if needed
       if max_container_h < max_natural_h:
         scale_f = max_container_h / left_natural_content_h
-        row_h = max(60.0, 94.0 * scale_f)
+        row_h = max(80.0, float(AETHER_LIST_METRICS.adjustor_row_height) * scale_f)
         for key in self._display_slider_keys + self._power_slider_keys:
           self._adjustor_rows[key].custom_row_height = row_h
 
@@ -576,14 +575,14 @@ class SystemSettingsManagerView(PanelManagerView):
     self._render_page_grid(self._connectivity_tile_grid, rl.Rectangle(x + 12, y + 12, width - 24, tiles_content_h))
 
   def _draw_slider_section(self, y: float, x: float, width: float, title: str, keys: list[str]) -> float:
-    draw_section_header(rl.Rectangle(x, y, width, SECTION_HEADER_HEIGHT), title, style=PANEL_STYLE)
-    y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
-    group_rect = rl.Rectangle(x, y, width, self._slider_section_height(keys, width))
+    group_h = self._slider_section_height(keys, width) + 8 + GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
+    group_rect = rl.Rectangle(x, y, width, group_h)
     draw_list_group_shell(group_rect, style=PANEL_STYLE)
-    current_y = group_rect.y
+    current_y = group_rect.y + 8
+    current_y = draw_group_header(x + 24, current_y, width - 48, title)
     for index, key in enumerate(keys):
       current_y = self._draw_slider_row(rl.Rectangle(group_rect.x, current_y, group_rect.width, 0), key, is_last=index == len(keys) - 1)
-    return y + group_rect.height
+    return y + group_h
 
   def _draw_slider_row(self, rect: rl.Rectangle, key: str, is_last: bool) -> float:
     adjustor = self._adjustor_rows[key]
