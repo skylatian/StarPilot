@@ -408,15 +408,15 @@ function numericBounds(param) {
 
   if (param.key === "SteerKP") {
     const base = toFinite(state.values.SteerKPStock) || toFinite(state.values.SteerKP) || 0.6
-    return { min: +(base * 0.5).toFixed(2), max: +(base * 1.5).toFixed(2), step: 0.01 }
+    return { min: +(base * 0.05).toFixed(2), max: +(base * 1.95).toFixed(2), step: 0.01 }
   }
   if (param.key === "SteerLatAccel") {
     const base = toFinite(state.values.SteerLatAccelStock) || toFinite(state.values.SteerLatAccel) || 2.0
-    return { min: +(base * 0.5).toFixed(2), max: +(base * 1.25).toFixed(2), step: 0.01 }
+    return { min: +(base * 0.05).toFixed(2), max: +(base * 1.95).toFixed(2), step: 0.01 }
   }
   if (param.key === "SteerRatio") {
     const base = toFinite(state.values.SteerRatioStock) || toFinite(state.values.SteerRatio) || 15.0
-    return { min: +(base * 0.25).toFixed(2), max: +(base * 1.5).toFixed(2), step: 0.01 }
+    return { min: +(base * 0.05).toFixed(2), max: +(base * 1.95).toFixed(2), step: 0.01 }
   }
 
   return defaultBounds

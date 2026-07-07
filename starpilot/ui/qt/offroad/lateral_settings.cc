@@ -80,13 +80,13 @@ StarPilotLateralPanel::StarPilotLateralPanel(StarPilotSettingsWindow *parent, bo
       lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, 0, 1, QString(), std::map<float, QString>(), 0.01, false, {}, steerFrictionButton, false, false);
     } else if (param == "SteerKP") {
       std::vector<QString> steerKPButton{"Reset"};
-      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->steerKp * 0.5, parent->steerKp * 1.5, QString(), std::map<float, QString>(), 0.01, false, {}, steerKPButton, false, false);
+      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->steerKp * 0.05, parent->steerKp * 1.95, QString(), std::map<float, QString>(), 0.01, false, {}, steerKPButton, false, false);
     } else if (param == "SteerLatAccel") {
       std::vector<QString> steerLatAccelButton{"Reset"};
-      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->latAccelFactor * 0.5, parent->latAccelFactor * 1.5, QString(), std::map<float, QString>(), 0.01, false, {}, steerLatAccelButton, false, false);
+      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->latAccelFactor * 0.05, parent->latAccelFactor * 1.95, QString(), std::map<float, QString>(), 0.01, false, {}, steerLatAccelButton, false, false);
     } else if (param == "SteerRatio") {
       std::vector<QString> steerRatioButton{"Reset"};
-      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->steerRatio * 0.5, parent->steerRatio * 1.5, QString(), std::map<float, QString>(), 0.01, false, {}, steerRatioButton, false, false);
+      lateralToggle = new StarPilotParamValueButtonControl(param, title, desc, icon, parent->steerRatio * 0.05, parent->steerRatio * 1.95, QString(), std::map<float, QString>(), 0.01, false, {}, steerRatioButton, false, false);
 
     } else if (param == "AlwaysOnLateral") {
       StarPilotManageControl *aolToggle = new StarPilotManageControl(param, title, desc, icon);
@@ -258,11 +258,11 @@ void StarPilotLateralPanel::showEvent(QShowEvent *event) {
   steerDelayToggle->setTitle(QString(tr("Actuator Delay (Default: %1)")).arg(QString::number(parent->steerActuatorDelay, 'f', 2)));
   steerFrictionToggle->setTitle(QString(tr("Friction (Default: %1)")).arg(QString::number(parent->friction, 'f', 2)));
   steerKPToggle->setTitle(QString(tr("Kp Factor (Default: %1)")).arg(QString::number(parent->steerKp, 'f', 2)));
-  steerKPToggle->updateControl(parent->steerKp * 0.5, parent->steerKp * 1.5);
+  steerKPToggle->updateControl(parent->steerKp * 0.05, parent->steerKp * 1.95);
   steerLatAccelToggle->setTitle(QString(tr("Lateral Accel (Default: %1)")).arg(QString::number(parent->latAccelFactor, 'f', 2)));
-  steerLatAccelToggle->updateControl(parent->latAccelFactor * 0.5, parent->latAccelFactor * 1.5);
+  steerLatAccelToggle->updateControl(parent->latAccelFactor * 0.05, parent->latAccelFactor * 1.95);
   steerRatioToggle->setTitle(QString(tr("Steer Ratio (Default: %1)")).arg(QString::number(parent->steerRatio, 'f', 2)));
-  steerRatioToggle->updateControl(parent->steerRatio * 0.5, parent->steerRatio * 1.5);
+  steerRatioToggle->updateControl(parent->steerRatio * 0.05, parent->steerRatio * 1.95);
 
   updateToggles();
 }
