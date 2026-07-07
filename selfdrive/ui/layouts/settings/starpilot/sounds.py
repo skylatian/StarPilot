@@ -23,30 +23,24 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   TileGrid,
   ToggleTile,
   DEFAULT_PANEL_STYLE,
-  _point_hits,
+  point_hits,
   draw_action_pill,
   draw_list_group_shell,
   draw_section_header,
   draw_settings_panel_header,
   AetherSliderDialog,
+  SECTION_GAP,
+  SECTION_HEADER_HEIGHT,
+  SECTION_HEADER_GAP,
 )
 
 PANEL_STYLE = DEFAULT_PANEL_STYLE
-SECTION_GAP = AETHER_LIST_METRICS.section_gap
-SECTION_HEADER_HEIGHT = AETHER_LIST_METRICS.section_header_height
-SECTION_HEADER_GAP = AETHER_LIST_METRICS.section_header_gap
-
-GROUP_HEADER_HEIGHT = 20
-GROUP_HEADER_GAP = 2
-GROUP_HAIRLINE_COLOR = rl.Color(255, 255, 255, 10)
-GROUP_HEADER_COLOR = rl.Color(255, 255, 255, 90)
-
 SOUNDS_PANEL_METRICS = replace(
   COMPACT_PANEL_METRICS,
   outer_margin_y=14,
   panel_padding_top=16,
   panel_padding_bottom=14,
-  header_height=88,
+  header_height=0,
 )
 
 
@@ -77,7 +71,7 @@ class SoundsManagerView(PanelManagerView):
     )
 
   def _init_toggles(self):
-    self._toggle_grid = TileGrid(columns=2, padding=12)
+    self._toggle_grid = TileGrid(columns=2, padding=12, force_square=True, min_tile_height=130.0)
     self._child(self._toggle_grid)
     self._page_grid = self._toggle_grid
 
@@ -87,13 +81,13 @@ class SoundsManagerView(PanelManagerView):
       toggle_defs.append({
         "title": tr(info["title"]),
         "subtitle": tr(info.get("subtitle", "")),
-        "get": lambda k=key: self._controller._params.get_bool(k),
-        "set": lambda state, k=key: self._controller._params.put_bool(k, state),
+        "get_state": lambda k=key: self._controller._params.get_bool(k),
+        "set_state": lambda state, k=key: self._controller._params.put_bool(k, state),
         "is_enabled": info.get("is_enabled"),
         "disabled_label": tr(info.get("disabled_label", "")) if info.get("disabled_label") else "",
       })
 
-    self._set_toggle_pages([toggle_defs[i:i+6] for i in range(0, len(toggle_defs), 6)])
+    self._set_toggle_pages([toggle_defs[i:i+4] for i in range(0, len(toggle_defs), 4)])
 
   def _set_active_adjustor(self, key: str, active: bool):
     if active:
@@ -220,7 +214,7 @@ class SoundsManagerView(PanelManagerView):
     self._toggle_grid._handle_mouse_event(mouse_event)
 
   def _target_at(self, mouse_pos: MousePos) -> str | None:
-    if _point_hits(mouse_pos, self._reset_rect, None, pad_x=6, pad_y=0):
+    if point_hits(mouse_pos, self._reset_rect, None, pad_x=6, pad_y=0):
       return "action:restore_defaults"
     return None
 
@@ -240,39 +234,49 @@ class SoundsManagerView(PanelManagerView):
 
   def _measure_content_height(self, content_width: float) -> float:
     col_width = (content_width - SECTION_GAP) / 2
-    left_h = 0.0
+
+    # Reset any previous custom heights to calculate natural measurements first
     for key in self._controller.VOLUME_KEYS:
-      left_h += self._adjustor_rows[key].measure_height(col_width)
-    left_h += GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP
-    left_h += GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP
-    left_h += GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP
-    left_column_total_h = left_h + 16
+      self._adjustor_rows[key].custom_row_height = None
+    self._adjustor_rows[self._controller.COOLDOWN_KEY].custom_row_height = None
+    self._toggle_grid._tile_height = None
 
-    cd_h = self._adjustor_rows[self._controller.COOLDOWN_KEY].measure_height(col_width)
+    default_adjustor_h = float(AETHER_LIST_METRICS.adjustor_row_height)
 
-    tiles_container_h = left_column_total_h - cd_h - SECTION_GAP
-    self._tiles_container_h = max(130.0, tiles_container_h)
+    # 9 adjustors (8 volume keys + 1 cooldown key) and 2 divider bands between groups
+    left_h = ((len(self._controller.VOLUME_KEYS) + 1) * default_adjustor_h)
+    left_h += 20  # 2 dividers × (4px band + 6px gap)
+    left_natural_container_h = left_h + 16.0
 
+    tiles_needed_h = self.measure_page_grid_height(self._toggle_grid, col_width - 24) + 24
+    right_natural_container_h = tiles_needed_h
+
+    max_natural_h = max(left_natural_container_h, right_natural_container_h)
     section_overhead = SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
-    return self._compute_two_column_height(section_overhead + max(left_column_total_h, cd_h + SECTION_GAP + self._tiles_container_h))
+
+    if self._scroll_rect:
+      available_container_h = self._scroll_rect.height - section_overhead - 6.0
+    else:
+      available_container_h = max_natural_h
+
+    # Always stretch container to fill available height, preventing empty space at bottom
+    max_container_h = available_container_h
+
+    # Scale the left column adjustor rows to fit within max_container_h
+    # Formula: max_container_h = 9 * left_row_h + 2 * 10 (dividers) + 16 (padding)
+    left_available_for_rows = max_container_h - 20.0 - 16.0
+    left_row_h = max(60.0, left_available_for_rows / (len(self._controller.VOLUME_KEYS) + 1))
+    for key in self._controller.VOLUME_KEYS:
+      self._adjustor_rows[key].custom_row_height = left_row_h
+    self._adjustor_rows[self._controller.COOLDOWN_KEY].custom_row_height = left_row_h
+
+    self._left_container_h = max_container_h
+    self._tiles_container_h = max_container_h
+
+    return self._compute_two_column_height(section_overhead + max_container_h)
 
   def _draw_header(self, rect: rl.Rectangle):
-    draw_settings_panel_header(rect, tr("Sounds & Alerts"), tr("Manage system volumes and custom alert toggles."), subtitle_size=24)
-
-    btn_w = 120.0
-    btn_h = 38.0
-    btn_x = rect.x + rect.width - btn_w
-    btn_y = rect.y + (rect.height - btn_h) / 2
-    self._reset_rect = rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
-
-    hovered = _point_hits(gui_app.last_mouse_event.pos, self._reset_rect, None, pad_x=6, pad_y=0)
-    pressed = self._pressed_target == "action:restore_defaults"
-    draw_action_pill(
-      self._reset_rect, tr("Reset All"),
-      rl.Color(255, 255, 255, 8 if not pressed else 14),
-      rl.Color(255, 255, 255, 18 if not pressed else 28),
-      AetherListColors.SUBTEXT if not hovered else AetherListColors.HEADER,
-    )
+    pass
 
   def _draw_scroll_content(self, rect: rl.Rectangle, content_width: float):
     y = rect.y + self._scroll_offset
@@ -286,16 +290,29 @@ class SoundsManagerView(PanelManagerView):
       rl.Rectangle(rect.x + col_width + SECTION_GAP, y, col_width, SECTION_HEADER_HEIGHT),
       tr("Alerts"), style=PANEL_STYLE
     )
+
+    # Draw Reset All button aligned with the Volume header
+    btn_w = 120.0
+    btn_h = 32.0
+    btn_x = rect.x + col_width - btn_w - 8
+    btn_y = y + (SECTION_HEADER_HEIGHT - btn_h) / 2
+    self._reset_rect = rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
+    
+    self._interactive_rects["action:restore_defaults"] = self._reset_rect
+    
+    hovered = point_hits(gui_app.last_mouse_event.pos, self._reset_rect, self._scroll_rect, pad_x=6, pad_y=0)
+    pressed = self._pressed_target == "action:restore_defaults"
+    draw_action_pill(
+      self._reset_rect, tr("Reset All"),
+      rl.Color(255, 255, 255, 8 if not pressed else 14),
+      rl.Color(255, 255, 255, 18 if not pressed else 28),
+      AetherListColors.SUBTEXT if not hovered else AetherListColors.HEADER,
+    )
+
     y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
 
     self._draw_volume_column(y, rect.x, col_width)
     self._draw_utility_column(y, rect.x + col_width + SECTION_GAP, col_width)
-
-  def _draw_group_header(self, x: float, y: float, width: float, label: str) -> float:
-    gui_label(rl.Rectangle(x, y, width, GROUP_HEADER_HEIGHT), label, 14, GROUP_HEADER_COLOR, FontWeight.MEDIUM)
-    y += GROUP_HEADER_HEIGHT
-    rl.draw_line(int(x), int(y), int(x + width), int(y), GROUP_HAIRLINE_COLOR)
-    return y + GROUP_HEADER_GAP
 
   def _draw_volume_column(self, y: float, x: float, width: float):
     safety_keys = ["WarningImmediateVolume", "WarningSoftVolume", "RefuseVolume", "PromptDistractedVolume"]
@@ -303,47 +320,37 @@ class SoundsManagerView(PanelManagerView):
     info_keys = ["PromptVolume", "BelowSteerSpeedVolume"]
 
     groups = [
-      (tr("SAFETY ALERTS"), safety_keys),
+      (None, safety_keys),
       (tr("SYSTEM STATE"), system_keys),
-      (tr("INFORMATIONAL"), info_keys),
+      (tr("INFORMATIONAL"), info_keys + [self._controller.COOLDOWN_KEY]),
     ]
 
-    total_h = sum(GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP + sum(self._adjustor_rows[k].measure_height(width) for k in keys) for _, keys in groups)
     draw_list_group_shell(
-      rl.Rectangle(x, y, width, total_h + 16),
+      rl.Rectangle(x, y, width, self._left_container_h),
       style=PANEL_STYLE
     )
 
     current_y = y + 8
-    for label, keys in groups:
-      current_y = self._draw_group_header(x + 24, current_y, width - 48, label)
-      for key in keys:
+    for i, (label, keys) in enumerate(groups):
+      if label is not None:
+        divider_h = 4
+        divider_color = rl.Color(173, 78, 90, 30) if i == 1 else rl.Color(139, 92, 246, 25)
+        rl.draw_rectangle_rec(
+          rl.Rectangle(x + 24, current_y, width - 48, divider_h),
+          divider_color
+        )
+        current_y += divider_h + 6
+      for index, key in enumerate(keys):
         adjustor = self._adjustor_rows[key]
         row_h = adjustor.measure_height(width)
         row_rect = rl.Rectangle(x, current_y, width, row_h)
-        adjustor.set_is_last(True)
+        adjustor.set_is_last(index == len(keys) - 1)
         adjustor.set_parent_rect(self._scroll_rect)
         adjustor.render(row_rect)
         current_y += row_h
 
   def _draw_utility_column(self, y: float, x: float, width: float):
-    current_y = y
-
-    cd_key = self._controller.COOLDOWN_KEY
-    adjustor = self._adjustor_rows[cd_key]
-    row_h = adjustor.measure_height(width)
-
-    draw_list_group_shell(rl.Rectangle(x, current_y, width, row_h), style=PANEL_STYLE)
-
-    adjustor.set_is_last(True)
-    adjustor.set_parent_rect(self._scroll_rect)
-    adjustor.render(rl.Rectangle(x, current_y, width, row_h))
-    current_y += row_h + SECTION_GAP
-
-    current_y = self._draw_group_header(x + 24, current_y, width - 48, tr("CUSTOM ALERTS"))
-
-    grid_container_h = self._tiles_container_h - (GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP)
-    self._draw_two_column_tile_grid(self._toggle_grid, x, current_y, width, grid_container_h, title=None, style=PANEL_STYLE)
+    self._draw_two_column_tile_grid(self._toggle_grid, x, y, width, self._tiles_container_h, title=None, style=PANEL_STYLE)
 
 
 class StarPilotSoundsLayout(_SettingsPage):
@@ -374,11 +381,11 @@ class StarPilotSoundsLayout(_SettingsPage):
   }
   VOLUME_INFO = {
     "WarningImmediateVolume": {"title": tr_noop("Immediate Warning"), "subtitle": tr_noop("Critical safety intervention"), "min": 25},
-    "WarningSoftVolume": {"title": tr_noop("Soft Warning"), "subtitle": tr_noop("Approaching system limits"), "min": 25},
-    "RefuseVolume": {"title": tr_noop("Engagement Refused"), "subtitle": tr_noop("Action refused by system"), "min": 0},
-    "PromptDistractedVolume": {"title": tr_noop("Distracted Driver"), "subtitle": tr_noop("Driver attention required"), "min": 0},
-    "EngageVolume": {"title": tr_noop("Engagement Chime"), "subtitle": tr_noop("System engaged confirmation"), "min": 0},
-    "DisengageVolume": {"title": tr_noop("Disengagement Alert"), "subtitle": tr_noop("Handoff to manual control"), "min": 0},
+    "WarningSoftVolume": {"title": tr_noop("Soft Warning"), "subtitle": "", "min": 25},
+    "RefuseVolume": {"title": tr_noop("Engagement Refused"), "subtitle": "", "min": 0},
+    "PromptDistractedVolume": {"title": tr_noop("Distracted Driver"), "subtitle": "", "min": 0},
+    "EngageVolume": {"title": tr_noop("Engagement Chime"), "subtitle": "", "min": 0},
+    "DisengageVolume": {"title": tr_noop("Disengagement Alert"), "subtitle": "", "min": 0},
     "PromptVolume": {"title": tr_noop("General Prompt"), "subtitle": tr_noop("System guidance prompt"), "min": 0},
     "BelowSteerSpeedVolume": {"title": tr_noop("Low Speed Alert"), "subtitle": tr_noop("Minimum speed for steering"), "min": 0},
   }

@@ -75,7 +75,11 @@ def build_gps_position(gps_location, speed):
 
 
 def gps_position_valid(gps_position):
-  return bool(gps_position["hasFix"]) and (gps_position["latitude"] != 0 or gps_position["longitude"] != 0)
+  if not gps_position:
+    return False
+  latitude = gps_position.get("latitude")
+  longitude = gps_position.get("longitude")
+  return bool(gps_position.get("hasFix")) and latitude is not None and longitude is not None and (latitude != 0 or longitude != 0)
 
 
 def gps_position_signature(gps_position):
