@@ -117,9 +117,9 @@ class SimpleDownloadManager(Widget):
   MODE_DOWNLOAD = 2
 
   MODE_LABELS = ["SELECT", "DELETE", "DOWNLOAD"]
-  ITEM_HEIGHT = 128
-  PILL_HEIGHT = 73
-  PILL_GAP = 14
+  ITEM_HEIGHT = 88
+  PILL_HEIGHT = 50
+  PILL_GAP = 10
   OUTER_MARGIN = 60
 
   def __init__(
@@ -164,7 +164,6 @@ class SimpleDownloadManager(Widget):
     self._content_height = 0.0
 
     self._list_items: list[str] = []
-    self._slug_map: dict[str, str] = {}
     self._item_rects: dict[str, rl.Rectangle] = {}
     self._pill_rects: list[rl.Rectangle] = []
     self._confirm_target: str | None = None
@@ -210,13 +209,7 @@ class SimpleDownloadManager(Widget):
     if not raw.strip():
       return []
     names = [s.strip() for s in raw.split(",") if s.strip()]
-    self._slug_map = {}
-    result = []
-    for n in names:
-      display = _theme_display_name(n)
-      self._slug_map[display] = n
-      result.append(display)
-    return result
+    return [_theme_display_name(n) for n in names]
 
   def _current_value(self) -> str:
     return self.params.get(self.asset_param, encoding="utf-8") or ""
@@ -240,7 +233,7 @@ class SimpleDownloadManager(Widget):
   def _start_download(self, display_name: str):
     if self._downloading:
       return
-    slug = self._slug_map.get(display_name) or _display_to_slug(display_name)
+    slug = _display_to_slug(display_name)
     if not slug:
       return
     self._downloading = True

@@ -14,7 +14,7 @@ from dateutil import easter
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from openpilot.starpilot.common.starpilot_download_utilities import GITHUB_URL, GITLAB_URL, download_file, get_repository_url, handle_error, verify_download
+from openpilot.starpilot.common.starpilot_download_utilities import GITLAB_URL, download_file, get_repository_url, handle_error, verify_download
 from openpilot.starpilot.common.theme_asset_names import find_matching_theme_asset_file, find_matching_theme_asset_name
 from openpilot.starpilot.common.starpilot_utilities import delete_file, extract_zip, load_json_file, update_json_file
 from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH, RANDOM_EVENTS_PATH, RESOURCES_REPO, THEME_SAVE_PATH
@@ -225,9 +225,6 @@ class ThemeManager:
       self.downloading_theme = False
       return
 
-    alternate_url = GITLAB_URL if "raw.githubusercontent" in repo_url else GITHUB_URL
-    primary_source = "GitLab" if "gitlab" in repo_url else "GitHub"
-
     if theme_component == "boot_logos":
       download_link = f"{repo_url}/Themes/bootlogo"
       download_path = THEME_SAVE_PATH / "bootlogos" / theme_name
@@ -256,7 +253,7 @@ class ThemeManager:
       for theme_url in theme_urls:
         delete_file(theme_path)
 
-        print(f"Downloading theme from {primary_source}: {theme_name}")
+        print(f"Downloading theme from GitHub: {theme_name}")
         download_file(CANCEL_DOWNLOAD_PARAM, theme_path, asset_param, self.params_memory, DOWNLOAD_PROGRESS_PARAM, self.session, theme_url)
 
         if self.params_memory.get_bool(CANCEL_DOWNLOAD_PARAM):
@@ -267,7 +264,7 @@ class ThemeManager:
           return
 
         if verify_download(theme_path, self.params_memory, self.session, theme_url):
-          print(f"Theme {theme_name} downloaded and verified successfully from {primary_source}!")
+          print(f"Theme {theme_name} downloaded and verified successfully from GitHub!")
           self.update_theme_size(theme_component, theme_name, theme_path.stat().st_size)
 
           if extension == ".zip":
@@ -282,7 +279,7 @@ class ThemeManager:
           self.update_themes(starpilot_toggles)
           return
 
-      if self.handle_verification_failure(extension, theme_component, theme_name, asset_param, theme_path, download_path, starpilot_toggles, alternate_url):
+      if self.handle_verification_failure(extension, theme_component, theme_name, asset_param, theme_path, download_path, starpilot_toggles):
         return
 
     handle_error(download_path, asset_param, "Download failed...", "Download failed...", self.params_memory, DOWNLOAD_PROGRESS_PARAM)
@@ -465,32 +462,29 @@ class ThemeManager:
       "christmas_week": date(year, 12, 25)
     }
 
-  def handle_verification_failure(self, extension, theme_component, theme_name, asset_param, theme_path, download_path, starpilot_toggles, fallback_url=GITLAB_URL):
-    is_github = "raw.githubusercontent" in fallback_url
-    source = "GitHub" if is_github else "GitLab"
-
+  def handle_verification_failure(self, extension, theme_component, theme_name, asset_param, theme_path, download_path, starpilot_toggles):
     if theme_component == "boot_logos":
-      download_link = f"{fallback_url}/Themes/bootlogo"
+      download_link = f"{GITLAB_URL}/Themes/bootlogo"
       name_candidates = list(dict.fromkeys([theme_name, theme_name.replace("_", "-"), theme_name.replace("-", "_")]))
     elif theme_component == "distance_icons":
-      download_link = f"{fallback_url}/Distance-Icons/{theme_name}"
+      download_link = f"{GITLAB_URL}/Distance-Icons/{theme_name}"
       name_candidates = [theme_name]
     elif theme_component == "steering_wheels":
-      download_link = f"{fallback_url}/Steering-Wheels/{theme_name}"
+      download_link = f"{GITLAB_URL}/Steering-Wheels/{theme_name}"
       name_candidates = [theme_name]
     else:
-      download_link = f"{fallback_url}/Themes/{theme_name}/{theme_component}"
+      download_link = f"{GITLAB_URL}/Themes/{theme_name}/{theme_component}"
       name_candidates = [theme_name]
 
     for candidate in name_candidates:
       delete_file(theme_path)
 
       theme_url = f"{download_link}/{candidate}{extension}" if theme_component == "boot_logos" else download_link + extension
-      print(f"Downloading theme from {source}: {theme_name}")
+      print(f"Downloading theme from GitLab: {theme_name}")
       download_file(CANCEL_DOWNLOAD_PARAM, theme_path, asset_param, self.params_memory, DOWNLOAD_PROGRESS_PARAM, self.session, theme_url)
 
       if verify_download(theme_path, self.params_memory, self.session, theme_url):
-        print(f"Theme {theme_name} downloaded and verified successfully from {source}!")
+        print(f"Theme {theme_name} downloaded and verified successfully from GitLab!")
         self.update_theme_size(theme_component, theme_name, theme_path.stat().st_size)
 
         if extension == ".zip":

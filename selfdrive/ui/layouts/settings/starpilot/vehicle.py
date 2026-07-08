@@ -20,11 +20,11 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   PanelManagerView,
   SettingRow,
   TileGrid,
-  GROUP_HEADER_GAP,
   GROUP_HEADER_HEIGHT,
-  GROUP_HEADER_LINE_GAP,
+  GROUP_HEADER_GAP,
   draw_group_header,
   draw_list_group_shell,
+  draw_section_header,
   draw_settings_list_row,
 )
 from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
@@ -65,8 +65,11 @@ def _lock_doors_timer_labels():
   return labels
 
 
-SECTION_GAP = 28
-ROW_HEIGHT = 125.0
+SECTION_GAP = 16
+SECTION_HEADER_HEIGHT = 30
+SECTION_HEADER_GAP = 8
+GROUP_OVERHEAD = GROUP_HEADER_HEIGHT + GROUP_HEADER_GAP
+ROW_HEIGHT = 86.0
 PANEL_STYLE = DEFAULT_PANEL_STYLE
 
 
@@ -76,13 +79,16 @@ class VehicleSettingsManagerView(PanelManagerView):
     outer_margin_y=14,
     panel_padding_top=16,
     panel_padding_bottom=14,
+    section_header_height=30,
+    section_header_gap=8,
   )
 
   def __init__(self, controller: "StarPilotVehicleSettingsLayout"):
     super().__init__()
     self._controller = controller
     self._shell_rect = rl.Rectangle(0, 0, 0, 0)
-    self._toggle_grid = TileGrid(columns=2, padding=12, min_tile_height=130.0)
+    self._toggle_grid = TileGrid(columns=2, padding=12, force_square=True,
+                                 min_tile_height=130.0)
     self.register_page_grid(self._toggle_grid)
     self._last_make = ""
     self._last_model = ""
@@ -97,9 +103,23 @@ class VehicleSettingsManagerView(PanelManagerView):
     starpilot_state.update(force=True)
     self._rebuild_toggle_grid()
 
+  def _build_header_chips(self) -> list[str]:
+    cs = starpilot_state.car_state
+    chips = []
+    if cs.canUsePedal: chips.append(tr("Pedal"))
+    if cs.hasSASCM: chips.append(tr("SASCM"))
+    if cs.canUseSDSU: chips.append(tr("SDSU"))
+    if cs.hasZSS: chips.append(tr("ZSS"))
+    if cs.hasRadar: chips.append(tr("Radar"))
+    if cs.hasOpenpilotLongitudinal: chips.append(tr("Long"))
+    if cs.hasBSM: chips.append(tr("BSM"))
+    if cs.hasSNG: chips.append(tr("SNG"))
+    return chips
+
   def _build_identity_rows(self) -> list[SettingRow]:
     cs = starpilot_state.car_state
     fp = lambda: self._controller._params.get_bool("ForceFingerprint")
+    dl = "Enable Disable Fingerprinting to change."
     rows = [
       SettingRow("ForceFingerprint", "toggle", tr_noop("Disable Fingerprinting"),
                  subtitle=tr_noop("Manually select vehicle instead of auto-detecting."),
@@ -108,11 +128,11 @@ class VehicleSettingsManagerView(PanelManagerView):
       SettingRow("CarMake", "value", tr_noop("Car Make"),
                  get_value=self._controller._get_display_make,
                  on_click=lambda: self._controller._on_select("CarMake"),
-                 enabled=fp),
+                 enabled=fp, disabled_label=dl),
       SettingRow("CarModel", "value", tr_noop("Car Model"),
                  get_value=self._controller._get_display_model,
                  on_click=lambda: self._controller._on_select("CarModel"),
-                 enabled=fp),
+                 enabled=fp, disabled_label=dl),
     ]
     if cs.isToyota:
       rows.append(SettingRow("LockDoorsTimer", "value", tr_noop("Lock Doors Timer"),
@@ -164,26 +184,25 @@ class VehicleSettingsManagerView(PanelManagerView):
                              value=value_text, enabled=enabled,
                              hovered=hovered, pressed=pressed,
                              is_last=is_last, show_chevron=row.on_click is not None,
-                             title_size=49, subtitle_size=38, value_size=44,
-                               style=PANEL_STYLE)
+                             title_size=34, subtitle_size=22, value_size=28,
+                             style=PANEL_STYLE)
     elif row.type == "toggle":
       toggle_value = row.get_state() if row.get_state else False
       draw_settings_list_row(rect, title=tr(row.title), subtitle=subtitle,
                              toggle_value=toggle_value, enabled=enabled,
                              hovered=hovered, pressed=pressed,
                              is_last=is_last, show_chevron=False,
-                             title_size=49, subtitle_size=38,
+                             title_size=34, subtitle_size=22,
                              style=PANEL_STYLE)
 
   def _draw_section(self, y: float, x: float, width: float, title: str, rows: list[SettingRow], row_height: float = ROW_HEIGHT) -> float:
-    hdr_oh = GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
-    group_h = len(rows) * row_height + hdr_oh + 8
+    if title:
+      draw_section_header(rl.Rectangle(x, y, width, SECTION_HEADER_HEIGHT), tr(title), style=PANEL_STYLE)
+      y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
+    group_h = len(rows) * row_height
     draw_list_group_shell(rl.Rectangle(x, y, width, group_h), style=PANEL_STYLE)
-    current_y = y + 8
-    current_y = draw_group_header(x + 24, current_y, width - 48, tr(title))
     for i, row in enumerate(rows):
-      self._draw_row(rl.Rectangle(x, current_y, width, row_height), row, i == len(rows) - 1)
-      current_y += row_height
+      self._draw_row(rl.Rectangle(x, y + i * row_height, width, row_height), row, i == len(rows) - 1)
     return y + group_h
 
   def _draw_scroll_content(self, rect: rl.Rectangle, width: float):
@@ -195,9 +214,18 @@ class VehicleSettingsManagerView(PanelManagerView):
       col_w = self._column_width(width)
       rx = rect.x + col_w + self.COLUMN_GAP
 
-      draw_list_group_shell(rl.Rectangle(rect.x, y, col_w, self._container_h), style=PANEL_STYLE)
-      row_y = y + 8
-      row_y = draw_group_header(rect.x + 24, row_y, col_w - 48, tr("Vehicle Identity"))
+      draw_section_header(rl.Rectangle(rect.x, y, col_w, SECTION_HEADER_HEIGHT),
+                          tr("Vehicle Identity"), style=PANEL_STYLE)
+
+      caps = self._build_header_chips()
+      trailing = "  " + tr("Vehicle Capabilities") + "  " + "  ".join(caps) if caps else ""
+      draw_section_header(rl.Rectangle(rx, y, col_w, SECTION_HEADER_HEIGHT),
+                          tr("Features"), trailing_text=trailing, style=PANEL_STYLE)
+
+      content_y = y + SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
+
+      draw_list_group_shell(rl.Rectangle(rect.x, content_y, col_w, self._container_h), style=PANEL_STYLE)
+      row_y = content_y
       for i, row in enumerate(identity_rows):
         self._draw_row(rl.Rectangle(rect.x, row_y, col_w, self._left_row_height),
                        row, i == len(identity_rows) - 1 and not steering_rows)
@@ -211,11 +239,8 @@ class VehicleSettingsManagerView(PanelManagerView):
           row_y += self._left_row_height
 
       if self._toggle_grid.tiles:
-        draw_list_group_shell(rl.Rectangle(rx, y, col_w, self._container_h), style=PANEL_STYLE)
-        tile_y = y + 8
-        tile_y = draw_group_header(rx + 24, tile_y, col_w - 48, tr("Features"))
-        avail_h = self._container_h - (tile_y - y)
-        self._render_page_grid(self._toggle_grid, rl.Rectangle(rx + 12, tile_y, col_w - 24, max(0.0, avail_h - 12)))
+        self._draw_two_column_tile_grid(self._toggle_grid, rx, content_y, col_w,
+                                        self._container_h, title=None, style=PANEL_STYLE)
     else:
       y = self._draw_section(y, rect.x, width, tr("Vehicle Identity"), identity_rows, self._left_row_height)
       y += SECTION_GAP
@@ -223,15 +248,14 @@ class VehicleSettingsManagerView(PanelManagerView):
       y += SECTION_GAP
 
       if self._toggle_grid.tiles:
+        draw_section_header(rl.Rectangle(rect.x, y, width, SECTION_HEADER_HEIGHT),
+                           tr("Features"), style=PANEL_STYLE)
+        y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
         self._toggle_grid._columns = 3
         avail = width - 24
         th = self.measure_page_grid_height(self._toggle_grid, avail)
-        hdr_oh = GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
-        group_h = th + 24 + 8 + hdr_oh
-        draw_list_group_shell(rl.Rectangle(rect.x, y, width, group_h), style=PANEL_STYLE)
-        features_y = y + 8
-        features_y = draw_group_header(rect.x + 24, features_y, width - 48, tr("Features"))
-        self._render_page_grid(self._toggle_grid, rl.Rectangle(rect.x + 12, features_y, avail, max(0.0, group_h - (features_y - y) - 12)))
+        draw_list_group_shell(rl.Rectangle(rect.x, y, width, th + 24), style=PANEL_STYLE)
+        self._render_page_grid(self._toggle_grid, rl.Rectangle(rect.x + 12, y + 12, avail, th))
 
   def _measure_content_height(self, width: float) -> float:
     self._check_rebuild_grid()
@@ -250,34 +274,31 @@ class VehicleSettingsManagerView(PanelManagerView):
         tiles_h = self.measure_page_grid_height(self._toggle_grid, width - 24)
 
     if self._uses_two_columns(width):
-      hdr_oh = GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
-      subsection_overhead = hdr_oh + 8
-      if steering_rows:
-        subsection_overhead += hdr_oh
+      left_content_natural = total_rows * ROW_HEIGHT + GROUP_OVERHEAD
+      header_h = SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
 
-      left_content_natural = total_rows * ROW_HEIGHT + subsection_overhead
-
-      available_content_h = self._scroll_rect.height if self._scroll_rect else max(left_content_natural, tiles_h)
+      if self._scroll_rect:
+        available_content_h = self._scroll_rect.height - header_h
+      else:
+        available_content_h = max(left_content_natural, tiles_h)
 
       if left_content_natural > available_content_h and total_rows > 0:
         self._left_row_height = max(48.0, available_content_h / total_rows)
       else:
         self._left_row_height = ROW_HEIGHT
 
-      left_content_h = total_rows * self._left_row_height + subsection_overhead
+      left_content_h = total_rows * self._left_row_height + GROUP_OVERHEAD
       self._container_h = max(left_content_h, tiles_h)
 
-      total_h = self._compute_two_column_height(self._container_h)
-      self._container_h = total_h
+      total_h = self._compute_two_column_height(header_h + self._container_h)
+      self._container_h = total_h - header_h
       return total_h
 
     self._left_row_height = ROW_HEIGHT
-    hdr_oh = GROUP_HEADER_HEIGHT + GROUP_HEADER_LINE_GAP + GROUP_HEADER_GAP
-    identity_natural_h = hdr_oh + 8 + len(identity_rows) * ROW_HEIGHT
-    steering_natural_h = hdr_oh + 8 + len(steering_rows) * ROW_HEIGHT
+    identity_natural_h = self._section_block_height(self._section_height(len(identity_rows), ROW_HEIGHT))
+    steering_natural_h = self._section_block_height(self._section_height(len(steering_rows), ROW_HEIGHT))
     left_natural_h = identity_natural_h + SECTION_GAP + steering_natural_h
-    tiles_overhead = 8 + hdr_oh + 24 if tiles_h else 0
-    return left_natural_h + tiles_h + tiles_overhead
+    return left_natural_h + tiles_h + (SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP if tiles_h else 0)
 
   def _build_driving_toggles(self) -> list[dict]:
     cs = starpilot_state.car_state
