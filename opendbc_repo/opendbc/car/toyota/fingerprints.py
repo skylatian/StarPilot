@@ -442,6 +442,14 @@ FW_VERSIONS = {
       b'8646F0201200\x00\x00\x00\x00',
     ],
   },
+  CAR.TOYOTA_COROLLA_RETROFIT: {
+    (Ecu.eps, 0x7a1, None): [
+      b'RETROFIT_EPS_TBD\x00',  # TODO: replace with real 2016 EPS firmware bytes when harvested
+    ],
+    (Ecu.dsu, 0x791, None): [
+      b'RFT1',  # custom retrofit identifier — emulated by Arduino corolla_emulator
+    ],
+  },
   CAR.TOYOTA_COROLLA_TSS2: {
     (Ecu.engine, 0x700, None): [
       b'\x01896630A22000\x00\x00\x00\x00',

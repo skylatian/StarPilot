@@ -242,12 +242,12 @@ class CarController(CarControllerBase):
     max_interceptor_gas = 0.5
     if self.CP.carFingerprint == CAR.TOYOTA_RAV4:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.15, 0.3, 0.0]))
-    elif self.CP.carFingerprint == CAR.TOYOTA_COROLLA:
+    elif self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.3, 0.4, 0.4]))
     else:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.4, 0.5, 0.0]))
 
-    offset_low = self.param_store.get_float("RetrofitPedalOffsetStandstill", default=-0.1)
+    offset_low = self.param_store.get_float("RetrofitPedalOffsetStandstill", default=-0.1) if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT else -0.1
     pedal_offset = float(np.interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [offset_low, 0.0, 0.2]))
     # Use current frame's actuators.accel (post-longcontrol), not self.accel (previous frame).
     # self.accel retains stale PID integral — if the no-target guard was blocking gas while PID
@@ -310,7 +310,7 @@ class CarController(CarControllerBase):
     lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE
 
     # Retrofit safety: kill steering if angle exceeds ±300° (SAS/EPS protection)
-    if abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
       lat_active = False
 
     if len(CC.orientationNED) == 3:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections.abc import Callable
+import os
 import pyray as rl
 
 from openpilot.common.params import Params
@@ -63,6 +64,8 @@ class StarPilotLayout(Widget):
   def __init__(self):
     super().__init__()
     self._params = FrameCachedParams()
+
+    self._is_retrofit = self._check_retrofit()
 
     self._current_panel = StarPilotPanelType.MAIN
     self._current_category_idx: int | None = None
@@ -189,8 +192,22 @@ class StarPilotLayout(Widget):
       if panel and hasattr(panel, 'set_navigate_callback'):
         panel.set_navigate_callback(self._push_sub_panel)
 
+  def _check_retrofit(self) -> bool:
+    fp = os.environ.get("FINGERPRINT", "")
+    if fp == "TOYOTA_COROLLA_RETROFIT":
+      return True
+    raw = self._params.get("CarParams")
+    if raw:
+      try:
+        from cereal import car
+        with car.CarParams.from_bytes(raw) as cp:
+          return cp.carFingerprint == "TOYOTA_COROLLA_RETROFIT"
+      except Exception:
+        pass
+    return False
+
   def _rebuild_grid(self):
-    state = (self._current_category_idx,)
+    state = (self._current_category_idx, self._is_retrofit)
     if getattr(self, "_last_grid_state", None) == state:
       return
     self._last_grid_state = state
@@ -211,6 +228,9 @@ class StarPilotLayout(Widget):
     if self._current_category_idx is None:
       # Main Categories Grid
       for i, cat in enumerate(self.CATEGORIES):
+        if cat.get("panel") == "RETROFIT" and not self._is_retrofit:
+          continue
+
         def on_click(idx=i):
           cat_info = self.CATEGORIES[idx]
           self._current_category_idx = idx
@@ -343,7 +363,10 @@ class StarPilotLayout(Widget):
 
   def show_event(self):
     super().show_event()
-    if self._current_panel != StarPilotPanelType.MAIN:
+    self._is_retrofit = self._check_retrofit()
+    if self._current_panel == StarPilotPanelType.MAIN:
+      self._rebuild_grid()
+    else:
       self._panels[self._current_panel].instance.show_event()
 
   def hide_event(self):

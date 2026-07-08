@@ -203,6 +203,11 @@ class CAR(Platforms):
     CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=18.27, tireStiffnessFactor=0.444),
     dbc_dict('toyota_new_mc_pt_generated', 'toyota_adas'),
   )
+  TOYOTA_COROLLA_RETROFIT = PlatformConfig(
+    [ToyotaCarDocs("Toyota Corolla 2005 Retrofit (2016 EPS)")],
+    CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=18.27, tireStiffnessFactor=0.444),
+    {Bus.pt: 'toyota_new_mc_pt_generated'},
+  )
   # LSS2 Lexus UX Hybrid is same as a TSS2 Corolla Hybrid
   TOYOTA_COROLLA_TSS2 = ToyotaTSS2PlatformConfig(
     [
@@ -591,7 +596,7 @@ STEER_THRESHOLD = 100
 
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,
-                        {CAR.TOYOTA_PRIUS: 66, CAR.TOYOTA_COROLLA: 88,
+                        {CAR.TOYOTA_PRIUS: 66, CAR.TOYOTA_COROLLA: 88, CAR.TOYOTA_COROLLA_RETROFIT: 88,
                          CAR.LEXUS_IS: 77, CAR.LEXUS_RC: 77, CAR.LEXUS_CTH: 100, CAR.TOYOTA_PRIUS_V: 100})
 
 # Toyota/Lexus Safety Sense 2.0 and 2.5

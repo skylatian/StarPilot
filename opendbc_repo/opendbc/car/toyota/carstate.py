@@ -126,7 +126,7 @@ class CarState(CarStateBase):
 
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
 
-    sas_offset = self.param_store.get_float("RetrofitSASOffset", default=0.0)
+    sas_offset = self.param_store.get_float("RetrofitSASOffset", default=0.0) if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT else 0.0
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"] - sas_offset
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
     torque_sensor_angle_deg = cp.vl["STEER_TORQUE_SENSOR"]["STEER_ANGLE"]
@@ -155,6 +155,9 @@ class CarState(CarStateBase):
 
     # Check EPS LKA/LTA fault status
     ret.steerFaultTemporary = cp.vl["EPS_STATUS"]["LKA_STATE"] in TEMP_STEER_FAULTS
+    # Retrofit (no camera): LKA_STATE=0 is expected — EPS activates on first steer request
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and cp.vl["EPS_STATUS"]["LKA_STATE"] == 0:
+      ret.steerFaultTemporary = False
     ret.steerFaultPermanent = cp.vl["EPS_STATUS"]["LKA_STATE"] in PERM_STEER_FAULTS
 
     if self.CP.steerControlType == SteerControlType.angle:
