@@ -7,10 +7,8 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AetherSettingsView,
   SettingRow,
   SettingSection,
-  panel_style_from_color,
+  DEFAULT_PANEL_STYLE,
 )
-
-PANEL_STYLE = panel_style_from_color("#F59E0B")
 
 
 class StarPilotRetrofitTuningLayout(_SettingsPage):
@@ -47,7 +45,7 @@ class StarPilotRetrofitTuningLayout(_SettingsPage):
       sections,
       header_title=tr_noop("Retrofit Tuning"),
       header_subtitle=tr_noop("Pedal and retrofit-specific adjustments."),
-      panel_style=PANEL_STYLE,
+      panel_style=DEFAULT_PANEL_STYLE,
     )
 
 
@@ -110,5 +108,5 @@ class StarPilotRetrofitLayout(_SettingsPage):
       sections,
       header_title=tr_noop("Retrofit Options"),
       header_subtitle=tr_noop("Comma Pedal and CAN emulator retrofit configurations."),
-      panel_style=PANEL_STYLE,
+      panel_style=DEFAULT_PANEL_STYLE,
     )
