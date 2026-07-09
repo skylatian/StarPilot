@@ -10,7 +10,7 @@ class SigmoidCurveWidget : public QWidget {
 
 public:
   explicit SigmoidCurveWidget(QWidget *parent = nullptr) : QWidget(parent) {
-    setFixedHeight(240);
+    setFixedHeight(285);
     setContentsMargins(0, 0, 0, 0);
   }
 
