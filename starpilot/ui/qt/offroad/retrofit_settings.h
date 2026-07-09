@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPainter>
+#include <QProcess>
 #include <cmath>
 
 #include "starpilot/ui/qt/offroad/starpilot_settings.h"
