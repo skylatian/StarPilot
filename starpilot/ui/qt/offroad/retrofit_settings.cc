@@ -136,8 +136,9 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
       "RetrofitNonlinearStrength",
       tr("Sigmoid Strength (Def. %1)").arg(QString::number(defaultStrength, 'f', 2)),
       tr("<b>Blend between linear (0) and full sigmoid (1).</b> "
-         "Higher values cap torque more aggressively at large corrections. "
-         "Start at 0.5 and increase if oscillation persists."),
+         "Increase if the wheel oscillates or whips back in turns. "
+         "Decrease if steering feels sluggish entering corners. "
+         "At 0, behavior is identical to stock linear."),
       "",
       0.0f, 1.0f, QString(), std::map<float, QString>(), 0.05f, false, {}, strengthResetButton, false, false, 150);
   if (forceOpenDescriptions) {
@@ -158,9 +159,9 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   saturationToggle = new StarPilotParamValueButtonControl(
       "RetrofitNonlinearSaturation",
       tr("Saturation (Default: %1)").arg(QString::number(defaultSaturation, 'f', 1)),
-      tr("<b>How quickly the sigmoid curve flattens.</b> "
-         "Higher values = saturation kicks in at smaller corrections. "
-         "Lower values = wider linear region before capping."),
+      tr("<b>How quickly the torque curve flattens at large inputs.</b> "
+         "Increase if oscillation only happens in sharp turns (caps torque sooner). "
+         "Decrease if the car understeers mid-corner (allows more torque before capping)."),
       "",
       0.5f, 5.0f, QString(), std::map<float, QString>(), 0.1f, false, {}, saturationResetButton, false, false, 150);
   if (forceOpenDescriptions) {
@@ -218,6 +219,23 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "When enabled, overrides the Strength/Saturation/Bias controls above. "
          "Four parameters per side: a=steepness, b=amplitude, c=linear slope, d=offset."));
   QObject::connect(advancedButton, &ButtonControl::clicked, [retrofitLayout, advancedSteeringPanel, this]() {
+    if (!params.getBool("RetrofitNonlinearAdvanced")) {
+      float str = params.getFloat("RetrofitNonlinearStrength");
+      float sat = params.getFloat("RetrofitNonlinearSaturation");
+      float bias = params.getFloat("RetrofitNonlinearBias");
+      float lin_slope = 1.0f / 4.05f;
+      float c_floor = 0.05f;
+      float b_base = 1.0f * str;
+      float c_base = lin_slope * (1.0f - str) + c_floor * str;
+      params.putFloat("RetrofitNonlinearLeftA", sat);
+      params.putFloat("RetrofitNonlinearLeftB", b_base * (1.0f + bias * 0.3f));
+      params.putFloat("RetrofitNonlinearLeftC", c_base);
+      params.putFloat("RetrofitNonlinearLeftD", 0.0f);
+      params.putFloat("RetrofitNonlinearRightA", sat);
+      params.putFloat("RetrofitNonlinearRightB", b_base * (1.0f - bias * 0.3f));
+      params.putFloat("RetrofitNonlinearRightC", c_base);
+      params.putFloat("RetrofitNonlinearRightD", 0.0f);
+    }
     retrofitLayout->setCurrentWidget(advancedSteeringPanel);
     emit openSubPanel();
   });
@@ -295,7 +313,12 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
 
   // --- Navigation: close subpanels ---
 
-  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel]() {
-    retrofitLayout->setCurrentWidget(retrofitPanel);
+  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel, steeringPanel, advancedSteeringPanel]() {
+    QWidget *current = retrofitLayout->currentWidget();
+    if (current == advancedSteeringPanel) {
+      retrofitLayout->setCurrentWidget(steeringPanel);
+    } else {
+      retrofitLayout->setCurrentWidget(retrofitPanel);
+    }
   });
 }
