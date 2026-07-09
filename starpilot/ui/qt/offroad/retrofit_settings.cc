@@ -81,7 +81,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   QObject::connect(sasOffsetToggle, &StarPilotParamValueButtonControl::buttonClicked,
       [defaultSASOffset, this]() {
     if (StarPilotConfirmationDialog::yesorno(
-        tr("Reset <b>SAS Offset</b> to its default value?"), this)) {
+        tr("Reset <b>SAS Offset</b> to default?"), this)) {
       params.putFloat("RetrofitSASOffset", defaultSASOffset);
       sasOffsetToggle->refresh();
     }
@@ -103,7 +103,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   tuningList->addItem(pedalOffsetToggle);
 
   QObject::connect(pedalOffsetToggle, &StarPilotParamValueButtonControl::buttonClicked, [defaultPedalOffsetStandstill, this]() {
-    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Pedal Offset</b> to its default value?"), this)) {
+    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Pedal Offset</b> to default?"), this)) {
       params.putFloat("RetrofitPedalOffsetStandstill", defaultPedalOffsetStandstill);
       pedalOffsetToggle->refresh();
     }
@@ -127,7 +127,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   std::vector<QString> strengthResetButton{tr("Reset")};
   strengthToggle = new StarPilotParamValueButtonControl(
       "RetrofitNonlinearStrength",
-      tr("Sigmoid Strength (Default: %1)").arg(QString::number(defaultStrength, 'f', 2)),
+      tr("Sigmoid Strength (Def. %1)").arg(QString::number(defaultStrength, 'f', 2)),
       tr("<b>Blend between linear (0) and full sigmoid (1).</b> "
          "Higher values cap torque more aggressively at large corrections. "
          "Start at 0.5 and increase if oscillation persists."),
@@ -139,7 +139,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   steeringList->addItem(strengthToggle);
 
   QObject::connect(strengthToggle, &StarPilotParamValueButtonControl::buttonClicked, [defaultStrength, this]() {
-    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Sigmoid Strength</b> to its default value?"), this)) {
+    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Strength</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearStrength", defaultStrength);
       strengthToggle->refresh();
     }
@@ -161,7 +161,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   steeringList->addItem(saturationToggle);
 
   QObject::connect(saturationToggle, &StarPilotParamValueButtonControl::buttonClicked, [defaultSaturation, this]() {
-    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Saturation</b> to its default value?"), this)) {
+    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Saturation</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearSaturation", defaultSaturation);
       saturationToggle->refresh();
     }
@@ -171,7 +171,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   std::vector<QString> biasResetButton{tr("Reset")};
   biasToggle = new StarPilotParamValueButtonControl(
       "RetrofitNonlinearBias",
-      tr("Left/Right Bias (Default: %1)").arg(QString::number(defaultBias, 'f', 2)),
+      tr("L/R Bias (Default: %1)").arg(QString::number(defaultBias, 'f', 2)),
       tr("<b>Compensate for asymmetric EPS response.</b> "
          "Positive = more torque going left. Negative = more going right. "
          "Adjust if one direction overshoots more than the other."),
@@ -183,7 +183,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   steeringList->addItem(biasToggle);
 
   QObject::connect(biasToggle, &StarPilotParamValueButtonControl::buttonClicked, [defaultBias, this]() {
-    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Left/Right Bias</b> to its default value?"), this)) {
+    if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Left/Right Bias</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearBias", defaultBias);
       biasToggle->refresh();
     }
@@ -251,7 +251,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     std::vector<QString> resetBtn{tr("Reset")};
     auto *toggle = new StarPilotParamValueButtonControl(
         p.key,
-        tr("%1 (Default: %2)").arg(p.label).arg(QString::number(p.defaultVal, 'f', 2)),
+        tr("%1 (Dflt: %2)").arg(p.label).arg(QString::number(p.defaultVal, 'f', 2)),
         tr("<b>%1</b>").arg(p.desc),
         "",
         p.min, p.max, QString(), std::map<float, QString>(), p.step,
