@@ -72,7 +72,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "Takes effect immediately while driving."),
       "",
       -180.0f, 180.0f, QString("°"), std::map<float, QString>(), 1.0f,
-      true, {}, sasOffsetResetButton, false, false);
+      true, {}, sasOffsetResetButton, false, false, 150);
   if (forceOpenDescriptions) {
     sasOffsetToggle->showDescription();
   }
@@ -96,7 +96,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
       tr("Pedal Offset (Default: %1)").arg(QString::number(defaultPedalOffsetStandstill, 'f', 2)),
       tr("<b>Low-speed deadband subtracted from accel before pedal scaling.</b> Less negative values apply gas sooner from a stop. Takes effect immediately while driving."),
       "",
-      -0.5f, 0.2f, QString(), std::map<float, QString>(), 0.05f, false, {}, pedalOffsetResetButton, false, false);
+      -0.5f, 0.2f, QString(), std::map<float, QString>(), 0.05f, false, {}, pedalOffsetResetButton, false, false, 150);
   if (forceOpenDescriptions) {
     pedalOffsetToggle->showDescription();
   }
@@ -132,7 +132,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "Higher values cap torque more aggressively at large corrections. "
          "Start at 0.5 and increase if oscillation persists."),
       "",
-      0.0f, 1.0f, QString(), std::map<float, QString>(), 0.05f, false, {}, strengthResetButton, false, false);
+      0.0f, 1.0f, QString(), std::map<float, QString>(), 0.05f, false, {}, strengthResetButton, false, false, 150);
   if (forceOpenDescriptions) {
     strengthToggle->showDescription();
   }
@@ -154,7 +154,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "Higher values = saturation kicks in at smaller corrections. "
          "Lower values = wider linear region before capping."),
       "",
-      0.5f, 5.0f, QString(), std::map<float, QString>(), 0.1f, false, {}, saturationResetButton, false, false);
+      0.5f, 5.0f, QString(), std::map<float, QString>(), 0.1f, false, {}, saturationResetButton, false, false, 150);
   if (forceOpenDescriptions) {
     saturationToggle->showDescription();
   }
@@ -176,7 +176,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
          "Positive = more torque going left. Negative = more going right. "
          "Adjust if one direction overshoots more than the other."),
       "",
-      -1.0f, 1.0f, QString(), std::map<float, QString>(), 0.05f, false, {}, biasResetButton, false, false);
+      -1.0f, 1.0f, QString(), std::map<float, QString>(), 0.05f, false, {}, biasResetButton, false, false, 150);
   if (forceOpenDescriptions) {
     biasToggle->showDescription();
   }
@@ -255,7 +255,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
         tr("<b>%1</b>").arg(p.desc),
         "",
         p.min, p.max, QString(), std::map<float, QString>(), p.step,
-        false, {}, resetBtn, false, false);
+        false, {}, resetBtn, false, false, 150);
     if (forceOpenDescriptions) {
       toggle->showDescription();
     }
