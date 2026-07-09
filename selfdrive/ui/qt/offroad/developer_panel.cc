@@ -216,6 +216,7 @@ DeveloperPanel::DeveloperPanel(SettingsWindow *parent) : QFrame(parent) {
         {15, tr("Longitudinal MPC Jerk: Danger Zone")},
         {16, tr("Longitudinal MPC Jerk: Speed Control")},
         {17, tr("Model Name")},
+        {18, tr("Auto Tune: Angle Offset")},
       };
 
       ButtonControl *metricToggle = new ButtonControl(title, tr("SELECT"), desc);

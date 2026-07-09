@@ -28,6 +28,7 @@ private:
 
   ItemStatus accelerationJerkStatus;
   ItemStatus accelerationStatus;
+  ItemStatus angleOffsetStatus;
   ItemStatus actuatorAccelerationStatus;
   ItemStatus dangerFactorStatus;
   ItemStatus dangerJerkStatus;

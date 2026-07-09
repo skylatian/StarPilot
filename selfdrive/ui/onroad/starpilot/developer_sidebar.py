@@ -231,6 +231,7 @@ class DeveloperSidebar:
 
     steer_ratio = live_parameters.steerRatio if live_parameters else 0.0
     stiff_factor = live_parameters.stiffnessFactor if live_parameters else 0.0
+    angle_offset = live_parameters.angleOffsetDeg if live_parameters else 0.0
 
     model_name = ui_state.starpilot_toggles.get("model_name", "N/A")
     model_name = re.sub(r'\(.*\)', '', model_name)
@@ -253,7 +254,8 @@ class DeveloperSidebar:
       14: ("ACCEL JERK", f"{accel_jerk}"),
       15: ("DANGER JERK", f"{danger_jerk}"),
       16: ("SPEED JERK", f"{speed_jerk}"),
-      17: (model_name, "")
+      17: (model_name, ""),
+      18: ("ANGLE OFS", f"{angle_offset:.2f}°"),
     }
 
   def render(self, sidebar_rect: rl.Rectangle):

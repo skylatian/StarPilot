@@ -149,6 +149,7 @@ void DeveloperSidebar::updateState(const UIState &s, const StarPilotUIState &fs)
   steerAngleStatus = ItemStatus(QPair<QString, QString>(tr("STEER ANGLE"), steerLabel), metricColor);
   steerRatioStatus = ItemStatus(QPair<QString, QString>(tr("STEER RATIO"), QString::number(liveParameters.getSteerRatio(), 'f', 5)), metricColor);
   stiffnessFactorStatus = ItemStatus(QPair<QString, QString>(tr("STEER STIFF"), QString::number(liveParameters.getStiffnessFactor(), 'f', 5)), metricColor);
+  angleOffsetStatus = ItemStatus(QPair<QString, QString>(tr("ANGLE OFS"), QString::number(liveParameters.getAngleOffsetDeg(), 'f', 2) + "°"), metricColor);
   torqueStatus = ItemStatus(QPair<QString, QString>(tr("TORQUE %"), torqueLabel), metricColor);
 
   QString modelName = starpilot_scene.starpilot_toggles.value("model_name").toString();
@@ -184,6 +185,7 @@ void DeveloperSidebar::paintEvent(QPaintEvent *event) {
   metricMap.insert(15, &dangerJerkStatus);
   metricMap.insert(16, &speedJerkStatus);
   metricMap.insert(17, &modelNameStatus);
+  metricMap.insert(18, &angleOffsetStatus);
 
   int count = 0;
   for (size_t i = 0; i < metricAssignments.size(); ++i) {
