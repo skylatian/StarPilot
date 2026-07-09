@@ -123,6 +123,9 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   }
   steeringList->addItem(nonlinearEnableToggle);
 
+  curveWidget = new SigmoidCurveWidget(this);
+  steeringList->addItem(curveWidget);
+
   const float defaultStrength = 0.5f;
   std::vector<QString> strengthResetButton{tr("Reset")};
   strengthToggle = new StarPilotParamValueButtonControl(
@@ -142,6 +145,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Strength</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearStrength", defaultStrength);
       strengthToggle->refresh();
+      curveWidget->setParams(defaultStrength, params.getFloat("RetrofitNonlinearSaturation"), params.getFloat("RetrofitNonlinearBias"));
     }
   });
 
@@ -164,6 +168,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Saturation</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearSaturation", defaultSaturation);
       saturationToggle->refresh();
+      curveWidget->setParams(params.getFloat("RetrofitNonlinearStrength"), defaultSaturation, params.getFloat("RetrofitNonlinearBias"));
     }
   });
 
@@ -186,8 +191,20 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Left/Right Bias</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearBias", defaultBias);
       biasToggle->refresh();
+      curveWidget->setParams(params.getFloat("RetrofitNonlinearStrength"), params.getFloat("RetrofitNonlinearSaturation"), defaultBias);
     }
   });
+
+  // update curve preview when any slider changes
+  auto updateCurve = [this](float) {
+    curveWidget->setParams(
+      params.getFloat("RetrofitNonlinearStrength"),
+      params.getFloat("RetrofitNonlinearSaturation"),
+      params.getFloat("RetrofitNonlinearBias"));
+  };
+  QObject::connect(strengthToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
+  QObject::connect(saturationToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
+  QObject::connect(biasToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
 
   ButtonControl *advancedButton = new ButtonControl(
       tr("Advanced (Raw ABCD)"),
