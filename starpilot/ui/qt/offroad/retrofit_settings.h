@@ -21,6 +21,10 @@ public:
     update();
   }
 
+  void setStrength(float v) { m_strength = v; update(); }
+  void setSaturation(float v) { m_saturation = v; update(); }
+  void setBias(float v) { m_bias = v; update(); }
+
 protected:
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);

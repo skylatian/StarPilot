@@ -124,6 +124,10 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   steeringList->addItem(nonlinearEnableToggle);
 
   curveWidget = new SigmoidCurveWidget(this);
+  curveWidget->setParams(
+    params.getFloat("RetrofitNonlinearStrength"),
+    params.getFloat("RetrofitNonlinearSaturation"),
+    params.getFloat("RetrofitNonlinearBias"));
   steeringList->addItem(curveWidget);
 
   const float defaultStrength = 0.5f;
@@ -145,7 +149,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Strength</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearStrength", defaultStrength);
       strengthToggle->refresh();
-      curveWidget->setParams(defaultStrength, params.getFloat("RetrofitNonlinearSaturation"), params.getFloat("RetrofitNonlinearBias"));
+      curveWidget->setStrength(defaultStrength);
     }
   });
 
@@ -168,7 +172,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Saturation</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearSaturation", defaultSaturation);
       saturationToggle->refresh();
-      curveWidget->setParams(params.getFloat("RetrofitNonlinearStrength"), defaultSaturation, params.getFloat("RetrofitNonlinearBias"));
+      curveWidget->setSaturation(defaultSaturation);
     }
   });
 
@@ -191,20 +195,21 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     if (StarPilotConfirmationDialog::yesorno(tr("Reset <b>Left/Right Bias</b> to default?"), this)) {
       params.putFloat("RetrofitNonlinearBias", defaultBias);
       biasToggle->refresh();
-      curveWidget->setParams(params.getFloat("RetrofitNonlinearStrength"), params.getFloat("RetrofitNonlinearSaturation"), defaultBias);
+      curveWidget->setBias(defaultBias);
     }
   });
 
-  // update curve preview when any slider changes
-  auto updateCurve = [this](float) {
-    curveWidget->setParams(
-      params.getFloat("RetrofitNonlinearStrength"),
-      params.getFloat("RetrofitNonlinearSaturation"),
-      params.getFloat("RetrofitNonlinearBias"));
-  };
-  QObject::connect(strengthToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
-  QObject::connect(saturationToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
-  QObject::connect(biasToggle, &StarPilotParamValueButtonControl::valueChanged, updateCurve);
+  // update curve preview when any slider changes — use signal value directly,
+  // since params are only written to disk on hideEvent
+  QObject::connect(strengthToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    curveWidget->setStrength(v);
+  });
+  QObject::connect(saturationToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    curveWidget->setSaturation(v);
+  });
+  QObject::connect(biasToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    curveWidget->setBias(v);
+  });
 
   ButtonControl *advancedButton = new ButtonControl(
       tr("Advanced (Raw ABCD)"),
