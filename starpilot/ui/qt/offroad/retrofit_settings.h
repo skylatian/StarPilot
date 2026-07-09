@@ -16,6 +16,9 @@ private:
 
   StarPilotParamValueButtonControl *pedalOffsetToggle;
   StarPilotParamValueButtonControl *sasOffsetToggle;
+  StarPilotParamValueButtonControl *strengthToggle;
+  StarPilotParamValueButtonControl *saturationToggle;
+  StarPilotParamValueButtonControl *biasToggle;
 
   StarPilotSettingsWindow *parent;
 

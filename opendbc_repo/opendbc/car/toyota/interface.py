@@ -1,3 +1,7 @@
+from math import fabs, exp
+
+import numpy as np
+
 from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
@@ -13,6 +17,45 @@ from openpilot.common.params import Params
 SteerControlType = structs.CarParams.SteerControlType
 
 
+def _sigmoid(x: float) -> float:
+  if x >= 0:
+    z = exp(-x)
+    return 1.0 / (1.0 + z)
+  z = exp(x)
+  return z / (1.0 + z)
+
+
+RETROFIT_BASE_LAT_ACCEL_FACTOR = 4.05
+
+def _user_params_to_abcd(strength: float, saturation: float, bias: float):
+  """Convert user-facing params to [a, b, c, d] for left and right.
+
+  strength (0-1): blend between linear (0) and full sigmoid (1).
+    At 0, output matches stock linear exactly. At 1, full sigmoid.
+  saturation (0.5-5.0): sigmoid steepness — higher = saturates at smaller inputs
+  bias (-1 to 1): positive = more torque going left (positive lat accel)
+  """
+  linear_slope = 1.0 / RETROFIT_BASE_LAT_ACCEL_FACTOR
+  c_floor = 0.05
+  b_base = 1.0 * strength
+  c_base = linear_slope * (1.0 - strength) + c_floor * strength
+  left = [saturation, b_base * (1.0 + bias * 0.3), c_base, 0.0]
+  right = [saturation, b_base * (1.0 - bias * 0.3), c_base, 0.0]
+  return left, right
+
+
+def _build_siglin_table(left_abcd, right_abcd):
+  """Pre-compute sigmoid-linear lookup table, following GM pattern."""
+  lataccel_values = np.arange(-5.0, 5.0, 0.01)
+  torque_values = []
+  for x in lataccel_values:
+    a, b, c, d = left_abcd if x >= 0 else right_abcd
+    sig_input = a * x
+    sig = np.sign(sig_input) * (_sigmoid(fabs(sig_input)) - 0.5)
+    torque_values.append(float((sig * b) + (x * c) + d))
+  return np.array(torque_values), lataccel_values
+
+
 class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
@@ -21,6 +64,59 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX
+
+  def _get_retrofit_siglin_params(self):
+    params = Params()
+    if not params.get_bool("RetrofitNonlinearSteering"):
+      return None
+
+    if params.get_bool("RetrofitNonlinearAdvanced"):
+      left = [params.get_float("RetrofitNonlinearLeftA", default=2.5),
+              params.get_float("RetrofitNonlinearLeftB", default=1.0),
+              params.get_float("RetrofitNonlinearLeftC", default=0.2),
+              params.get_float("RetrofitNonlinearLeftD", default=0.0)]
+      right = [params.get_float("RetrofitNonlinearRightA", default=2.5),
+               params.get_float("RetrofitNonlinearRightB", default=1.0),
+               params.get_float("RetrofitNonlinearRightC", default=0.2),
+               params.get_float("RetrofitNonlinearRightD", default=0.0)]
+    else:
+      strength = params.get_float("RetrofitNonlinearStrength", default=0.5)
+      saturation = params.get_float("RetrofitNonlinearSaturation", default=2.5)
+      bias = params.get_float("RetrofitNonlinearBias", default=0.0)
+      left, right = _user_params_to_abcd(strength, saturation, bias)
+
+    return _build_siglin_table(left, right)
+
+  def torque_from_lateral_accel(self):
+    if self.CP.carFingerprint != CAR.TOYOTA_COROLLA_RETROFIT:
+      return self.torque_from_lateral_accel_linear
+
+    result = self._get_retrofit_siglin_params()
+    if result is None:
+      return self.torque_from_lateral_accel_linear
+
+    torque_values, lataccel_values = result
+
+    def torque_from_lateral_accel_siglin(lateral_acceleration, torque_params):
+      raw = float(np.interp(lateral_acceleration, lataccel_values, torque_values))
+      scale = float(torque_params.latAccelFactor) / RETROFIT_BASE_LAT_ACCEL_FACTOR
+      return raw * scale
+    return torque_from_lateral_accel_siglin
+
+  def lateral_accel_from_torque(self):
+    if self.CP.carFingerprint != CAR.TOYOTA_COROLLA_RETROFIT:
+      return self.lateral_accel_from_torque_linear
+
+    result = self._get_retrofit_siglin_params()
+    if result is None:
+      return self.lateral_accel_from_torque_linear
+
+    torque_values, lataccel_values = result
+
+    def lateral_accel_from_torque_siglin(torque, torque_params):
+      scale = float(torque_params.latAccelFactor) / RETROFIT_BASE_LAT_ACCEL_FACTOR
+      return float(np.interp(torque / scale, torque_values, lataccel_values))
+    return lateral_accel_from_torque_siglin
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
