@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "starpilot/ui/qt/offroad/starpilot_settings.h"
+#include "starpilot/ui/qt/offroad/retrofit_tune_editor.h"
 
 class SigmoidCurveWidget : public QWidget {
   Q_OBJECT

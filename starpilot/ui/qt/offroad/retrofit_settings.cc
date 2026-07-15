@@ -23,6 +23,10 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   ScrollView *advancedSteeringPanel = new ScrollView(advancedSteeringList, this);
   retrofitLayout->addWidget(advancedSteeringPanel);
 
+  RetrofitTuneTablePanel *tuneTableWidget = new RetrofitTuneTablePanel(parent, retrofitLayout, forceOpen);
+  ScrollView *tuneTablePanel = new ScrollView(tuneTableWidget, this);
+  retrofitLayout->addWidget(tuneTablePanel);
+
   // --- Main retrofit list ---
 
   ButtonControl *pedalTuningButton = new ButtonControl(
@@ -51,6 +55,21 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     steeringTuningButton->showDescription();
   }
   retrofitList->addItem(steeringTuningButton);
+
+  ButtonControl *controllerTuneButton = new ButtonControl(
+      tr("Controller Tune"),
+      tr("MANAGE"),
+      tr("<b>Vehicle-specific lateral tuning constants.</b> "
+         "KP gain curve, FF window, turn dynamics, and center taper. "
+         "Most values take effect immediately while driving."));
+  QObject::connect(controllerTuneButton, &ButtonControl::clicked, [retrofitLayout, tuneTablePanel, this]() {
+    retrofitLayout->setCurrentWidget(tuneTablePanel);
+    emit openSubPanel();
+  });
+  if (forceOpenDescriptions) {
+    controllerTuneButton->showDescription();
+  }
+  retrofitList->addItem(controllerTuneButton);
 
   ParamControl *pauseSteeringToggle = new ParamControl(
       "RetrofitPauseSteering",
@@ -371,10 +390,12 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
 
   // --- Navigation: close subpanels ---
 
-  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel, steeringPanel, advancedSteeringPanel]() {
+  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel, steeringPanel, advancedSteeringPanel, tuneTablePanel, tuneTableWidget]() {
     QWidget *current = retrofitLayout->currentWidget();
     if (current == advancedSteeringPanel) {
       retrofitLayout->setCurrentWidget(steeringPanel);
+    } else if (current == tuneTablePanel && !tuneTableWidget->isShowingTableOverview()) {
+      // detail→table handled by inner navigation; don't propagate
     } else {
       retrofitLayout->setCurrentWidget(retrofitPanel);
     }
