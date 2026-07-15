@@ -2181,7 +2181,7 @@ def delete_report(report_id: str) -> dict[str, Any]:
 
   status = read_flm_status()
   if not status.get("running") and status.get("reportId") == report_id:
-    _clear_flm_status()
+    clear_flm_status()
 
   return {
     "message": f"Deleted tuning report {report_id}.",
@@ -2209,7 +2209,7 @@ def clear_workspace() -> dict[str, Any]:
         removed.append(str(path))
 
   _clear_persistent_trial_baseline(params)
-  _clear_flm_status()
+  clear_flm_status()
 
   return {
     "message": "Cleared saved tuning reports, feedback, profiles, and snapshots.",
