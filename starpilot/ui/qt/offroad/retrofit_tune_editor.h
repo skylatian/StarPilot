@@ -506,7 +506,7 @@ public:
   }
 
 signals:
-  void openSubPanel();
+  void openSubSubPanel();
 
 private:
   float readFlmKnob(const std::string &knobName, float defaultVal) {

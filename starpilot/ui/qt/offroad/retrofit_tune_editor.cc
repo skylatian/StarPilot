@@ -46,7 +46,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
          "Requires offroad cycle."));
   QObject::connect(kpButton, &ButtonControl::clicked, [tuneLayout, kpPanel, this]() {
     tuneLayout->setCurrentWidget(kpPanel);
-    emit openSubPanel();
+    emit openSubSubPanel();
   });
   if (forceOpen) kpButton->showDescription();
   tableList->addItem(kpButton);
@@ -59,7 +59,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
          "Takes effect immediately."));
   QObject::connect(ffButton, &ButtonControl::clicked, [tuneLayout, ffPanel, this]() {
     tuneLayout->setCurrentWidget(ffPanel);
-    emit openSubPanel();
+    emit openSubSubPanel();
   });
   if (forceOpen) ffButton->showDescription();
   tableList->addItem(ffButton);
@@ -72,7 +72,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
          "and how the wheel resists small movements. Takes effect immediately."));
   QObject::connect(turnButton, &ButtonControl::clicked, [tuneLayout, turnPanel, this]() {
     tuneLayout->setCurrentWidget(turnPanel);
-    emit openSubPanel();
+    emit openSubSubPanel();
   });
   if (forceOpen) turnButton->showDescription();
   tableList->addItem(turnButton);
@@ -85,7 +85,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
          "you might see on long straight roads. Takes effect immediately."));
   QObject::connect(centerButton, &ButtonControl::clicked, [tuneLayout, centerPanel, this]() {
     tuneLayout->setCurrentWidget(centerPanel);
-    emit openSubPanel();
+    emit openSubSubPanel();
   });
   if (forceOpen) centerButton->showDescription();
   tableList->addItem(centerButton);
