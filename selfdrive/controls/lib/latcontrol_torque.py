@@ -260,34 +260,7 @@ class LatControlTorque(LatControl):
       kia_ev6_center_taper = get_kia_ev6_center_taper_scale(setpoint, CS.vEgo) if kia_ev6_test_active else 1.0
       kia_ev6_low_speed_center_taper = get_kia_ev6_low_speed_center_taper_scale(setpoint, CS.vEgo) if kia_ev6_test_active else 1.0
       silverado_center_taper = get_silverado_center_taper_scale(setpoint, CS.vEgo) if self.is_silverado else 1.0
-      if self.is_corolla_retrofit:
-        _g = lambda key, default: float(getattr(starpilot_toggles, key, None) if getattr(starpilot_toggles, key, None) is not None else default)
-        retrofit_tune = RetrofitTuneParams(
-          transition_speed=max(_g('retrofit_tune_transition_speed', 10.0), 0.1),
-          phase_scale=max(_g('retrofit_tune_phase_scale', 0.10), 0.01),
-          ff_gain=_g('retrofit_tune_ff_gain', 0.04),
-          ff_onset=_g('retrofit_tune_ff_onset', 0.18),
-          ff_onset_width=max(_g('retrofit_tune_ff_onset_width', 0.08), 0.01),
-          ff_cutoff=_g('retrofit_tune_ff_cutoff', 1.10),
-          ff_cutoff_width=max(_g('retrofit_tune_ff_cutoff_width', 0.30), 0.01),
-          friction_lat_rise=max(_g('retrofit_tune_friction_lat_rise', 0.20), 0.01),
-          friction_jerk_rise=max(_g('retrofit_tune_friction_jerk_rise', 0.24), 0.01),
-          turn_in_boost=_g('retrofit_tune_turn_in_boost', 0.0),
-          unwind_taper=_g('retrofit_tune_unwind_taper', 0.55),
-          turn_in_threshold_reduction=_g('retrofit_tune_turn_in_threshold_reduction', 0.10),
-          unwind_threshold_increase=_g('retrofit_tune_unwind_threshold_increase', 0.50),
-          turn_in_friction_boost=_g('retrofit_tune_turn_in_friction_boost', 0.04),
-          unwind_friction_reduction=_g('retrofit_tune_unwind_friction_reduction', 0.30),
-          center_taper_max=_g('retrofit_tune_center_taper_max', 0.20),
-          center_taper_lat=max(_g('retrofit_tune_center_taper_lat', 0.14), 0.01),
-          center_taper_lat_width=max(_g('retrofit_tune_center_taper_lat_width', 0.04), 0.01),
-          center_taper_speed=_g('retrofit_tune_center_taper_speed', 14.0),
-          center_taper_speed_width=max(_g('retrofit_tune_center_taper_speed_width', 2.5), 0.1),
-        )
-        retrofit_center_taper = get_retrofit_center_taper_scale(setpoint, CS.vEgo, retrofit_tune)
-      else:
-        retrofit_tune = RETROFIT_TUNE_DEFAULTS
-        retrofit_center_taper = 1.0
+      retrofit_center_taper = get_retrofit_center_taper_scale(setpoint, CS.vEgo) if self.is_corolla_retrofit else 1.0
       civic_bosch_modified_a_center_taper = get_civic_bosch_modified_a_center_taper_scale(setpoint, CS.vEgo) if (
         self.is_civic_bosch_modified and civic_bosch_modified_a_lateral_testing_ground_active()
       ) else 1.0
@@ -372,9 +345,9 @@ class LatControlTorque(LatControl):
         friction_scale = get_civic_bosch_modified_b_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk)
         friction_scale = 1.0 + ((friction_scale - 1.0) * civic_bosch_modified_a_center_taper)
       elif self.is_corolla_retrofit:
-        ff *= get_retrofit_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo, retrofit_tune) * retrofit_center_taper
-        friction_threshold = get_retrofit_friction_threshold(CS.vEgo, setpoint, desired_lateral_jerk, retrofit_tune)
-        friction_scale = get_retrofit_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk, retrofit_tune)
+        ff *= get_retrofit_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo) * retrofit_center_taper
+        friction_threshold = get_retrofit_friction_threshold(CS.vEgo, setpoint, desired_lateral_jerk)
+        friction_scale = get_retrofit_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk)
         friction_scale = 1.0 + ((friction_scale - 1.0) * retrofit_center_taper)
       if flm_surface_active and self.flm_surface_profile_key and not ioniq_6_active:
         universal_flm_profile = self.flm_surface_profile_key == FLM_UNIVERSAL_PROFILE_KEY

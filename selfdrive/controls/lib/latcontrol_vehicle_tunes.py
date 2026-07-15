@@ -1,7 +1,7 @@
 import json
 import math
 import numpy as np
-from collections import namedtuple
+
 
 from opendbc.car.gm.values import CAR as GM_CAR
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
@@ -713,30 +713,6 @@ RETROFIT_CENTER_TAPER_LAT_WIDTH = 0.04
 RETROFIT_CENTER_TAPER_SPEED = 14.0
 RETROFIT_CENTER_TAPER_SPEED_WIDTH = 2.5
 
-RetrofitTuneParams = namedtuple('RetrofitTuneParams', [
-  'transition_speed', 'phase_scale',
-  'ff_gain', 'ff_onset', 'ff_onset_width', 'ff_cutoff', 'ff_cutoff_width',
-  'friction_lat_rise', 'friction_jerk_rise',
-  'turn_in_boost', 'unwind_taper',
-  'turn_in_threshold_reduction', 'unwind_threshold_increase',
-  'turn_in_friction_boost', 'unwind_friction_reduction',
-  'center_taper_max', 'center_taper_lat', 'center_taper_lat_width',
-  'center_taper_speed', 'center_taper_speed_width',
-])
-
-RETROFIT_TUNE_DEFAULTS = RetrofitTuneParams(
-  transition_speed=RETROFIT_TRANSITION_SPEED, phase_scale=RETROFIT_PHASE_SCALE,
-  ff_gain=RETROFIT_FF_GAIN, ff_onset=RETROFIT_FF_ONSET, ff_onset_width=RETROFIT_FF_ONSET_WIDTH,
-  ff_cutoff=RETROFIT_FF_CUTOFF, ff_cutoff_width=RETROFIT_FF_CUTOFF_WIDTH,
-  friction_lat_rise=RETROFIT_FRICTION_LAT_RISE, friction_jerk_rise=RETROFIT_FRICTION_JERK_RISE,
-  turn_in_boost=RETROFIT_TURN_IN_BOOST, unwind_taper=RETROFIT_UNWIND_TAPER,
-  turn_in_threshold_reduction=RETROFIT_TURN_IN_THRESHOLD_REDUCTION, unwind_threshold_increase=RETROFIT_UNWIND_THRESHOLD_INCREASE,
-  turn_in_friction_boost=RETROFIT_TURN_IN_FRICTION_BOOST, unwind_friction_reduction=RETROFIT_UNWIND_FRICTION_REDUCTION,
-  center_taper_max=RETROFIT_CENTER_TAPER_MAX, center_taper_lat=RETROFIT_CENTER_TAPER_LAT,
-  center_taper_lat_width=RETROFIT_CENTER_TAPER_LAT_WIDTH,
-  center_taper_speed=RETROFIT_CENTER_TAPER_SPEED, center_taper_speed_width=RETROFIT_CENTER_TAPER_SPEED_WIDTH,
-)
-
 TRAILER_LOAD_FULL_ASSIST_KG = 15000.0 * CV.LB_TO_KG
 TRAILER_LATERAL_MIN_SPEED = 15.0 * CV.MPH_TO_MS
 TRAILER_LATERAL_FULL_SPEED = 35.0 * CV.MPH_TO_MS
@@ -986,63 +962,70 @@ def get_prius_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> 
   return 1.0 - reduction
 
 
-def _retrofit_low_speed_factor(v_ego: float, tune: RetrofitTuneParams) -> float:
-  return 1.0 / (1.0 + (max(v_ego, 0.0) / tune.transition_speed) ** 2)
+def _retrofit_low_speed_factor(v_ego: float) -> float:
+  return 1.0 / (1.0 + (max(v_ego, 0.0) / RETROFIT_TRANSITION_SPEED) ** 2)
 
 
-def _retrofit_transition_phase(desired_lateral_accel: float, desired_lateral_jerk: float, tune: RetrofitTuneParams) -> float:
-  return math.tanh((desired_lateral_accel * desired_lateral_jerk) / tune.phase_scale)
+def _retrofit_transition_phase(desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  return math.tanh((desired_lateral_accel * desired_lateral_jerk) / RETROFIT_PHASE_SCALE)
 
 
-def _retrofit_transition_envelope(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float, tune: RetrofitTuneParams) -> float:
-  lat_factor = 1.0 - math.exp(-abs(desired_lateral_accel) / tune.friction_lat_rise)
-  jerk_factor = 1.0 - math.exp(-abs(desired_lateral_jerk) / tune.friction_jerk_rise)
-  return _retrofit_low_speed_factor(v_ego, tune) * lat_factor * jerk_factor
+def _retrofit_transition_envelope(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  lat_factor = 1.0 - math.exp(-abs(desired_lateral_accel) / RETROFIT_FRICTION_LAT_RISE)
+  jerk_factor = 1.0 - math.exp(-abs(desired_lateral_jerk) / RETROFIT_FRICTION_JERK_RISE)
+  return _retrofit_low_speed_factor(v_ego) * lat_factor * jerk_factor
 
 
-def get_retrofit_ff_scale(desired_lateral_accel: float, desired_lateral_jerk: float, v_ego: float, tune: RetrofitTuneParams = RETROFIT_TUNE_DEFAULTS) -> float:
+def get_retrofit_ff_scale(desired_lateral_accel: float, desired_lateral_jerk: float, v_ego: float) -> float:
   if desired_lateral_accel == 0.0:
     return 1.0
 
+  gain = _flm_vehicle_knob("toyota_corolla_retrofit.ff_gain", RETROFIT_FF_GAIN)
   abs_lateral_accel = abs(desired_lateral_accel)
-  onset = _sigmoid((abs_lateral_accel - tune.ff_onset) / tune.ff_onset_width)
-  cutoff = _sigmoid((tune.ff_cutoff - abs_lateral_accel) / tune.ff_cutoff_width)
-  extra_scale = tune.ff_gain * onset * cutoff
-  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk, tune)
+  onset = _sigmoid((abs_lateral_accel - RETROFIT_FF_ONSET) / RETROFIT_FF_ONSET_WIDTH)
+  cutoff = _sigmoid((RETROFIT_FF_CUTOFF - abs_lateral_accel) / RETROFIT_FF_CUTOFF_WIDTH)
+  extra_scale = gain * onset * cutoff
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
   turn_in_weight = max(phase, 0.0)
   unwind_weight = max(-phase, 0.0)
-  low_speed_factor = _retrofit_low_speed_factor(v_ego, tune)
-  turn_in_boost = 1.0 + (tune.turn_in_boost * turn_in_weight * (0.35 + 0.65 * low_speed_factor))
-  unwind_taper = 1.0 - (tune.unwind_taper * unwind_weight * (0.35 + 0.65 * low_speed_factor))
+  low_speed_factor = _retrofit_low_speed_factor(v_ego)
+  turn_in_boost = 1.0 + (_flm_vehicle_knob("toyota_corolla_retrofit.turn_in_boost", RETROFIT_TURN_IN_BOOST) *
+                          turn_in_weight * (0.35 + 0.65 * low_speed_factor))
+  unwind_taper = 1.0 - (_flm_vehicle_knob("toyota_corolla_retrofit.unwind_taper", RETROFIT_UNWIND_TAPER) *
+                         unwind_weight * (0.35 + 0.65 * low_speed_factor))
   return 1.0 + (extra_scale * turn_in_boost * max(unwind_taper, 0.0))
 
 
-def get_retrofit_friction_threshold(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float, tune: RetrofitTuneParams = RETROFIT_TUNE_DEFAULTS) -> float:
+def get_retrofit_friction_threshold(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
   base_threshold = get_standard_friction_threshold(v_ego)
-  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk, tune)
-  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk, tune)
+  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk)
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
   turn_in_weight = max(phase, 0.0)
   unwind_weight = max(-phase, 0.0)
-  threshold_scale = 1.0 - (tune.turn_in_threshold_reduction * transition_envelope * turn_in_weight)
-  threshold_scale += (tune.unwind_threshold_increase * transition_envelope * unwind_weight)
+  threshold_scale = 1.0 - (_flm_vehicle_knob("toyota_corolla_retrofit.turn_in_threshold_reduction", RETROFIT_TURN_IN_THRESHOLD_REDUCTION) *
+                            transition_envelope * turn_in_weight)
+  threshold_scale += (_flm_vehicle_knob("toyota_corolla_retrofit.unwind_threshold_increase", RETROFIT_UNWIND_THRESHOLD_INCREASE) *
+                      transition_envelope * unwind_weight)
   return base_threshold * min(max(threshold_scale, 0.86), 1.20)
 
 
-def get_retrofit_friction_scale(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float, tune: RetrofitTuneParams = RETROFIT_TUNE_DEFAULTS) -> float:
-  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk, tune)
-  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk, tune)
+def get_retrofit_friction_scale(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk)
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
   turn_in_weight = max(phase, 0.0)
   unwind_weight = max(-phase, 0.0)
   friction_scale = 1.0
-  friction_scale += (tune.turn_in_friction_boost * transition_envelope * turn_in_weight)
-  friction_scale -= (tune.unwind_friction_reduction * transition_envelope * unwind_weight)
+  friction_scale += (_flm_vehicle_knob("toyota_corolla_retrofit.turn_in_friction_boost", RETROFIT_TURN_IN_FRICTION_BOOST) *
+                     transition_envelope * turn_in_weight)
+  friction_scale -= (_flm_vehicle_knob("toyota_corolla_retrofit.unwind_friction_reduction", RETROFIT_UNWIND_FRICTION_REDUCTION) *
+                     transition_envelope * unwind_weight)
   return min(max(friction_scale, 0.85), 1.14)
 
 
-def get_retrofit_center_taper_scale(desired_lateral_accel: float, v_ego: float, tune: RetrofitTuneParams = RETROFIT_TUNE_DEFAULTS) -> float:
-  speed_weight = _sigmoid((v_ego - tune.center_taper_speed) / tune.center_taper_speed_width)
-  center_weight = _sigmoid((tune.center_taper_lat - abs(desired_lateral_accel)) / tune.center_taper_lat_width)
-  reduction = tune.center_taper_max * speed_weight * center_weight
+def get_retrofit_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> float:
+  speed_weight = _sigmoid((v_ego - RETROFIT_CENTER_TAPER_SPEED) / RETROFIT_CENTER_TAPER_SPEED_WIDTH)
+  center_weight = _sigmoid((RETROFIT_CENTER_TAPER_LAT - abs(desired_lateral_accel)) / RETROFIT_CENTER_TAPER_LAT_WIDTH)
+  reduction = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_max", RETROFIT_CENTER_TAPER_MAX) * speed_weight * center_weight
   return 1.0 - reduction
 
 
@@ -2707,6 +2690,7 @@ FLM_RICH_PROFILE_CARS = {
   "hyundai_ioniq_6": set(IONIQ_6_CARS),
   "hyundai_kia_ev6": set(KIA_EV6_CARS),
   "toyota_prius": set(PRIUS_CARS),
+  "toyota_corolla_retrofit": set(COROLLA_RETROFIT_CARS),
 }
 
 FLM_RICH_PROFILE_LABELS = {
@@ -2714,6 +2698,7 @@ FLM_RICH_PROFILE_LABELS = {
   "hyundai_ioniq_6": "Ioniq 6",
   "hyundai_kia_ev6": "EV6",
   "toyota_prius": "Prius",
+  "toyota_corolla_retrofit": "Corolla Retrofit",
   FLM_UNIVERSAL_PROFILE_KEY: "Torque Controller",
 }
 
@@ -2776,6 +2761,14 @@ FLM_SUPPORTED_VEHICLE_KNOBS = {
   "toyota_prius.turn_in_threshold_reduction_right": {"profile": "toyota_prius", "min": 0.0, "max": 0.50, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": PRIUS_TURN_IN_THRESHOLD_REDUCTION_RIGHT},
   "toyota_prius.unwind_threshold_increase_left": {"profile": "toyota_prius", "min": 0.0, "max": 0.90, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": PRIUS_UNWIND_THRESHOLD_INCREASE_LEFT},
   "toyota_prius.unwind_threshold_increase_right": {"profile": "toyota_prius", "min": 0.0, "max": 0.90, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": PRIUS_UNWIND_THRESHOLD_INCREASE_RIGHT},
+  "toyota_corolla_retrofit.ff_gain": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.30, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FF_GAIN},
+  "toyota_corolla_retrofit.turn_in_boost": {"profile": "toyota_corolla_retrofit", "min": -0.10, "max": 0.60, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_TURN_IN_BOOST},
+  "toyota_corolla_retrofit.unwind_taper": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 1.20, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_UNWIND_TAPER},
+  "toyota_corolla_retrofit.center_taper_max": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.30, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_CENTER_TAPER_MAX},
+  "toyota_corolla_retrofit.turn_in_threshold_reduction": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.50, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_TURN_IN_THRESHOLD_REDUCTION},
+  "toyota_corolla_retrofit.unwind_threshold_increase": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 1.00, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_UNWIND_THRESHOLD_INCREASE},
+  "toyota_corolla_retrofit.turn_in_friction_boost": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.20, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_TURN_IN_FRICTION_BOOST},
+  "toyota_corolla_retrofit.unwind_friction_reduction": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.60, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_UNWIND_FRICTION_REDUCTION},
 }
 
 
@@ -2799,7 +2792,7 @@ def _add_flm_full_surface_profile_knobs(profile_key: str, defaults: dict[str, fl
     }
 
 
-for _flm_profile_key in ("gm_bolt_2022_2023", "hyundai_ioniq_6", "hyundai_kia_ev6", "toyota_prius", FLM_UNIVERSAL_PROFILE_KEY):
+for _flm_profile_key in ("gm_bolt_2022_2023", "hyundai_ioniq_6", "hyundai_kia_ev6", "toyota_prius", "toyota_corolla_retrofit", FLM_UNIVERSAL_PROFILE_KEY):
   _add_flm_full_surface_profile_knobs(_flm_profile_key)
 
 
@@ -2833,13 +2826,13 @@ def get_flm_capabilities(car_fingerprint, brand: str = "", hyundai_canfd: bool =
   dedicated_friction = car_fingerprint in (
     set(BOLT_2022_2023_CARS) | set(BOLT_2018_2021_CARS) | set(VOLT_STANDARD_CARS) | set(PALISADE_CARS) |
     set(PRIUS_CARS) | set(IONIQ_5_CARS) | set(IONIQ_6_CARS) | set(KIA_EV6_CARS) | set(KIA_FORTE_CARS) |
-    set(KIA_NIRO_PHEV_2022_CARS) | set(GENESIS_G90_CARS)
+    set(KIA_NIRO_PHEV_2022_CARS) | set(GENESIS_G90_CARS) | set(COROLLA_RETROFIT_CARS)
   )
   dedicated_center_taper = car_fingerprint in (
     set(PRIUS_CARS) | set(BOLT_CARS) | set(VOLT_STANDARD_CARS) | set(IONIQ_5_CARS) |
     set(IONIQ_EV_OLD_CARS) | set(IONIQ_6_CARS) | set(SONATA_CARS) | set(SONATA_HYBRID_CARS) |
     set(KIA_XCEED_CARS) | set(KIA_NIRO_PHEV_2022_CARS) | set(KIA_FORTE_CARS) | set(KIA_EV6_CARS) |
-    set(SILVERADO_CARS)
+    set(SILVERADO_CARS) | set(COROLLA_RETROFIT_CARS)
   )
   rich_knobs = [name for name, meta in FLM_SUPPORTED_VEHICLE_KNOBS.items() if meta["profile"] == profile_key]
   return {
