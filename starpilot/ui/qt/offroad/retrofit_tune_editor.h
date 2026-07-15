@@ -37,7 +37,6 @@ public:
     for (auto &pt : m_points) {
       pt.y = p.getFloat(pt.param_key.toStdString());
       if (pt.y == 0.0f && !pt.param_key.isEmpty()) {
-        float def = pt.y;
         std::string val = p.get(pt.param_key.toStdString());
         if (!val.empty()) {
           pt.y = std::stof(val);
