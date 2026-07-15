@@ -95,7 +95,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
       tr("<b>Clean and rebuild all compiled code, then reboot.</b> "
          "Required after param or panda safety changes when \"Use Prebuilt Binaries\" is off. "
          "Takes ~20 minutes on Comma 3."));
-  QObject::connect(fullRebuildButton, &ButtonControl::clicked, [fullRebuildButton, this]() {
+  QObject::connect(fullRebuildButton, &ButtonControl::clicked, [fullRebuildButton, this, parent]() {
     if (ConfirmationDialog::confirm(tr("This will clean all build artifacts, rebuild from source, and reboot. Continue?"), tr("Rebuild"), this)) {
       parent->keepScreenOn = true;
       fullRebuildButton->setEnabled(false);
@@ -122,7 +122,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
       });
 
       QObject::connect(proc, static_cast<void(QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),
-          [proc, fullRebuildButton, this](int exitCode, QProcess::ExitStatus) {
+          [proc, fullRebuildButton, parent](int exitCode, QProcess::ExitStatus) {
         proc->deleteLater();
         if (exitCode == 0) {
           fullRebuildButton->setValue(tr("Build complete! Rebooting..."));
