@@ -478,8 +478,20 @@ public:
     refresh();
   }
 
+  void setDisplayScale(float scale, int decimals = -1) {
+    displayScale = scale;
+    displayDecimals = decimals;
+    updateDisplay();
+  }
+
   void updateDisplay() {
-    QString displayText = QString::number(value) + label;
+    float displayValue = value * displayScale;
+    QString displayText;
+    if (displayDecimals >= 0) {
+      displayText = QString::number(displayValue, 'f', displayDecimals) + label;
+    } else {
+      displayText = QString::number(value) + label;
+    }
 
     for (const std::pair<const float, QString> &entry : value_labels) {
       if (std::lround(entry.first * factor) == std::lround(value * factor)) {
@@ -526,6 +538,9 @@ private:
   bool fast_increase;
   bool increment_repeating;
   bool warning_shown;
+
+  float displayScale = 1.0f;
+  int displayDecimals = -1;
 
   float interval;
   float factor;

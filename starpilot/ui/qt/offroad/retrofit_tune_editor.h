@@ -261,9 +261,9 @@ protected:
     // draw curves at 3 speeds
     struct SpeedLine { float v; QColor color; QString label; };
     SpeedLine speeds[] = {
-      {10.0f, QColor(100, 100, 200), "10 m/s"},
-      {15.0f, QColor(200, 200, 100), "15 m/s"},
-      {20.0f, QColor(0x58, 0xD6, 0x8D), "20 m/s"},
+      {10.0f, QColor(100, 100, 200), "22 mph"},
+      {15.0f, QColor(200, 200, 100), "34 mph"},
+      {20.0f, QColor(0x58, 0xD6, 0x8D), "45 mph"},
     };
 
     for (auto &sl : speeds) {

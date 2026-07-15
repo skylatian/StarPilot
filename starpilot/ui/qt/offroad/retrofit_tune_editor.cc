@@ -141,6 +141,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     float max;
     float step;
     QString desc;
+    bool isMph = false;
   };
 
   FFWindowPreviewWidget *ffPreview = new FFWindowPreviewWidget(this);
@@ -202,6 +203,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     });
 
     QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [key, ffPreview, this](float value) {
+      params.putFloat(key, value);
       auto it = s_flmKnobMap.find(key);
       if (it != s_flmKnobMap.end()) {
         writeFlmKnob(it->second, value);
@@ -236,9 +238,9 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
         "0 = no extra push (default for dual PS, which already responds strongly). "
         "Negative = dampen turn-in.")},
     {"RetrofitTuneTransitionSpeed", tr("Transition Speed"), 10.0f, 1.0f, 30.0f, 1.0f,
-     tr("Speed (m/s) below which the turn dynamics effects are strongest. "
+     tr("Speed below which the turn dynamics effects are strongest. "
         "At low speeds, the boost/taper are fully active. "
-        "Above this speed, they gradually fade. 10 = ~22 mph.")},
+        "Above this speed, they gradually fade."), true},
     {"RetrofitTunePhaseScale", tr("Phase Scale"), 0.10f, 0.01f, 1.0f, 0.01f,
      tr("How quickly the system detects you're entering or exiting a turn. "
         "Smaller = reacts to smaller steering changes. "
@@ -271,12 +273,17 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
   for (auto &tp : turnParams) {
     std::vector<QString> resetBtn{tr("Reset")};
+    QString defStr = tp.isMph ? QString::number(tp.defaultVal * 2.237f, 'f', 0) + " mph"
+                              : QString::number(tp.defaultVal, 'g', 3);
     auto *toggle = new StarPilotParamValueButtonControl(
         tp.key,
-        tr("%1 (Dflt: %2)").arg(tp.label).arg(QString::number(tp.defaultVal, 'g', 3)),
+        tr("%1 (Dflt: %2)").arg(tp.label).arg(defStr),
         tr("<b>%1</b>").arg(tp.desc), "",
-        tp.min, tp.max, QString(), std::map<float, QString>(), tp.step,
+        tp.min, tp.max, tp.isMph ? QString(" mph") : QString(), std::map<float, QString>(), tp.step,
         false, {}, resetBtn, false, false, 150);
+    if (tp.isMph) {
+      toggle->setDisplayScale(2.237f, 0);
+    }
     if (forceOpen) toggle->showDescription();
     turnList->addItem(toggle);
 
@@ -298,6 +305,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     });
 
     QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [key, turnPreview, this](float value) {
+      params.putFloat(key, value);
       auto it = s_flmKnobMap.find(key);
       if (it != s_flmKnobMap.end()) {
         writeFlmKnob(it->second, value);
@@ -336,24 +344,29 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
         "Smaller = sharp cutoff (full taper then suddenly none). "
         "Larger = smooth transition between tapered and normal steering.")},
     {"RetrofitTuneCenterTaperSpeed", tr("Speed Threshold"), 14.0f, 1.0f, 35.0f, 1.0f,
-     tr("Speed above which the taper activates (m/s). 14 = ~31 mph. "
+     tr("Speed above which the taper activates. "
         "Lower = taper kicks in at lower speeds. "
-        "Higher = only active at highway speeds.")},
+        "Higher = only active at highway speeds."), true},
     {"RetrofitTuneCenterTaperSpeedWidth", tr("Speed Width"), 2.5f, 0.1f, 10.0f, 0.5f,
      tr("How gradually the taper ramps in as you speed up. "
         "Smaller = snaps on at the threshold speed. "
-        "Larger = fades in over a wider speed range.")},
+        "Larger = fades in over a wider speed range."), true},
   };
 
   std::vector<StarPilotParamValueButtonControl *> centerToggles;
   for (auto &cp : centerParams) {
     std::vector<QString> resetBtn{tr("Reset")};
+    QString cpDefStr = cp.isMph ? QString::number(cp.defaultVal * 2.237f, 'f', 0) + " mph"
+                                : QString::number(cp.defaultVal, 'g', 3);
     auto *toggle = new StarPilotParamValueButtonControl(
         cp.key,
-        tr("%1 (Dflt: %2)").arg(cp.label).arg(QString::number(cp.defaultVal, 'g', 3)),
+        tr("%1 (Dflt: %2)").arg(cp.label).arg(cpDefStr),
         tr("<b>%1</b>").arg(cp.desc), "",
-        cp.min, cp.max, QString(), std::map<float, QString>(), cp.step,
+        cp.min, cp.max, cp.isMph ? QString(" mph") : QString(), std::map<float, QString>(), cp.step,
         false, {}, resetBtn, false, false, 150);
+    if (cp.isMph) {
+      toggle->setDisplayScale(2.237f, 0);
+    }
     if (forceOpen) toggle->showDescription();
     centerList->addItem(toggle);
     centerToggles.push_back(toggle);
@@ -378,10 +391,11 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [centerPreview, key, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [centerPreview, key, this](float value) {
+      params.putFloat(key, value);
       auto it = s_flmKnobMap.find(key);
       if (it != s_flmKnobMap.end()) {
-        writeFlmKnob(it->second, params.getFloat(key));
+        writeFlmKnob(it->second, value);
         ensureFlmActive();
       }
       centerPreview->setTaperParams(
