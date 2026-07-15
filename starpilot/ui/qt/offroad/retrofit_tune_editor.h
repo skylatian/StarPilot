@@ -2,8 +2,11 @@
 
 #include <QPainter>
 #include <QMouseEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <cmath>
 #include <vector>
+#include <map>
 
 #include "starpilot/ui/qt/offroad/starpilot_settings.h"
 
@@ -505,7 +508,75 @@ public:
 signals:
   void openSubPanel();
 
+  float readFlmKnob(const std::string &knobName, float defaultVal) {
+    std::string raw = params.get("FLMActiveOverrides");
+    if (raw.empty()) return defaultVal;
+    QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(raw));
+    if (!doc.isObject()) return defaultVal;
+    QJsonObject vk = doc.object().value("vehicleKnobs").toObject();
+    if (vk.isEmpty()) return defaultVal;
+    QJsonValue v = vk.value(QString::fromStdString(knobName));
+    return v.isDouble() ? (float)v.toDouble() : defaultVal;
+  }
+
+  void writeFlmKnob(const std::string &knobName, float value) {
+    std::string raw = params.get("FLMActiveOverrides");
+    QJsonDocument doc;
+    QJsonObject root;
+    if (!raw.empty()) {
+      doc = QJsonDocument::fromJson(QByteArray::fromStdString(raw));
+      if (doc.isObject()) root = doc.object();
+    }
+    if (!root.contains("schemaVersion")) root["schemaVersion"] = 1;
+    if (!root.contains("baseFrictionThresholds")) root["baseFrictionThresholds"] = QJsonObject();
+    QJsonObject vk = root.value("vehicleKnobs").toObject();
+    vk[QString::fromStdString(knobName)] = (double)value;
+    root["vehicleKnobs"] = vk;
+    params.put("FLMActiveOverrides", QJsonDocument(root).toJson(QJsonDocument::Compact).toStdString());
+  }
+
+  void ensureFlmActive() {
+    if (!params.getBool("FLMTrialApplied")) {
+      params.putBool("FLMTrialApplied", true);
+    }
+    std::string profileId = params.get("FLMActiveProfileId");
+    if (profileId.empty()) {
+      params.put("FLMActiveProfileId", "manual_retrofit_tune");
+    }
+  }
+
+  void syncFlmToParams() {
+    static const std::pair<const char*, const char*> knobMap[] = {
+      {"RetrofitTuneFFGain", "toyota_corolla_retrofit.ff_gain"},
+      {"RetrofitTuneTurnInBoost", "toyota_corolla_retrofit.turn_in_boost"},
+      {"RetrofitTuneUnwindTaper", "toyota_corolla_retrofit.unwind_taper"},
+      {"RetrofitTuneCenterTaperMax", "toyota_corolla_retrofit.center_taper_max"},
+      {"RetrofitTuneTurnInThresholdReduction", "toyota_corolla_retrofit.turn_in_threshold_reduction"},
+      {"RetrofitTuneUnwindThresholdIncrease", "toyota_corolla_retrofit.unwind_threshold_increase"},
+      {"RetrofitTuneTurnInFrictionBoost", "toyota_corolla_retrofit.turn_in_friction_boost"},
+      {"RetrofitTuneUnwindFrictionReduction", "toyota_corolla_retrofit.unwind_friction_reduction"},
+    };
+    for (auto &[paramKey, knobName] : knobMap) {
+      float defVal = params.getFloat(paramKey);
+      float flmVal = readFlmKnob(knobName, defVal);
+      if (flmVal != defVal) {
+        params.putFloat(paramKey, flmVal);
+      }
+    }
+  }
+
 private:
   QStackedLayout *m_tuneLayout = nullptr;
   Params params;
+
+  static inline const std::map<std::string, std::string> s_flmKnobMap = {
+    {"RetrofitTuneFFGain", "toyota_corolla_retrofit.ff_gain"},
+    {"RetrofitTuneTurnInBoost", "toyota_corolla_retrofit.turn_in_boost"},
+    {"RetrofitTuneUnwindTaper", "toyota_corolla_retrofit.unwind_taper"},
+    {"RetrofitTuneCenterTaperMax", "toyota_corolla_retrofit.center_taper_max"},
+    {"RetrofitTuneTurnInThresholdReduction", "toyota_corolla_retrofit.turn_in_threshold_reduction"},
+    {"RetrofitTuneUnwindThresholdIncrease", "toyota_corolla_retrofit.unwind_threshold_increase"},
+    {"RetrofitTuneTurnInFrictionBoost", "toyota_corolla_retrofit.turn_in_friction_boost"},
+    {"RetrofitTuneUnwindFrictionReduction", "toyota_corolla_retrofit.unwind_friction_reduction"},
+  };
 };

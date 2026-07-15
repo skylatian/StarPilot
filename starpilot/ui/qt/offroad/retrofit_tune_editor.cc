@@ -1,7 +1,18 @@
 #include "starpilot/ui/qt/offroad/retrofit_tune_editor.h"
 
+static constexpr float FF_ONSET = 0.18f;
+static constexpr float FF_ONSET_WIDTH = 0.08f;
+static constexpr float FF_CUTOFF = 1.10f;
+static constexpr float FF_CUTOFF_WIDTH = 0.30f;
+static constexpr float CENTER_TAPER_LAT = 0.14f;
+static constexpr float CENTER_TAPER_LAT_WIDTH = 0.04f;
+static constexpr float CENTER_TAPER_SPEED = 14.0f;
+static constexpr float CENTER_TAPER_SPEED_WIDTH = 2.5f;
+
 RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, QStackedLayout *mainLayout, bool forceOpen)
     : StarPilotListWidget(parent) {
+
+  syncFlmToParams();
 
   m_tuneLayout = new QStackedLayout();
   QStackedLayout *tuneLayout = m_tuneLayout;
@@ -36,7 +47,6 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   // TABLE OVERVIEW (Panel 0)
   // ============================================================
 
-  // --- KP Curve group ---
   ButtonControl *kpButton = new ButtonControl(
       tr("KP Curve (offroad)"),
       tr("EDIT"),
@@ -50,12 +60,11 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   if (forceOpen) kpButton->showDescription();
   tableList->addItem(kpButton);
 
-  // --- FF Window group ---
   ButtonControl *ffButton = new ButtonControl(
-      tr("FF Window (live)"),
+      tr("FF Gain (live, FLM)"),
       tr("EDIT"),
       tr("<b>Extra steering effort in mid-range turns.</b> Adds a boost to steering "
-         "commands during moderate curves, tapering off for gentle and sharp turns. "
+         "commands during moderate curves. Synced with FLM. "
          "Takes effect immediately."));
   QObject::connect(ffButton, &ButtonControl::clicked, [tuneLayout, ffPanel, this]() {
     tuneLayout->setCurrentWidget(ffPanel);
@@ -64,13 +73,12 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   if (forceOpen) ffButton->showDescription();
   tableList->addItem(ffButton);
 
-  // --- Turn Dynamics group ---
   ButtonControl *turnButton = new ButtonControl(
-      tr("Turn Dynamics (live)"),
+      tr("Turn Dynamics (live, FLM)"),
       tr("EDIT"),
       tr("<b>How steering behaves entering and exiting turns.</b> Adjusts how much "
          "extra effort is added when turning in, how much is removed when straightening out, "
-         "and how the wheel resists small movements. Takes effect immediately."));
+         "and how the wheel resists small movements. Synced with FLM. Takes effect immediately."));
   QObject::connect(turnButton, &ButtonControl::clicked, [tuneLayout, turnPanel, this]() {
     tuneLayout->setCurrentWidget(turnPanel);
     emit openSubPanel();
@@ -78,13 +86,12 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   if (forceOpen) turnButton->showDescription();
   tableList->addItem(turnButton);
 
-  // --- Center Taper group ---
   ButtonControl *centerButton = new ButtonControl(
-      tr("Center Taper (live)"),
+      tr("Center Taper (live, FLM)"),
       tr("EDIT"),
       tr("<b>Calms steering on straight highways.</b> Reduces steering output when "
-         "driving mostly straight at higher speeds. Fixes the small left-right jitter "
-         "you might see on long straight roads. Takes effect immediately."));
+         "driving mostly straight at higher speeds. Synced with FLM. "
+         "Takes effect immediately."));
   QObject::connect(centerButton, &ButtonControl::clicked, [tuneLayout, centerPanel, this]() {
     tuneLayout->setCurrentWidget(centerPanel);
     emit openSubPanel();
@@ -93,7 +100,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   tableList->addItem(centerButton);
 
   // ============================================================
-  // KP CURVE EDITOR (Panel 1)
+  // KP CURVE EDITOR (Panel 1) — not FLM-backed
   // ============================================================
 
   std::vector<DraggableCurveWidget::PointDef> kpPoints = {
@@ -132,7 +139,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   kpList->addItem(kpResetButton);
 
   // ============================================================
-  // FF WINDOW EDITOR (Panel 2)
+  // FF WINDOW EDITOR (Panel 2) — ff_gain is FLM-backed
   // ============================================================
 
   struct TuneParam {
@@ -148,28 +155,14 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   FFWindowPreviewWidget *ffPreview = new FFWindowPreviewWidget(this);
   ffPreview->setFFParams(
       params.getFloat("RetrofitTuneFFGain"),
-      params.getFloat("RetrofitTuneFFOnset"),
-      params.getFloat("RetrofitTuneFFOnsetWidth"),
-      params.getFloat("RetrofitTuneFFCutoff"),
-      params.getFloat("RetrofitTuneFFCutoffWidth"));
+      FF_ONSET, FF_ONSET_WIDTH, FF_CUTOFF, FF_CUTOFF_WIDTH);
   ffList->addItem(ffPreview);
 
   TuneParam ffParams[] = {
-    {"RetrofitTuneFFGain", tr("FF Gain"), 0.04f, 0.0f, 0.5f, 0.01f,
+    {"RetrofitTuneFFGain", tr("FF Gain"), 0.04f, 0.0f, 0.30f, 0.01f,
      tr("How much extra steering effort to add in the boost zone (see curve above). "
-        "Higher = more aggressive mid-corner steering. 0 = no boost at all.")},
-    {"RetrofitTuneFFOnset", tr("FF Onset"), 0.18f, 0.0f, 2.0f, 0.02f,
-     tr("How hard you need to be turning before the boost kicks in. "
-        "Lower = boost starts in gentler curves. Higher = only boosts in sharper turns.")},
-    {"RetrofitTuneFFOnsetWidth", tr("Onset Width"), 0.08f, 0.01f, 1.0f, 0.01f,
-     tr("How gradually the boost ramps in. "
-        "Smaller = snaps on quickly. Larger = fades in smoothly over a wider range of turning.")},
-    {"RetrofitTuneFFCutoff", tr("FF Cutoff"), 1.10f, 0.1f, 3.0f, 0.05f,
-     tr("How hard you need to be turning before the boost starts fading out. "
-        "Lower = boost drops off in moderate turns. Higher = boost stays active into sharper turns.")},
-    {"RetrofitTuneFFCutoffWidth", tr("Cutoff Width"), 0.30f, 0.01f, 2.0f, 0.05f,
-     tr("How gradually the boost fades at the cutoff. "
-        "Smaller = drops off abruptly. Larger = tapers out gradually.")},
+        "Higher = more aggressive mid-corner steering. 0 = no boost at all. "
+        "Synced with FLM profile.")},
   };
 
   for (auto &fp : ffParams) {
@@ -188,28 +181,37 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, ffPreview, this]() {
       if (StarPilotConfirmationDialog::yesorno(tr("Reset to default?"), this)) {
         params.putFloat(key, defVal);
+        auto it = s_flmKnobMap.find(key);
+        if (it != s_flmKnobMap.end()) {
+          writeFlmKnob(it->second, defVal);
+          ensureFlmActive();
+        }
         toggle->refresh();
         ffPreview->setFFParams(
             params.getFloat("RetrofitTuneFFGain"),
-            params.getFloat("RetrofitTuneFFOnset"),
-            params.getFloat("RetrofitTuneFFOnsetWidth"),
-            params.getFloat("RetrofitTuneFFCutoff"),
-            params.getFloat("RetrofitTuneFFCutoffWidth"));
+            FF_ONSET, FF_ONSET_WIDTH, FF_CUTOFF, FF_CUTOFF_WIDTH);
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [ffPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [key, ffPreview, this](float value) {
+      auto it = s_flmKnobMap.find(key);
+      if (it != s_flmKnobMap.end()) {
+        writeFlmKnob(it->second, value);
+        ensureFlmActive();
+      }
       ffPreview->setFFParams(
-          params.getFloat("RetrofitTuneFFGain"),
-          params.getFloat("RetrofitTuneFFOnset"),
-          params.getFloat("RetrofitTuneFFOnsetWidth"),
-          params.getFloat("RetrofitTuneFFCutoff"),
-          params.getFloat("RetrofitTuneFFCutoffWidth"));
+          value,
+          FF_ONSET, FF_ONSET_WIDTH, FF_CUTOFF, FF_CUTOFF_WIDTH);
     });
   }
 
+  QLabel *ffNote = new QLabel(tr("Onset/cutoff shape is fixed. Only gain is FLM-tunable."));
+  ffNote->setStyleSheet("color: #999; font-size: 28px; padding: 10px 20px;");
+  ffNote->setWordWrap(true);
+  ffList->addItem(ffNote);
+
   // ============================================================
-  // TURN DYNAMICS (Panel 3)
+  // TURN DYNAMICS (Panel 3) — 6 FLM-backed sliders
   // ============================================================
 
   TurnDynamicsPreviewWidget *turnPreview = new TurnDynamicsPreviewWidget(this);
@@ -219,46 +221,28 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   turnList->addItem(turnPreview);
 
   TuneParam turnParams[] = {
-    {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.0f, 0.05f,
+    {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.20f, 0.05f,
      tr("How much to back off steering when exiting a turn (straightening out). "
         "Higher = pulls back more aggressively, preventing overshoot past center. "
-        "0 = no reduction. Too high can make turn exits feel jerky.")},
-    {"RetrofitTuneTurnInBoost", tr("Turn-In Boost"), 0.0f, 0.0f, 1.0f, 0.05f,
+        "0 = no reduction. Synced with FLM profile.")},
+    {"RetrofitTuneTurnInBoost", tr("Turn-In Boost"), 0.0f, -0.10f, 0.60f, 0.05f,
      tr("Extra steering effort when initiating a turn. "
         "0 = no extra push (default for dual PS, which already responds strongly). "
-        "Increase if the car feels sluggish entering curves.")},
-    {"RetrofitTuneTransitionSpeed", tr("Transition Speed"), 10.0f, 1.0f, 30.0f, 1.0f,
-     tr("Speed (m/s) below which the turn dynamics effects are strongest. "
-        "At low speeds, the boost/taper are fully active. "
-        "Above this speed, they gradually fade. 10 = ~22 mph.")},
-    {"RetrofitTunePhaseScale", tr("Phase Scale"), 0.10f, 0.01f, 1.0f, 0.01f,
-     tr("How quickly the system detects you're entering or exiting a turn. "
-        "Smaller = reacts to smaller steering changes. "
-        "Larger = needs a more obvious turn before applying boost/taper.")},
-    {"RetrofitTuneFrictionLatRise", tr("Friction Lat Rise"), 0.20f, 0.01f, 2.0f, 0.02f,
-     tr("How much turning activates the friction adjustments below. "
-        "Smaller = friction changes happen even in gentle curves. "
-        "Larger = only applies in harder turns.")},
-    {"RetrofitTuneFrictionJerkRise", tr("Friction Jerk Rise"), 0.24f, 0.01f, 2.0f, 0.02f,
-     tr("How much a sudden change in steering activates the friction adjustments. "
-        "Smaller = quick flicks trigger friction changes. "
-        "Larger = only sustained turning matters.")},
-    {"RetrofitTuneTurnInThresholdReduction", tr("TI Thresh. Reduction"), 0.10f, 0.0f, 0.5f, 0.02f,
+        "Negative = dampen turn-in. Synced with FLM profile.")},
+    {"RetrofitTuneTurnInThresholdReduction", tr("TI Thresh. Reduction"), 0.10f, 0.0f, 0.50f, 0.02f,
      tr("Adds extra resistance when entering a turn, helping the wheel hold its position. "
-        "Higher = more holding force during turn-in. "
-        "Useful if the wheel feels loose when starting to turn.")},
-    {"RetrofitTuneUnwindThresholdIncrease", tr("UW Thresh. Increase"), 0.50f, 0.0f, 1.0f, 0.05f,
+        "Higher = more holding force during turn-in. Synced with FLM profile.")},
+    {"RetrofitTuneUnwindThresholdIncrease", tr("UW Thresh. Increase"), 0.50f, 0.0f, 1.00f, 0.05f,
      tr("Reduces resistance when straightening out, letting the wheel return freely. "
-        "Higher = less holding force during turn exit. "
-        "Useful if the wheel feels sticky returning to center.")},
-    {"RetrofitTuneTurnInFrictionBoost", tr("TI Friction Boost"), 0.04f, 0.0f, 0.5f, 0.01f,
+        "Higher = less holding force during turn exit. Synced with FLM profile.")},
+    {"RetrofitTuneTurnInFrictionBoost", tr("TI Friction Boost"), 0.04f, 0.0f, 0.20f, 0.01f,
      tr("Adds extra overall friction compensation when entering turns. "
         "Higher = more torque to overcome real steering friction during turn-in. "
-        "Increase if the car understeers slightly at the start of turns.")},
-    {"RetrofitTuneUnwindFrictionReduction", tr("UW Friction Reduction"), 0.30f, 0.0f, 1.0f, 0.05f,
+        "Synced with FLM profile.")},
+    {"RetrofitTuneUnwindFrictionReduction", tr("UW Friction Reduction"), 0.30f, 0.0f, 0.60f, 0.05f,
      tr("Reduces friction compensation when straightening out. "
         "Higher = less torque fighting the wheel as it returns to center. "
-        "Increase if the car overshoots when exiting turns.")},
+        "Synced with FLM profile.")},
   };
 
   for (auto &tp : turnParams) {
@@ -277,6 +261,11 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, turnPreview, this]() {
       if (StarPilotConfirmationDialog::yesorno(tr("Reset to default?"), this)) {
         params.putFloat(key, defVal);
+        auto it = s_flmKnobMap.find(key);
+        if (it != s_flmKnobMap.end()) {
+          writeFlmKnob(it->second, defVal);
+          ensureFlmActive();
+        }
         toggle->refresh();
         turnPreview->setDynamicsParams(
             params.getFloat("RetrofitTuneTurnInBoost"),
@@ -284,7 +273,12 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [turnPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [key, turnPreview, this](float value) {
+      auto it = s_flmKnobMap.find(key);
+      if (it != s_flmKnobMap.end()) {
+        writeFlmKnob(it->second, value);
+        ensureFlmActive();
+      }
       turnPreview->setDynamicsParams(
           params.getFloat("RetrofitTuneTurnInBoost"),
           params.getFloat("RetrofitTuneUnwindTaper"));
@@ -292,42 +286,23 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   }
 
   // ============================================================
-  // CENTER TAPER (Panel 4)
+  // CENTER TAPER (Panel 4) — center_taper_max is FLM-backed
   // ============================================================
 
   CenterTaperPreviewWidget *centerPreview = new CenterTaperPreviewWidget(this);
   centerPreview->setTaperParams(
       params.getFloat("RetrofitTuneCenterTaperMax"),
-      params.getFloat("RetrofitTuneCenterTaperLat"),
-      params.getFloat("RetrofitTuneCenterTaperLatWidth"),
-      params.getFloat("RetrofitTuneCenterTaperSpeed"),
-      params.getFloat("RetrofitTuneCenterTaperSpeedWidth"));
+      CENTER_TAPER_LAT, CENTER_TAPER_LAT_WIDTH,
+      CENTER_TAPER_SPEED, CENTER_TAPER_SPEED_WIDTH);
   centerList->addItem(centerPreview);
 
   TuneParam centerParams[] = {
-    {"RetrofitTuneCenterTaperMax", tr("Taper Max"), 0.20f, 0.0f, 0.5f, 0.02f,
+    {"RetrofitTuneCenterTaperMax", tr("Taper Max"), 0.20f, 0.0f, 0.30f, 0.02f,
      tr("How much to reduce steering when going mostly straight. "
         "0 = disabled. 0.20 = 20% quieter. Increase if you see jitter on highways. "
-        "Too high can make the car slow to respond to gentle lane changes.")},
-    {"RetrofitTuneCenterTaperLat", tr("Lat Threshold"), 0.14f, 0.01f, 1.0f, 0.02f,
-     tr("How far from perfectly straight the taper still applies. "
-        "Higher = stays active during gentle curves (wider quiet zone). "
-        "Lower = only active when almost perfectly straight.")},
-    {"RetrofitTuneCenterTaperLatWidth", tr("Lat Width"), 0.04f, 0.01f, 0.5f, 0.01f,
-     tr("How gradually the taper blends in/out as you start turning. "
-        "Smaller = sharp cutoff (full taper then suddenly none). "
-        "Larger = smooth transition between tapered and normal steering.")},
-    {"RetrofitTuneCenterTaperSpeed", tr("Speed Threshold"), 14.0f, 1.0f, 35.0f, 1.0f,
-     tr("Speed above which the taper activates (m/s). 14 = ~31 mph. "
-        "Lower = taper kicks in at lower speeds. "
-        "Higher = only active at highway speeds.")},
-    {"RetrofitTuneCenterTaperSpeedWidth", tr("Speed Width"), 2.5f, 0.1f, 10.0f, 0.5f,
-     tr("How gradually the taper ramps in as you speed up. "
-        "Smaller = snaps on at the threshold speed. "
-        "Larger = fades in over a wider speed range.")},
+        "Synced with FLM profile.")},
   };
 
-  std::vector<StarPilotParamValueButtonControl *> centerToggles;
   for (auto &cp : centerParams) {
     std::vector<QString> resetBtn{tr("Reset")};
     auto *toggle = new StarPilotParamValueButtonControl(
@@ -338,31 +313,41 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
         false, {}, resetBtn, false, false, 150);
     if (forceOpen) toggle->showDescription();
     centerList->addItem(toggle);
-    centerToggles.push_back(toggle);
 
     float defVal = cp.defaultVal;
     const char *key = cp.key;
     QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, centerPreview, this]() {
       if (StarPilotConfirmationDialog::yesorno(tr("Reset to default?"), this)) {
         params.putFloat(key, defVal);
+        auto it = s_flmKnobMap.find(key);
+        if (it != s_flmKnobMap.end()) {
+          writeFlmKnob(it->second, defVal);
+          ensureFlmActive();
+        }
         toggle->refresh();
         centerPreview->setTaperParams(
-            params.getFloat("RetrofitTuneCenterTaperMax"),
-            params.getFloat("RetrofitTuneCenterTaperLat"),
-            params.getFloat("RetrofitTuneCenterTaperLatWidth"),
-            params.getFloat("RetrofitTuneCenterTaperSpeed"),
-            params.getFloat("RetrofitTuneCenterTaperSpeedWidth"));
+            defVal,
+            CENTER_TAPER_LAT, CENTER_TAPER_LAT_WIDTH,
+            CENTER_TAPER_SPEED, CENTER_TAPER_SPEED_WIDTH);
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [centerPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [key, centerPreview, this](float value) {
+      auto it = s_flmKnobMap.find(key);
+      if (it != s_flmKnobMap.end()) {
+        writeFlmKnob(it->second, value);
+        ensureFlmActive();
+      }
       centerPreview->setTaperParams(
-          params.getFloat("RetrofitTuneCenterTaperMax"),
-          params.getFloat("RetrofitTuneCenterTaperLat"),
-          params.getFloat("RetrofitTuneCenterTaperLatWidth"),
-          params.getFloat("RetrofitTuneCenterTaperSpeed"),
-          params.getFloat("RetrofitTuneCenterTaperSpeedWidth"));
+          value,
+          CENTER_TAPER_LAT, CENTER_TAPER_LAT_WIDTH,
+          CENTER_TAPER_SPEED, CENTER_TAPER_SPEED_WIDTH);
     });
   }
+
+  QLabel *centerNote = new QLabel(tr("Speed/lat thresholds are fixed. Only taper max is FLM-tunable."));
+  centerNote->setStyleSheet("color: #999; font-size: 28px; padding: 10px 20px;");
+  centerNote->setWordWrap(true);
+  centerList->addItem(centerNote);
 
 }
