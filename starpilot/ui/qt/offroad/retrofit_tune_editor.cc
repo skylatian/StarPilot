@@ -40,8 +40,9 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ButtonControl *kpButton = new ButtonControl(
       tr("KP Curve (offroad)"),
       tr("EDIT"),
-      tr("<b>Speed-dependent proportional gain.</b> Lower values reduce steering authority. "
-         "Requires offroad cycle to take effect."));
+      tr("<b>How aggressively the car corrects steering errors at each speed.</b> "
+         "Lower values = gentler, slower corrections. Higher = snappier but can oscillate. "
+         "Requires offroad cycle."));
   QObject::connect(kpButton, &ButtonControl::clicked, [tuneLayout, kpPanel, this]() {
     tuneLayout->setCurrentWidget(kpPanel);
     emit openSubPanel();
@@ -53,8 +54,9 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ButtonControl *ffButton = new ButtonControl(
       tr("FF Window (live)"),
       tr("EDIT"),
-      tr("<b>Feedforward scaling bell curve.</b> Controls how FF boost varies "
-         "with lateral acceleration magnitude. Takes effect immediately."));
+      tr("<b>Extra steering effort in mid-range turns.</b> Adds a boost to steering "
+         "commands during moderate curves, tapering off for gentle and sharp turns. "
+         "Takes effect immediately."));
   QObject::connect(ffButton, &ButtonControl::clicked, [tuneLayout, ffPanel, this]() {
     tuneLayout->setCurrentWidget(ffPanel);
     emit openSubPanel();
@@ -66,8 +68,9 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ButtonControl *turnButton = new ButtonControl(
       tr("Turn Dynamics (live)"),
       tr("EDIT"),
-      tr("<b>Turn-in boost, unwind taper, and friction shaping.</b> Controls "
-         "how the controller behaves during turn entry and exit. Takes effect immediately."));
+      tr("<b>How steering behaves entering and exiting turns.</b> Adjusts how much "
+         "extra effort is added when turning in, how much is removed when straightening out, "
+         "and how the wheel resists small movements. Takes effect immediately."));
   QObject::connect(turnButton, &ButtonControl::clicked, [tuneLayout, turnPanel, this]() {
     tuneLayout->setCurrentWidget(turnPanel);
     emit openSubPanel();
@@ -79,8 +82,9 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ButtonControl *centerButton = new ButtonControl(
       tr("Center Taper (live)"),
       tr("EDIT"),
-      tr("<b>Reduces output near straight-ahead at highway speed.</b> "
-         "Fixes jitter/oscillation on straight roads. Takes effect immediately."));
+      tr("<b>Calms steering on straight highways.</b> Reduces steering output when "
+         "driving mostly straight at higher speeds. Fixes the small left-right jitter "
+         "you might see on long straight roads. Takes effect immediately."));
   QObject::connect(centerButton, &ButtonControl::clicked, [tuneLayout, centerPanel, this]() {
     tuneLayout->setCurrentWidget(centerPanel);
     emit openSubPanel();
@@ -152,15 +156,20 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
   TuneParam ffParams[] = {
     {"RetrofitTuneFFGain", tr("FF Gain"), 0.04f, 0.0f, 0.5f, 0.01f,
-     tr("Peak feedforward boost magnitude. Higher = more FF near the onset/cutoff window center.")},
+     tr("How much extra steering effort to add in the boost zone (see curve above). "
+        "Higher = more aggressive mid-corner steering. 0 = no boost at all.")},
     {"RetrofitTuneFFOnset", tr("FF Onset"), 0.18f, 0.0f, 2.0f, 0.02f,
-     tr("Lateral accel where FF boost begins ramping up.")},
+     tr("How hard you need to be turning before the boost kicks in. "
+        "Lower = boost starts in gentler curves. Higher = only boosts in sharper turns.")},
     {"RetrofitTuneFFOnsetWidth", tr("Onset Width"), 0.08f, 0.01f, 1.0f, 0.01f,
-     tr("How sharp the onset transition is. Smaller = sharper.")},
+     tr("How gradually the boost ramps in. "
+        "Smaller = snaps on quickly. Larger = fades in smoothly over a wider range of turning.")},
     {"RetrofitTuneFFCutoff", tr("FF Cutoff"), 1.10f, 0.1f, 3.0f, 0.05f,
-     tr("Lateral accel where FF boost begins ramping down.")},
+     tr("How hard you need to be turning before the boost starts fading out. "
+        "Lower = boost drops off in moderate turns. Higher = boost stays active into sharper turns.")},
     {"RetrofitTuneFFCutoffWidth", tr("Cutoff Width"), 0.30f, 0.01f, 2.0f, 0.05f,
-     tr("How sharp the cutoff transition is. Smaller = sharper.")},
+     tr("How gradually the boost fades at the cutoff. "
+        "Smaller = drops off abruptly. Larger = tapers out gradually.")},
   };
 
   for (auto &fp : ffParams) {
@@ -211,25 +220,45 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
   TuneParam turnParams[] = {
     {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.0f, 0.05f,
-     tr("FF reduction during turn exit. 0=none, 1=full reduction. Prevents overshoot when straightening.")},
+     tr("How much to back off steering when exiting a turn (straightening out). "
+        "Higher = pulls back more aggressively, preventing overshoot past center. "
+        "0 = no reduction. Too high can make turn exits feel jerky.")},
     {"RetrofitTuneTurnInBoost", tr("Turn-In Boost"), 0.0f, 0.0f, 1.0f, 0.05f,
-     tr("Extra FF during turn entry. 0=none. With dual PS, turn entry is already strong; increase only if understeering into turns.")},
+     tr("Extra steering effort when initiating a turn. "
+        "0 = no extra push (default for dual PS, which already responds strongly). "
+        "Increase if the car feels sluggish entering curves.")},
     {"RetrofitTuneTransitionSpeed", tr("Transition Speed"), 10.0f, 1.0f, 30.0f, 1.0f,
-     tr("Speed below which low-speed scaling is most active (m/s). Lower = transitions happen at slower speeds only.")},
+     tr("Speed (m/s) below which the turn dynamics effects are strongest. "
+        "At low speeds, the boost/taper are fully active. "
+        "Above this speed, they gradually fade. 10 = ~22 mph.")},
     {"RetrofitTunePhaseScale", tr("Phase Scale"), 0.10f, 0.01f, 1.0f, 0.01f,
-     tr("Sensitivity of turn-in/unwind detection. Smaller = more sensitive phase detection.")},
+     tr("How quickly the system detects you're entering or exiting a turn. "
+        "Smaller = reacts to smaller steering changes. "
+        "Larger = needs a more obvious turn before applying boost/taper.")},
     {"RetrofitTuneFrictionLatRise", tr("Friction Lat Rise"), 0.20f, 0.01f, 2.0f, 0.02f,
-     tr("How quickly friction shaping ramps up with lateral acceleration.")},
+     tr("How much turning activates the friction adjustments below. "
+        "Smaller = friction changes happen even in gentle curves. "
+        "Larger = only applies in harder turns.")},
     {"RetrofitTuneFrictionJerkRise", tr("Friction Jerk Rise"), 0.24f, 0.01f, 2.0f, 0.02f,
-     tr("How quickly friction shaping ramps up with lateral jerk.")},
+     tr("How much a sudden change in steering activates the friction adjustments. "
+        "Smaller = quick flicks trigger friction changes. "
+        "Larger = only sustained turning matters.")},
     {"RetrofitTuneTurnInThresholdReduction", tr("TI Thresh. Reduction"), 0.10f, 0.0f, 0.5f, 0.02f,
-     tr("How much the friction threshold drops during turn-in. Lower threshold = more friction compensation.")},
+     tr("Adds extra resistance when entering a turn, helping the wheel hold its position. "
+        "Higher = more holding force during turn-in. "
+        "Useful if the wheel feels loose when starting to turn.")},
     {"RetrofitTuneUnwindThresholdIncrease", tr("UW Thresh. Increase"), 0.50f, 0.0f, 1.0f, 0.05f,
-     tr("How much the friction threshold rises during unwind. Higher threshold = less friction compensation when straightening.")},
+     tr("Reduces resistance when straightening out, letting the wheel return freely. "
+        "Higher = less holding force during turn exit. "
+        "Useful if the wheel feels sticky returning to center.")},
     {"RetrofitTuneTurnInFrictionBoost", tr("TI Friction Boost"), 0.04f, 0.0f, 0.5f, 0.01f,
-     tr("Extra friction scale factor applied during turn-in.")},
+     tr("Adds extra overall friction compensation when entering turns. "
+        "Higher = more torque to overcome real steering friction during turn-in. "
+        "Increase if the car understeers slightly at the start of turns.")},
     {"RetrofitTuneUnwindFrictionReduction", tr("UW Friction Reduction"), 0.30f, 0.0f, 1.0f, 0.05f,
-     tr("Friction scale reduction during unwind. Lets the wheel return more freely.")},
+     tr("Reduces friction compensation when straightening out. "
+        "Higher = less torque fighting the wheel as it returns to center. "
+        "Increase if the car overshoots when exiting turns.")},
   };
 
   for (auto &tp : turnParams) {
@@ -277,15 +306,25 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
   TuneParam centerParams[] = {
     {"RetrofitTuneCenterTaperMax", tr("Taper Max"), 0.20f, 0.0f, 0.5f, 0.02f,
-     tr("Maximum output reduction near straight-ahead. 0=disabled, 0.20=20% reduction.")},
+     tr("How much to reduce steering when going mostly straight. "
+        "0 = disabled. 0.20 = 20% quieter. Increase if you see jitter on highways. "
+        "Too high can make the car slow to respond to gentle lane changes.")},
     {"RetrofitTuneCenterTaperLat", tr("Lat Threshold"), 0.14f, 0.01f, 1.0f, 0.02f,
-     tr("Lateral accel below which taper is active. Higher = taper affects wider range of steering.")},
+     tr("How far from perfectly straight the taper still applies. "
+        "Higher = stays active during gentle curves (wider quiet zone). "
+        "Lower = only active when almost perfectly straight.")},
     {"RetrofitTuneCenterTaperLatWidth", tr("Lat Width"), 0.04f, 0.01f, 0.5f, 0.01f,
-     tr("Sharpness of lateral accel transition. Smaller = sharper on/off.")},
+     tr("How gradually the taper blends in/out as you start turning. "
+        "Smaller = sharp cutoff (full taper then suddenly none). "
+        "Larger = smooth transition between tapered and normal steering.")},
     {"RetrofitTuneCenterTaperSpeed", tr("Speed Threshold"), 14.0f, 1.0f, 35.0f, 1.0f,
-     tr("Speed above which taper activates (m/s). ~14 m/s = 31 mph.")},
+     tr("Speed above which the taper activates (m/s). 14 = ~31 mph. "
+        "Lower = taper kicks in at lower speeds. "
+        "Higher = only active at highway speeds.")},
     {"RetrofitTuneCenterTaperSpeedWidth", tr("Speed Width"), 2.5f, 0.1f, 10.0f, 0.5f,
-     tr("Sharpness of speed transition. Smaller = sharper on/off at the threshold.")},
+     tr("How gradually the taper ramps in as you speed up. "
+        "Smaller = snaps on at the threshold speed. "
+        "Larger = fades in over a wider speed range.")},
   };
 
   std::vector<StarPilotParamValueButtonControl *> centerToggles;
