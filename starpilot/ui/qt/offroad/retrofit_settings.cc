@@ -394,8 +394,12 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     QWidget *current = retrofitLayout->currentWidget();
     if (current == advancedSteeringPanel) {
       retrofitLayout->setCurrentWidget(steeringPanel);
-    } else if (current == tuneTablePanel && !tuneTableWidget->isShowingTableOverview()) {
-      // detail→table handled by inner navigation; don't propagate
+    } else if (current == tuneTablePanel) {
+      if (!tuneTableWidget->isShowingTableOverview()) {
+        tuneTableWidget->closeDetailPanel();
+      } else {
+        retrofitLayout->setCurrentWidget(retrofitPanel);
+      }
     } else {
       retrofitLayout->setCurrentWidget(retrofitPanel);
     }

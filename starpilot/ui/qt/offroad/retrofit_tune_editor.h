@@ -297,6 +297,198 @@ private:
   float m_speed = 14.0f, m_speed_w = 2.5f;
 };
 
+class FFWindowPreviewWidget : public QWidget {
+  Q_OBJECT
+
+public:
+  explicit FFWindowPreviewWidget(QWidget *parent = nullptr) : QWidget(parent) {
+    setFixedHeight(220);
+    setContentsMargins(0, 0, 0, 0);
+  }
+
+  void setFFParams(float gain, float onset, float onset_w, float cutoff, float cutoff_w) {
+    m_gain = gain; m_onset = onset; m_onset_w = std::max(onset_w, 0.01f);
+    m_cutoff = cutoff; m_cutoff_w = std::max(cutoff_w, 0.01f);
+    update();
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    const int w = width(), h = height();
+    const int pad_l = 65, pad_r = 25, pad_t = 20, pad_b = 40;
+    const int plot_w = w - pad_l - pad_r;
+    const int plot_h = h - pad_t - pad_b;
+
+    p.fillRect(rect(), QColor(30, 30, 30));
+    QRect plotRect(pad_l, pad_t, plot_w, plot_h);
+    p.fillRect(plotRect, QColor(20, 20, 20));
+
+    const float x_min = 0.0f, x_max = 2.0f;
+    const float y_min = 0.98f, y_max = 1.08f;
+
+    auto toSX = [&](float x) -> int { return pad_l + (int)((x - x_min) / (x_max - x_min) * plot_w); };
+    auto toSY = [&](float y) -> int { return pad_t + (int)((y_max - y) / (y_max - y_min) * plot_h); };
+
+    p.setPen(QPen(QColor(60, 60, 60), 1));
+    for (float gx : {0.0f, 0.4f, 0.8f, 1.2f, 1.6f, 2.0f})
+      p.drawLine(toSX(gx), pad_t, toSX(gx), pad_t + plot_h);
+    for (float gy = y_min; gy <= y_max + 0.001f; gy += 0.02f)
+      p.drawLine(pad_l, toSY(gy), pad_l + plot_w, toSY(gy));
+
+    // 1.0 reference line
+    p.setPen(QPen(QColor(80, 80, 80), 1, Qt::DashLine));
+    p.drawLine(pad_l, toSY(1.0f), pad_l + plot_w, toSY(1.0f));
+
+    p.setPen(QColor(150, 150, 150));
+    p.setFont(QFont("sans-serif", 16));
+    for (float gx : {0.0f, 0.4f, 0.8f, 1.2f, 1.6f, 2.0f})
+      p.drawText(toSX(gx) - 10, pad_t + plot_h + 25, QString::number(gx, 'f', 1));
+    p.drawText(pad_l + plot_w / 2 - 30, pad_t + plot_h + 38, "|lat accel|");
+    for (float gy = y_min; gy <= y_max + 0.001f; gy += 0.02f)
+      p.drawText(5, toSY(gy) + 5, QString::number(gy, 'f', 2));
+
+    auto sigmoid = [](float x) -> float {
+      if (x >= 0) { float z = std::exp(-x); return 1.0f / (1.0f + z); }
+      float z = std::exp(x); return z / (1.0f + z);
+    };
+
+    // onset/cutoff markers
+    p.setPen(QPen(QColor(100, 100, 200), 1, Qt::DashLine));
+    p.drawLine(toSX(m_onset), pad_t, toSX(m_onset), pad_t + plot_h);
+    p.setPen(QPen(QColor(200, 100, 100), 1, Qt::DashLine));
+    p.drawLine(toSX(m_cutoff), pad_t, toSX(m_cutoff), pad_t + plot_h);
+
+    // labels
+    p.setFont(QFont("sans-serif", 14));
+    p.setPen(QColor(100, 100, 200));
+    p.drawText(toSX(m_onset) + 4, pad_t + 15, "onset");
+    p.setPen(QColor(200, 100, 100));
+    p.drawText(toSX(m_cutoff) + 4, pad_t + 15, "cutoff");
+
+    // FF scale curve
+    p.setPen(QPen(QColor(0x58, 0xD6, 0x8D), 3));
+    QPointF prev;
+    bool has_prev = false;
+    for (int i = 0; i <= plot_w; i++) {
+      float la = x_min + (x_max - x_min) * i / plot_w;
+      float onset_w_val = sigmoid((la - m_onset) / m_onset_w);
+      float cutoff_w_val = sigmoid((m_cutoff - la) / m_cutoff_w);
+      float ff_scale = 1.0f + m_gain * onset_w_val * cutoff_w_val;
+      QPointF pt(toSX(la), toSY(ff_scale));
+      if (has_prev) p.drawLine(prev, pt);
+      prev = pt;
+      has_prev = true;
+    }
+
+    // legend
+    p.setFont(QFont("sans-serif", 14));
+    p.setPen(QColor(0x58, 0xD6, 0x8D));
+    p.drawText(pad_l + plot_w - 120, pad_t + 17, "FF scale");
+  }
+
+private:
+  float m_gain = 0.04f, m_onset = 0.18f, m_onset_w = 0.08f;
+  float m_cutoff = 1.10f, m_cutoff_w = 0.30f;
+};
+
+class TurnDynamicsPreviewWidget : public QWidget {
+  Q_OBJECT
+
+public:
+  explicit TurnDynamicsPreviewWidget(QWidget *parent = nullptr) : QWidget(parent) {
+    setFixedHeight(220);
+    setContentsMargins(0, 0, 0, 0);
+  }
+
+  void setDynamicsParams(float turn_in_boost, float unwind_taper) {
+    m_turn_in_boost = turn_in_boost;
+    m_unwind_taper = unwind_taper;
+    update();
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    const int w = width(), h = height();
+    const int pad_l = 65, pad_r = 25, pad_t = 20, pad_b = 40;
+    const int plot_w = w - pad_l - pad_r;
+    const int plot_h = h - pad_t - pad_b;
+
+    p.fillRect(rect(), QColor(30, 30, 30));
+    QRect plotRect(pad_l, pad_t, plot_w, plot_h);
+    p.fillRect(plotRect, QColor(20, 20, 20));
+
+    const float x_min = -1.0f, x_max = 1.0f;
+    const float y_min = 0.3f, y_max = 1.3f;
+
+    auto toSX = [&](float x) -> int { return pad_l + (int)((x - x_min) / (x_max - x_min) * plot_w); };
+    auto toSY = [&](float y) -> int { return pad_t + (int)((y_max - y) / (y_max - y_min) * plot_h); };
+
+    // grid
+    p.setPen(QPen(QColor(60, 60, 60), 1));
+    for (float gx : {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f})
+      p.drawLine(toSX(gx), pad_t, toSX(gx), pad_t + plot_h);
+    for (float gy : {0.4f, 0.6f, 0.8f, 1.0f, 1.2f})
+      p.drawLine(pad_l, toSY(gy), pad_l + plot_w, toSY(gy));
+
+    // 1.0 reference
+    p.setPen(QPen(QColor(80, 80, 80), 1, Qt::DashLine));
+    p.drawLine(pad_l, toSY(1.0f), pad_l + plot_w, toSY(1.0f));
+
+    // zero line
+    p.setPen(QPen(QColor(80, 80, 80), 1, Qt::DashLine));
+    p.drawLine(toSX(0.0f), pad_t, toSX(0.0f), pad_t + plot_h);
+
+    // axis labels
+    p.setPen(QColor(150, 150, 150));
+    p.setFont(QFont("sans-serif", 16));
+    for (float gx : {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f})
+      p.drawText(toSX(gx) - 15, pad_t + plot_h + 25, QString::number(gx, 'f', 1));
+
+    // phase direction labels
+    p.setFont(QFont("sans-serif", 14));
+    p.setPen(QColor(200, 100, 100));
+    p.drawText(pad_l + 5, pad_t + plot_h + 38, "\xe2\x86\x90 unwind");
+    p.setPen(QColor(100, 200, 100));
+    p.drawText(pad_l + plot_w - 80, pad_t + plot_h + 38, "turn-in \xe2\x86\x92");
+
+    p.setPen(QColor(150, 150, 150));
+    for (float gy : {0.4f, 0.6f, 0.8f, 1.0f, 1.2f})
+      p.drawText(5, toSY(gy) + 5, QString::number(gy, 'f', 1));
+
+    // FF multiplier curve
+    p.setPen(QPen(QColor(0x58, 0xD6, 0x8D), 3));
+    QPointF prev;
+    bool has_prev = false;
+    for (int i = 0; i <= plot_w; i++) {
+      float phase = x_min + (x_max - x_min) * i / plot_w;
+      float turn_in_weight = std::max(phase, 0.0f);
+      float unwind_weight = std::max(-phase, 0.0f);
+      float boost = 1.0f + (m_turn_in_boost * turn_in_weight);
+      float taper = 1.0f - (m_unwind_taper * unwind_weight);
+      float ff_mult = boost * std::max(taper, 0.0f);
+      QPointF pt(toSX(phase), toSY(ff_mult));
+      if (has_prev) p.drawLine(prev, pt);
+      prev = pt;
+      has_prev = true;
+    }
+
+    // legend
+    p.setFont(QFont("sans-serif", 14));
+    p.setPen(QColor(0x58, 0xD6, 0x8D));
+    p.drawText(pad_l + plot_w - 140, pad_t + 17, "FF multiplier");
+  }
+
+private:
+  float m_turn_in_boost = 0.0f;
+  float m_unwind_taper = 0.55f;
+};
+
 class RetrofitTuneTablePanel : public StarPilotListWidget {
   Q_OBJECT
 
@@ -304,6 +496,11 @@ public:
   explicit RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, QStackedLayout *mainLayout, bool forceOpen = false);
 
   bool isShowingTableOverview() const { return m_tuneLayout && m_tuneLayout->currentIndex() == 0; }
+  void closeDetailPanel() {
+    if (m_tuneLayout && m_tuneLayout->currentIndex() != 0) {
+      m_tuneLayout->setCurrentIndex(0);
+    }
+  }
 
 signals:
   void openSubPanel();

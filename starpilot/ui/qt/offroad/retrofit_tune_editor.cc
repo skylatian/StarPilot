@@ -141,6 +141,15 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     QString desc;
   };
 
+  FFWindowPreviewWidget *ffPreview = new FFWindowPreviewWidget(this);
+  ffPreview->setFFParams(
+      params.getFloat("RetrofitTuneFFGain"),
+      params.getFloat("RetrofitTuneFFOnset"),
+      params.getFloat("RetrofitTuneFFOnsetWidth"),
+      params.getFloat("RetrofitTuneFFCutoff"),
+      params.getFloat("RetrofitTuneFFCutoffWidth"));
+  ffList->addItem(ffPreview);
+
   TuneParam ffParams[] = {
     {"RetrofitTuneFFGain", tr("FF Gain"), 0.04f, 0.0f, 0.5f, 0.01f,
      tr("Peak feedforward boost magnitude. Higher = more FF near the onset/cutoff window center.")},
@@ -167,17 +176,38 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
     float defVal = fp.defaultVal;
     const char *key = fp.key;
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, this]() {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, ffPreview, this]() {
       if (StarPilotConfirmationDialog::yesorno(tr("Reset to default?"), this)) {
         params.putFloat(key, defVal);
         toggle->refresh();
+        ffPreview->setFFParams(
+            params.getFloat("RetrofitTuneFFGain"),
+            params.getFloat("RetrofitTuneFFOnset"),
+            params.getFloat("RetrofitTuneFFOnsetWidth"),
+            params.getFloat("RetrofitTuneFFCutoff"),
+            params.getFloat("RetrofitTuneFFCutoffWidth"));
       }
+    });
+
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [ffPreview, this](float) {
+      ffPreview->setFFParams(
+          params.getFloat("RetrofitTuneFFGain"),
+          params.getFloat("RetrofitTuneFFOnset"),
+          params.getFloat("RetrofitTuneFFOnsetWidth"),
+          params.getFloat("RetrofitTuneFFCutoff"),
+          params.getFloat("RetrofitTuneFFCutoffWidth"));
     });
   }
 
   // ============================================================
   // TURN DYNAMICS (Panel 3)
   // ============================================================
+
+  TurnDynamicsPreviewWidget *turnPreview = new TurnDynamicsPreviewWidget(this);
+  turnPreview->setDynamicsParams(
+      params.getFloat("RetrofitTuneTurnInBoost"),
+      params.getFloat("RetrofitTuneUnwindTaper"));
+  turnList->addItem(turnPreview);
 
   TuneParam turnParams[] = {
     {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.0f, 0.05f,
@@ -215,11 +245,20 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
 
     float defVal = tp.defaultVal;
     const char *key = tp.key;
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, this]() {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::buttonClicked, [defVal, key, toggle, turnPreview, this]() {
       if (StarPilotConfirmationDialog::yesorno(tr("Reset to default?"), this)) {
         params.putFloat(key, defVal);
         toggle->refresh();
+        turnPreview->setDynamicsParams(
+            params.getFloat("RetrofitTuneTurnInBoost"),
+            params.getFloat("RetrofitTuneUnwindTaper"));
       }
+    });
+
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [turnPreview, this](float) {
+      turnPreview->setDynamicsParams(
+          params.getFloat("RetrofitTuneTurnInBoost"),
+          params.getFloat("RetrofitTuneUnwindTaper"));
     });
   }
 
@@ -287,14 +326,4 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     });
   }
 
-  // ============================================================
-  // NAVIGATION
-  // ============================================================
-
-  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [tuneLayout, tablePanel, kpPanel, ffPanel, turnPanel, centerPanel]() {
-    QWidget *current = tuneLayout->currentWidget();
-    if (current == kpPanel || current == ffPanel || current == turnPanel || current == centerPanel) {
-      tuneLayout->setCurrentWidget(tablePanel);
-    }
-  });
 }
