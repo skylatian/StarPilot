@@ -121,6 +121,9 @@ KIA_FORTE_CARS = (
 PRIUS_CARS = (
   TOYOTA_CAR.TOYOTA_PRIUS,
 )
+COROLLA_RETROFIT_CARS = (
+  TOYOTA_CAR.TOYOTA_COROLLA_RETROFIT,
+)
 
 BOLT_2017_LATERAL_TESTING_GROUND_ID = testing_ground.id_3
 BOLT_2017_STEER_RATIO_TEST_SCALE = 1.045
@@ -648,6 +651,27 @@ PRIUS_CENTER_TAPER_LAT_WIDTH = 0.035
 PRIUS_CENTER_TAPER_SPEED = 18.0
 PRIUS_CENTER_TAPER_SPEED_WIDTH = 2.2
 
+RETROFIT_TRANSITION_SPEED = 10.0
+RETROFIT_PHASE_SCALE = 0.10
+RETROFIT_FF_GAIN = 0.04
+RETROFIT_FF_ONSET = 0.18
+RETROFIT_FF_ONSET_WIDTH = 0.08
+RETROFIT_FF_CUTOFF = 1.10
+RETROFIT_FF_CUTOFF_WIDTH = 0.30
+RETROFIT_FRICTION_LAT_RISE = 0.20
+RETROFIT_FRICTION_JERK_RISE = 0.24
+RETROFIT_TURN_IN_BOOST = 0.0
+RETROFIT_UNWIND_TAPER = 0.55
+RETROFIT_TURN_IN_THRESHOLD_REDUCTION = 0.10
+RETROFIT_UNWIND_THRESHOLD_INCREASE = 0.50
+RETROFIT_TURN_IN_FRICTION_BOOST = 0.04
+RETROFIT_UNWIND_FRICTION_REDUCTION = 0.30
+RETROFIT_CENTER_TAPER_MAX = 0.20
+RETROFIT_CENTER_TAPER_LAT = 0.14
+RETROFIT_CENTER_TAPER_LAT_WIDTH = 0.04
+RETROFIT_CENTER_TAPER_SPEED = 14.0
+RETROFIT_CENTER_TAPER_SPEED_WIDTH = 2.5
+
 TRAILER_LOAD_FULL_ASSIST_KG = 15000.0 * CV.LB_TO_KG
 TRAILER_LATERAL_MIN_SPEED = 15.0 * CV.MPH_TO_MS
 TRAILER_LATERAL_FULL_SPEED = 35.0 * CV.MPH_TO_MS
@@ -765,6 +789,66 @@ def get_prius_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> 
   speed_weight = _prius_sigmoid((v_ego - PRIUS_CENTER_TAPER_SPEED) / PRIUS_CENTER_TAPER_SPEED_WIDTH)
   center_weight = _prius_sigmoid((PRIUS_CENTER_TAPER_LAT - abs(desired_lateral_accel)) / PRIUS_CENTER_TAPER_LAT_WIDTH)
   reduction = PRIUS_CENTER_TAPER_MAX * speed_weight * center_weight
+  return 1.0 - reduction
+
+
+def _retrofit_low_speed_factor(v_ego: float) -> float:
+  return 1.0 / (1.0 + (max(v_ego, 0.0) / RETROFIT_TRANSITION_SPEED) ** 2)
+
+
+def _retrofit_transition_phase(desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  return math.tanh((desired_lateral_accel * desired_lateral_jerk) / RETROFIT_PHASE_SCALE)
+
+
+def _retrofit_transition_envelope(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  lat_factor = 1.0 - math.exp(-abs(desired_lateral_accel) / RETROFIT_FRICTION_LAT_RISE)
+  jerk_factor = 1.0 - math.exp(-abs(desired_lateral_jerk) / RETROFIT_FRICTION_JERK_RISE)
+  return _retrofit_low_speed_factor(v_ego) * lat_factor * jerk_factor
+
+
+def get_retrofit_ff_scale(desired_lateral_accel: float, desired_lateral_jerk: float, v_ego: float) -> float:
+  if desired_lateral_accel == 0.0:
+    return 1.0
+
+  abs_lateral_accel = abs(desired_lateral_accel)
+  onset = _sigmoid((abs_lateral_accel - RETROFIT_FF_ONSET) / RETROFIT_FF_ONSET_WIDTH)
+  cutoff = _sigmoid((RETROFIT_FF_CUTOFF - abs_lateral_accel) / RETROFIT_FF_CUTOFF_WIDTH)
+  extra_scale = RETROFIT_FF_GAIN * onset * cutoff
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
+  turn_in_weight = max(phase, 0.0)
+  unwind_weight = max(-phase, 0.0)
+  low_speed_factor = _retrofit_low_speed_factor(v_ego)
+  turn_in_boost = 1.0 + (RETROFIT_TURN_IN_BOOST * turn_in_weight * (0.35 + 0.65 * low_speed_factor))
+  unwind_taper = 1.0 - (RETROFIT_UNWIND_TAPER * unwind_weight * (0.35 + 0.65 * low_speed_factor))
+  return 1.0 + (extra_scale * turn_in_boost * max(unwind_taper, 0.0))
+
+
+def get_retrofit_friction_threshold(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  base_threshold = get_standard_friction_threshold(v_ego)
+  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk)
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
+  turn_in_weight = max(phase, 0.0)
+  unwind_weight = max(-phase, 0.0)
+  threshold_scale = 1.0 - (RETROFIT_TURN_IN_THRESHOLD_REDUCTION * transition_envelope * turn_in_weight)
+  threshold_scale += (RETROFIT_UNWIND_THRESHOLD_INCREASE * transition_envelope * unwind_weight)
+  return base_threshold * min(max(threshold_scale, 0.86), 1.20)
+
+
+def get_retrofit_friction_scale(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
+  transition_envelope = _retrofit_transition_envelope(v_ego, desired_lateral_accel, desired_lateral_jerk)
+  phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
+  turn_in_weight = max(phase, 0.0)
+  unwind_weight = max(-phase, 0.0)
+  friction_scale = 1.0
+  friction_scale += (RETROFIT_TURN_IN_FRICTION_BOOST * transition_envelope * turn_in_weight)
+  friction_scale -= (RETROFIT_UNWIND_FRICTION_REDUCTION * transition_envelope * unwind_weight)
+  return min(max(friction_scale, 0.85), 1.14)
+
+
+def get_retrofit_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> float:
+  speed_weight = _sigmoid((v_ego - RETROFIT_CENTER_TAPER_SPEED) / RETROFIT_CENTER_TAPER_SPEED_WIDTH)
+  center_weight = _sigmoid((RETROFIT_CENTER_TAPER_LAT - abs(desired_lateral_accel)) / RETROFIT_CENTER_TAPER_LAT_WIDTH)
+  reduction = RETROFIT_CENTER_TAPER_MAX * speed_weight * center_weight
   return 1.0 - reduction
 
 

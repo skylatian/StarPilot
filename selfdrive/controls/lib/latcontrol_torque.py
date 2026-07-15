@@ -29,6 +29,7 @@ KI = 0.35
 
 INTERP_SPEEDS = [1, 1.5, 2.0, 3.0, 5, 7.5, 10, 15, 30]
 KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
+RETROFIT_KP_INTERP = [100, 50, 30, 18, 8, 4.5, 3.0, 1.8, KP]
 
 LOW_SPEED_X = [0, 10, 20, 30]
 LOW_SPEED_Y = [12, 10.5, 8, 5]
@@ -52,7 +53,8 @@ class LatControlTorque(LatControl):
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/self.dt)
+    kp_interp = RETROFIT_KP_INTERP if self.is_corolla_retrofit else KP_INTERP
+    self.pid = PIDController([INTERP_SPEEDS, kp_interp], KI, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
@@ -87,6 +89,7 @@ class LatControlTorque(LatControl):
     self.is_kia_ev6 = CP.carFingerprint in KIA_EV6_CARS
     self.is_civic_bosch_modified = CP.carFingerprint == HONDA_CAR.HONDA_CIVIC_BOSCH and bool(CP.flags & HondaFlags.EPS_MODIFIED)
     self.is_silverado = CP.carFingerprint in SILVERADO_CARS
+    self.is_corolla_retrofit = CP.carFingerprint in COROLLA_RETROFIT_CARS
     self.is_gm = CP.brand == "gm"
     self.is_hkg_canfd_torque = CP.brand == "hyundai" and bool(CP.flags & HyundaiFlags.CANFD)
     if self.is_ioniq_6:
@@ -239,6 +242,7 @@ class LatControlTorque(LatControl):
       kia_ev6_center_taper = get_kia_ev6_center_taper_scale(setpoint, CS.vEgo) if kia_ev6_test_active else 1.0
       kia_ev6_low_speed_center_taper = get_kia_ev6_low_speed_center_taper_scale(setpoint, CS.vEgo) if kia_ev6_test_active else 1.0
       silverado_center_taper = get_silverado_center_taper_scale(setpoint, CS.vEgo) if self.is_silverado else 1.0
+      retrofit_center_taper = get_retrofit_center_taper_scale(setpoint, CS.vEgo) if self.is_corolla_retrofit else 1.0
       civic_bosch_modified_a_center_taper = get_civic_bosch_modified_a_center_taper_scale(setpoint, CS.vEgo) if (
         self.is_civic_bosch_modified and civic_bosch_modified_a_lateral_testing_ground_active()
       ) else 1.0
@@ -317,6 +321,11 @@ class LatControlTorque(LatControl):
         friction_threshold = CIVIC_BOSCH_MODIFIED_B_FIXED_FRICTION_THRESHOLD
         friction_scale = get_civic_bosch_modified_b_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk)
         friction_scale = 1.0 + ((friction_scale - 1.0) * civic_bosch_modified_a_center_taper)
+      elif self.is_corolla_retrofit:
+        ff *= get_retrofit_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo) * retrofit_center_taper
+        friction_threshold = get_retrofit_friction_threshold(CS.vEgo, setpoint, desired_lateral_jerk)
+        friction_scale = get_retrofit_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk)
+        friction_scale = 1.0 + ((friction_scale - 1.0) * retrofit_center_taper)
       if trailer_load_kg > 0.0:
         ff *= get_trailer_lateral_ff_scale(trailer_load_kg, CS.vEgo, setpoint)
         friction_scale *= get_trailer_lateral_friction_scale(trailer_load_kg, CS.vEgo, setpoint)
@@ -359,6 +368,8 @@ class LatControlTorque(LatControl):
         output_torque *= kia_niro_phev_2022_center_taper
       elif self.is_civic_bosch_modified and civic_bosch_modified_a_lateral_testing_ground_active():
         output_torque *= civic_bosch_modified_a_center_taper
+      elif self.is_corolla_retrofit:
+        output_torque *= retrofit_center_taper
       pid_log.active = True
       pid_log.p = float(self.pid.p)
       pid_log.i = float(self.pid.i)
