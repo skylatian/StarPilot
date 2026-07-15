@@ -72,6 +72,7 @@ class LatControlTorque(LatControl):
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len, maxlen=self.lat_accel_request_buffer_len)
     self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+    self.ioniq_6_directional_taper_filter = FirstOrderFilter(1.0, IONIQ_6_DIRECTIONAL_TAPER_FILTER_RC, self.dt)
     self.previous_measurement = 0.0
     self.measurement_rate_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * (MAX_LAT_JERK_UP - 0.5)), self.dt)
     self.low_speed_reset_threshold = max(CP.minSteerSpeed, MIN_LATERAL_CONTROL_SPEED)
@@ -103,6 +104,7 @@ class LatControlTorque(LatControl):
     self.is_corolla_retrofit = CP.carFingerprint in COROLLA_RETROFIT_CARS
     self.is_gm = CP.brand == "gm"
     self.is_hkg_canfd_torque = CP.brand == "hyundai" and bool(CP.flags & HyundaiFlags.CANFD)
+    self.flm_surface_profile_key = get_flm_surface_profile_key(CP.carFingerprint, torque_control=True)
     if self.is_ioniq_6:
       self.low_speed_reset_threshold = min(self.low_speed_reset_threshold, IONIQ_6_LOW_SPEED_PID_RESET_SPEED)
     self.use_bolt_ff_scaling = self.is_bolt_2022_2023 or self.is_bolt_2018_2021 or self.is_bolt_2017
@@ -170,6 +172,10 @@ class LatControlTorque(LatControl):
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay, calibrated_pose, model_data, starpilot_toggles):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
+    flm_profile_active = bool(getattr(starpilot_toggles, "flm_trial_applied", False) and
+                              getattr(starpilot_toggles, "flm_active_profile_id", ""))
+    set_flm_runtime_overrides(getattr(starpilot_toggles, "flm_active_overrides", None) if flm_profile_active else None)
+    flm_surface_active = flm_profile_active and flm_runtime_overrides_active()
     if not active:
       output_torque = 0.0
       pid_log.active = False
@@ -178,6 +184,7 @@ class LatControlTorque(LatControl):
       self.measurement_rate_filter.x = 0.0
       self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len, maxlen=self.lat_accel_request_buffer_len)
       self.prev_desired_lateral_accel = 0.0
+      self.ioniq_6_directional_taper_filter.x = 1.0
     else:
       if self.prev_steering_pressed and not CS.steeringPressed:
         self.pid.i *= self.steer_release_i_decay
@@ -325,10 +332,15 @@ class LatControlTorque(LatControl):
         ff *= get_ioniq_ev_old_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo) * ioniq_ev_old_center_taper
         friction_scale = 1.0 + ((friction_scale - 1.0) * ioniq_ev_old_center_taper)
       elif ioniq_6_active:
-        ff *= get_ioniq_6_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo) * ioniq_6_center_taper
+        # smooth the directional taper so jerk-gated unwind cuts can't step the FF in one frame
+        ioniq_6_directional_taper = self.ioniq_6_directional_taper_filter.update(
+          get_ioniq_6_directional_taper_scale(setpoint, desired_lateral_jerk, CS.vEgo))
+        ff *= get_ioniq_6_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo,
+                                   directional_taper_scale=ioniq_6_directional_taper) * ioniq_6_center_taper
         friction_threshold = get_ioniq_6_friction_threshold(CS.vEgo, setpoint, desired_lateral_jerk) / max(ioniq_6_center_taper, 1e-3)
         friction_scale = get_ioniq_6_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk)
         friction_scale = 1.0 + ((friction_scale - 1.0) * ioniq_6_center_taper)
+        friction_scale *= get_ioniq_6_friction_center_fade_scale(setpoint, CS.vEgo)
       elif sonata_active:
         ff *= get_sonata_ff_scale(setpoint, desired_lateral_jerk, CS.vEgo) * sonata_center_taper
       elif sonata_hybrid_active:
@@ -364,10 +376,23 @@ class LatControlTorque(LatControl):
         friction_threshold = get_retrofit_friction_threshold(CS.vEgo, setpoint, desired_lateral_jerk, retrofit_tune)
         friction_scale = get_retrofit_friction_scale(CS.vEgo, setpoint, desired_lateral_jerk, retrofit_tune)
         friction_scale = 1.0 + ((friction_scale - 1.0) * retrofit_center_taper)
+      if flm_surface_active and self.flm_surface_profile_key and not ioniq_6_active:
+        universal_flm_profile = self.flm_surface_profile_key == FLM_UNIVERSAL_PROFILE_KEY
+        flm_full_surface_center_taper = get_flm_full_surface_center_taper_scale(self.flm_surface_profile_key, setpoint, CS.vEgo,
+                                                                                include_base_center=universal_flm_profile)
+        ff *= get_flm_full_surface_ff_scale(self.flm_surface_profile_key, setpoint, desired_lateral_jerk, CS.vEgo,
+                                            include_base_ff=universal_flm_profile) * flm_full_surface_center_taper
+        friction_threshold = get_flm_full_surface_friction_threshold(self.flm_surface_profile_key, friction_threshold, CS.vEgo,
+                                                                     setpoint, desired_lateral_jerk,
+                                                                     include_base_threshold=universal_flm_profile)
       if trailer_load_kg > 0.0:
         ff *= get_trailer_lateral_ff_scale(trailer_load_kg, CS.vEgo, setpoint)
         friction_scale *= get_trailer_lateral_friction_scale(trailer_load_kg, CS.vEgo, setpoint)
-      ff += friction_scale * get_friction(error_with_lsf + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, friction_threshold, self.torque_params)
+      friction_jerk = desired_lateral_jerk
+      if ioniq_6_active:
+        # planner jerk noise on straights (< ~0.3 m/s^3) chatters the friction compensation
+        friction_jerk = math.copysign(max(abs(desired_lateral_jerk) - IONIQ_6_FRICTION_JERK_DEADZONE, 0.0), desired_lateral_jerk)
+      ff += friction_scale * get_friction(error_with_lsf + JERK_GAIN * friction_jerk, lateral_accel_deadzone, friction_threshold, self.torque_params)
       deadzone_boost_active = False
       if self.torque_deadzone_boost > 0.0 and abs(gravity_adjusted_future_lateral_accel) < DEADZONE_BOOST_LAT_ACCEL:
         boost_scale = np.interp(abs(gravity_adjusted_future_lateral_accel), [0.0, DEADZONE_BOOST_LAT_ACCEL], [1.0, 0.0])
@@ -389,6 +414,11 @@ class LatControlTorque(LatControl):
         actual_angle_no_offset = CS.steeringAngleDeg - params.angleOffsetDeg
         output_torque = get_ioniq_6_low_speed_angle_assist_torque(desired_angle_no_offset, actual_angle_no_offset,
                                                                   output_torque, CS.vEgo)
+      elif flm_surface_active and self.flm_surface_profile_key and not CS.steeringPressed:
+        desired_angle_no_offset = math.degrees(VM.get_steer_from_curvature(-desired_curvature, CS.vEgo, params.roll))
+        actual_angle_no_offset = CS.steeringAngleDeg - params.angleOffsetDeg
+        output_torque = get_flm_full_surface_low_speed_angle_assist_torque(self.flm_surface_profile_key, desired_angle_no_offset,
+                                                                           actual_angle_no_offset, output_torque, CS.vEgo)
       if ioniq_6_active:
         output_torque *= get_ioniq_6_highway_output_taper_scale(setpoint, CS.vEgo)
         output_torque *= get_ioniq_6_highway_transition_output_taper_scale(setpoint, desired_lateral_jerk, CS.vEgo)

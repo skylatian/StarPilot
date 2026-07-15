@@ -104,8 +104,8 @@ class SteeringManagerView(AetherSettingsView):
     self.set_rect(rect)
     self._interactive_rects.clear()
 
-    margin_x = 18.0
-    margin_y = 24.0
+    margin_x = 10.0
+    margin_y = 10.0
 
     grid_x = rect.x + margin_x
     grid_y = rect.y + margin_y
@@ -314,10 +314,19 @@ class StarPilotLateralLayout(_SettingsPage):
         visible=alt_on,
       ),
       SettingRow(
+        "UseAutoSteerDelay", "toggle", tr_noop("Use Auto-Learned Delay"),
+        subtitle=tr_noop("Learn the full steering delay automatically. The manual value below is ignored while enabled."),
+        get_state=lambda: p.get_bool("UseAutoSteerDelay"),
+        set_state=lambda s: p.put_bool("UseAutoSteerDelay", s),
+        visible=lambda: alt_on() and cs.steerActuatorDelay != 0,
+      ),
+      SettingRow(
         "SteerDelay", "value", tr_noop("Actuator Delay"),
-        subtitle=tr_noop("Time between steering command and vehicle response."),
+        subtitle=tr_noop("Exact full delay between steering command and vehicle response."),
         get_value=lambda: f"{p.get_float('SteerDelay'):.2f}s",
         on_click=lambda: self._show_slider("SteerDelay", 0.01, 1.0, step=0.01, unit="s", value_type="float"),
+        enabled=lambda: not p.get_bool("UseAutoSteerDelay"),
+        disabled_label=tr_noop("Disabled while auto-learned delay is enabled."),
         visible=lambda: alt_on() and cs.steerActuatorDelay != 0,
       ),
       SettingRow(

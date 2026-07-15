@@ -425,7 +425,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate in (CAR.BUICK_LACROSSE, CAR.BUICK_LACROSSE_ASCM, CAR.BUICK_LACROSSE_ASCM_19US):
       CarInterfaceBase.configure_torque_tune(CAR.BUICK_LACROSSE, ret.lateralTuning)
       if candidate == CAR.BUICK_LACROSSE_ASCM_19US:
-        ret.minSteerSpeed = 37 * CV.MPH_TO_MS
+        ret.minSteerSpeed = 27 * CV.MPH_TO_MS
 
     elif candidate == CAR.CADILLAC_ESCALADE:
       ret.minEnableSpeed = -1.  # engage speed is decided by pcm
@@ -640,7 +640,7 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kpBP = [0.0, 5.0, 15.0, 35.0]
       ret.longitudinalTuning.kpV = [0.02, 0.03, 0.028, 0.022]
       ret.longitudinalTuning.kiBP = [0.0, 5.0, 15.0, 35.0]
-      ret.longitudinalTuning.kiV = [0.28, 0.26, 0.20, 0.16]
+      ret.longitudinalTuning.kiV = [0.20, 0.18, 0.13, 0.08]
 
     elif candidate in CC_ONLY_CAR and not ret.enableGasInterceptorDEPRECATED:
       ret.flags |= GMFlags.CC_LONG.value
