@@ -508,6 +508,7 @@ public:
 signals:
   void openSubPanel();
 
+private:
   float readFlmKnob(const std::string &knobName, float defaultVal) {
     std::string raw = params.get("FLMActiveOverrides");
     if (raw.empty()) return defaultVal;
@@ -546,17 +547,7 @@ signals:
   }
 
   void syncFlmToParams() {
-    static const std::pair<const char*, const char*> knobMap[] = {
-      {"RetrofitTuneFFGain", "toyota_corolla_retrofit.ff_gain"},
-      {"RetrofitTuneTurnInBoost", "toyota_corolla_retrofit.turn_in_boost"},
-      {"RetrofitTuneUnwindTaper", "toyota_corolla_retrofit.unwind_taper"},
-      {"RetrofitTuneCenterTaperMax", "toyota_corolla_retrofit.center_taper_max"},
-      {"RetrofitTuneTurnInThresholdReduction", "toyota_corolla_retrofit.turn_in_threshold_reduction"},
-      {"RetrofitTuneUnwindThresholdIncrease", "toyota_corolla_retrofit.unwind_threshold_increase"},
-      {"RetrofitTuneTurnInFrictionBoost", "toyota_corolla_retrofit.turn_in_friction_boost"},
-      {"RetrofitTuneUnwindFrictionReduction", "toyota_corolla_retrofit.unwind_friction_reduction"},
-    };
-    for (auto &[paramKey, knobName] : knobMap) {
+    for (auto &[paramKey, knobName] : s_flmKnobMap) {
       float defVal = params.getFloat(paramKey);
       float flmVal = readFlmKnob(knobName, defVal);
       if (flmVal != defVal) {
@@ -565,18 +556,29 @@ signals:
     }
   }
 
-private:
   QStackedLayout *m_tuneLayout = nullptr;
   Params params;
 
   static inline const std::map<std::string, std::string> s_flmKnobMap = {
     {"RetrofitTuneFFGain", "toyota_corolla_retrofit.ff_gain"},
+    {"RetrofitTuneFFOnset", "toyota_corolla_retrofit.ff_onset"},
+    {"RetrofitTuneFFOnsetWidth", "toyota_corolla_retrofit.ff_onset_width"},
+    {"RetrofitTuneFFCutoff", "toyota_corolla_retrofit.ff_cutoff"},
+    {"RetrofitTuneFFCutoffWidth", "toyota_corolla_retrofit.ff_cutoff_width"},
     {"RetrofitTuneTurnInBoost", "toyota_corolla_retrofit.turn_in_boost"},
     {"RetrofitTuneUnwindTaper", "toyota_corolla_retrofit.unwind_taper"},
-    {"RetrofitTuneCenterTaperMax", "toyota_corolla_retrofit.center_taper_max"},
+    {"RetrofitTuneTransitionSpeed", "toyota_corolla_retrofit.transition_speed"},
+    {"RetrofitTunePhaseScale", "toyota_corolla_retrofit.phase_scale"},
+    {"RetrofitTuneFrictionLatRise", "toyota_corolla_retrofit.friction_lat_rise"},
+    {"RetrofitTuneFrictionJerkRise", "toyota_corolla_retrofit.friction_jerk_rise"},
     {"RetrofitTuneTurnInThresholdReduction", "toyota_corolla_retrofit.turn_in_threshold_reduction"},
     {"RetrofitTuneUnwindThresholdIncrease", "toyota_corolla_retrofit.unwind_threshold_increase"},
     {"RetrofitTuneTurnInFrictionBoost", "toyota_corolla_retrofit.turn_in_friction_boost"},
     {"RetrofitTuneUnwindFrictionReduction", "toyota_corolla_retrofit.unwind_friction_reduction"},
+    {"RetrofitTuneCenterTaperMax", "toyota_corolla_retrofit.center_taper_max"},
+    {"RetrofitTuneCenterTaperLat", "toyota_corolla_retrofit.center_taper_lat"},
+    {"RetrofitTuneCenterTaperLatWidth", "toyota_corolla_retrofit.center_taper_lat_width"},
+    {"RetrofitTuneCenterTaperSpeed", "toyota_corolla_retrofit.center_taper_speed"},
+    {"RetrofitTuneCenterTaperSpeedWidth", "toyota_corolla_retrofit.center_taper_speed_width"},
   };
 };

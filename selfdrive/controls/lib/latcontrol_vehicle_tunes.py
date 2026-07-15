@@ -963,16 +963,20 @@ def get_prius_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> 
 
 
 def _retrofit_low_speed_factor(v_ego: float) -> float:
-  return 1.0 / (1.0 + (max(v_ego, 0.0) / RETROFIT_TRANSITION_SPEED) ** 2)
+  transition_speed = _flm_vehicle_knob("toyota_corolla_retrofit.transition_speed", RETROFIT_TRANSITION_SPEED)
+  return 1.0 / (1.0 + (max(v_ego, 0.0) / transition_speed) ** 2)
 
 
 def _retrofit_transition_phase(desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
-  return math.tanh((desired_lateral_accel * desired_lateral_jerk) / RETROFIT_PHASE_SCALE)
+  phase_scale = _flm_vehicle_knob("toyota_corolla_retrofit.phase_scale", RETROFIT_PHASE_SCALE)
+  return math.tanh((desired_lateral_accel * desired_lateral_jerk) / phase_scale)
 
 
 def _retrofit_transition_envelope(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float) -> float:
-  lat_factor = 1.0 - math.exp(-abs(desired_lateral_accel) / RETROFIT_FRICTION_LAT_RISE)
-  jerk_factor = 1.0 - math.exp(-abs(desired_lateral_jerk) / RETROFIT_FRICTION_JERK_RISE)
+  lat_rise = _flm_vehicle_knob("toyota_corolla_retrofit.friction_lat_rise", RETROFIT_FRICTION_LAT_RISE)
+  jerk_rise = _flm_vehicle_knob("toyota_corolla_retrofit.friction_jerk_rise", RETROFIT_FRICTION_JERK_RISE)
+  lat_factor = 1.0 - math.exp(-abs(desired_lateral_accel) / lat_rise)
+  jerk_factor = 1.0 - math.exp(-abs(desired_lateral_jerk) / jerk_rise)
   return _retrofit_low_speed_factor(v_ego) * lat_factor * jerk_factor
 
 
@@ -982,8 +986,12 @@ def get_retrofit_ff_scale(desired_lateral_accel: float, desired_lateral_jerk: fl
 
   gain = _flm_vehicle_knob("toyota_corolla_retrofit.ff_gain", RETROFIT_FF_GAIN)
   abs_lateral_accel = abs(desired_lateral_accel)
-  onset = _sigmoid((abs_lateral_accel - RETROFIT_FF_ONSET) / RETROFIT_FF_ONSET_WIDTH)
-  cutoff = _sigmoid((RETROFIT_FF_CUTOFF - abs_lateral_accel) / RETROFIT_FF_CUTOFF_WIDTH)
+  ff_onset = _flm_vehicle_knob("toyota_corolla_retrofit.ff_onset", RETROFIT_FF_ONSET)
+  ff_onset_width = _flm_vehicle_knob("toyota_corolla_retrofit.ff_onset_width", RETROFIT_FF_ONSET_WIDTH)
+  ff_cutoff = _flm_vehicle_knob("toyota_corolla_retrofit.ff_cutoff", RETROFIT_FF_CUTOFF)
+  ff_cutoff_width = _flm_vehicle_knob("toyota_corolla_retrofit.ff_cutoff_width", RETROFIT_FF_CUTOFF_WIDTH)
+  onset = _sigmoid((abs_lateral_accel - ff_onset) / ff_onset_width)
+  cutoff = _sigmoid((ff_cutoff - abs_lateral_accel) / ff_cutoff_width)
   extra_scale = gain * onset * cutoff
   phase = _retrofit_transition_phase(desired_lateral_accel, desired_lateral_jerk)
   turn_in_weight = max(phase, 0.0)
@@ -1023,8 +1031,12 @@ def get_retrofit_friction_scale(v_ego: float, desired_lateral_accel: float, desi
 
 
 def get_retrofit_center_taper_scale(desired_lateral_accel: float, v_ego: float) -> float:
-  speed_weight = _sigmoid((v_ego - RETROFIT_CENTER_TAPER_SPEED) / RETROFIT_CENTER_TAPER_SPEED_WIDTH)
-  center_weight = _sigmoid((RETROFIT_CENTER_TAPER_LAT - abs(desired_lateral_accel)) / RETROFIT_CENTER_TAPER_LAT_WIDTH)
+  ct_speed = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_speed", RETROFIT_CENTER_TAPER_SPEED)
+  ct_speed_width = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_speed_width", RETROFIT_CENTER_TAPER_SPEED_WIDTH)
+  ct_lat = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_lat", RETROFIT_CENTER_TAPER_LAT)
+  ct_lat_width = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_lat_width", RETROFIT_CENTER_TAPER_LAT_WIDTH)
+  speed_weight = _sigmoid((v_ego - ct_speed) / ct_speed_width)
+  center_weight = _sigmoid((ct_lat - abs(desired_lateral_accel)) / ct_lat_width)
   reduction = _flm_vehicle_knob("toyota_corolla_retrofit.center_taper_max", RETROFIT_CENTER_TAPER_MAX) * speed_weight * center_weight
   return 1.0 - reduction
 
@@ -2769,6 +2781,18 @@ FLM_SUPPORTED_VEHICLE_KNOBS = {
   "toyota_corolla_retrofit.unwind_threshold_increase": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 1.00, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_UNWIND_THRESHOLD_INCREASE},
   "toyota_corolla_retrofit.turn_in_friction_boost": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.20, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_TURN_IN_FRICTION_BOOST},
   "toyota_corolla_retrofit.unwind_friction_reduction": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 0.60, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_UNWIND_FRICTION_REDUCTION},
+  "toyota_corolla_retrofit.ff_onset": {"profile": "toyota_corolla_retrofit", "min": 0.0, "max": 2.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FF_ONSET},
+  "toyota_corolla_retrofit.ff_onset_width": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 1.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FF_ONSET_WIDTH},
+  "toyota_corolla_retrofit.ff_cutoff": {"profile": "toyota_corolla_retrofit", "min": 0.1, "max": 3.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FF_CUTOFF},
+  "toyota_corolla_retrofit.ff_cutoff_width": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 2.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FF_CUTOFF_WIDTH},
+  "toyota_corolla_retrofit.transition_speed": {"profile": "toyota_corolla_retrofit", "min": 1.0, "max": 30.0, "precision": 0.1, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_TRANSITION_SPEED},
+  "toyota_corolla_retrofit.phase_scale": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 1.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_PHASE_SCALE},
+  "toyota_corolla_retrofit.friction_lat_rise": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 2.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FRICTION_LAT_RISE},
+  "toyota_corolla_retrofit.friction_jerk_rise": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 2.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_FRICTION_JERK_RISE},
+  "toyota_corolla_retrofit.center_taper_lat": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 1.0, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_CENTER_TAPER_LAT},
+  "toyota_corolla_retrofit.center_taper_lat_width": {"profile": "toyota_corolla_retrofit", "min": 0.01, "max": 0.5, "precision": 0.01, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_CENTER_TAPER_LAT_WIDTH},
+  "toyota_corolla_retrofit.center_taper_speed": {"profile": "toyota_corolla_retrofit", "min": 1.0, "max": 35.0, "precision": 0.1, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_CENTER_TAPER_SPEED},
+  "toyota_corolla_retrofit.center_taper_speed_width": {"profile": "toyota_corolla_retrofit", "min": 0.1, "max": 10.0, "precision": 0.1, "deltaType": "absolute", "safeLiveTrial": True, "defaultValue": RETROFIT_CENTER_TAPER_SPEED_WIDTH},
 }
 
 
