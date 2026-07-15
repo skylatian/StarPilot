@@ -148,6 +148,7 @@ public:
 
 signals:
   void openSubPanel();
+  void openSubSubPanel();
 
 private:
   bool forceOpenDescriptions;

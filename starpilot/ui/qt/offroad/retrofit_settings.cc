@@ -24,6 +24,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   retrofitLayout->addWidget(advancedSteeringPanel);
 
   RetrofitTuneTablePanel *tuneTableWidget = new RetrofitTuneTablePanel(parent, retrofitLayout, forceOpen);
+  QObject::connect(tuneTableWidget, &RetrofitTuneTablePanel::openSubSubPanel, this, &StarPilotRetrofitPanel::openSubSubPanel);
   ScrollView *tuneTablePanel = new ScrollView(tuneTableWidget, this);
   retrofitLayout->addWidget(tuneTablePanel);
 
@@ -314,7 +315,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
       params.putFloat("RetrofitNonlinearRightD", 0.0f);
     }
     retrofitLayout->setCurrentWidget(advancedSteeringPanel);
-    emit openSubPanel();
+    emit openSubSubPanel();
   });
   if (forceOpenDescriptions) {
     advancedButton->showDescription();
@@ -390,18 +391,17 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
 
   // --- Navigation: close subpanels ---
 
-  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel, steeringPanel, advancedSteeringPanel, tuneTablePanel, tuneTableWidget]() {
+  QObject::connect(parent, &StarPilotSettingsWindow::closeSubSubPanel, [retrofitLayout, steeringPanel, advancedSteeringPanel, tuneTablePanel, tuneTableWidget]() {
     QWidget *current = retrofitLayout->currentWidget();
     if (current == advancedSteeringPanel) {
       retrofitLayout->setCurrentWidget(steeringPanel);
     } else if (current == tuneTablePanel) {
-      if (!tuneTableWidget->isShowingTableOverview()) {
-        tuneTableWidget->closeDetailPanel();
-      } else {
-        retrofitLayout->setCurrentWidget(retrofitPanel);
-      }
-    } else {
-      retrofitLayout->setCurrentWidget(retrofitPanel);
+      tuneTableWidget->closeDetailPanel();
     }
+  });
+
+  QObject::connect(parent, &StarPilotSettingsWindow::closeSubPanel, [retrofitLayout, retrofitPanel, tuneTableWidget]() {
+    tuneTableWidget->closeDetailPanel();
+    retrofitLayout->setCurrentWidget(retrofitPanel);
   });
 }

@@ -503,7 +503,7 @@ public:
   }
 
 signals:
-  void openSubPanel();
+  void openSubSubPanel();
 
 private:
   QStackedLayout *m_tuneLayout = nullptr;

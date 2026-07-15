@@ -175,6 +175,7 @@ void StarPilotSettingsWindow::createPanelButtons(StarPilotListWidget *list) {
   QObject::connect(starpilotThemesPanel, &StarPilotThemesPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotVehiclesPanel, &StarPilotVehiclesPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotRetrofitPanel, &StarPilotRetrofitPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
+  QObject::connect(starpilotRetrofitPanel, &StarPilotRetrofitPanel::openSubSubPanel, this, &StarPilotSettingsWindow::openSubSubPanel);
   QObject::connect(starpilotVisualsPanel, &StarPilotVisualsPanel::openSubPanel, this, &StarPilotSettingsWindow::openSubPanel);
   QObject::connect(starpilotVisualsPanel, &StarPilotVisualsPanel::openSubSubPanel, this, &StarPilotSettingsWindow::openSubSubPanel);
 }
