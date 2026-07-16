@@ -19,7 +19,7 @@ except Exception:
 
 
 def set_time(new_time):
-  diff = datetime.datetime.now() - new_time
+  diff = datetime.datetime.utcnow() - new_time
   if abs(diff) < datetime.timedelta(seconds=10):
     cloudlog.debug(f"Time diff too small: {diff}")
     return
@@ -82,7 +82,7 @@ def main() -> NoReturn:
     pm.send('clocks', msg)
 
     gps = sm[gps_location_service]
-    gps_time = datetime.datetime.fromtimestamp(gps.unixTimestampMillis / 1000.)
+    gps_time = datetime.datetime.utcfromtimestamp(gps.unixTimestampMillis / 1000.)
     if not sm.updated[gps_location_service] or (time.monotonic() - sm.logMonoTime[gps_location_service] / 1e9) > 2.0:
       continue
     if not gps.hasFix:
