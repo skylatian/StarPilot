@@ -740,6 +740,7 @@ class StarPilotVariables:
     toggle.retrofit_tune_friction_lat_rise = self.get_value("RetrofitTuneFrictionLatRise", cast=float, default=0.20, min=0.01, max=2.0)
     toggle.retrofit_tune_friction_jerk_rise = self.get_value("RetrofitTuneFrictionJerkRise", cast=float, default=0.24, min=0.01, max=2.0)
     toggle.retrofit_tune_turn_in_boost = self.get_value("RetrofitTuneTurnInBoost", cast=float, default=0.0, min=0.0, max=1.0)
+    toggle.retrofit_tune_unwind_boost = self.get_value("RetrofitTuneUnwindBoost", cast=float, default=0.0, min=0.0, max=1.0)
     toggle.retrofit_tune_unwind_taper = self.get_value("RetrofitTuneUnwindTaper", cast=float, default=0.55, min=0.0, max=1.0)
     toggle.retrofit_tune_turn_in_threshold_reduction = self.get_value("RetrofitTuneTurnInThresholdReduction", cast=float, default=0.10, min=0.0, max=0.5)
     toggle.retrofit_tune_unwind_threshold_increase = self.get_value("RetrofitTuneUnwindThresholdIncrease", cast=float, default=0.50, min=0.0, max=1.0)

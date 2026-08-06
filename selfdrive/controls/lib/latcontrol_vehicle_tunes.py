@@ -702,6 +702,7 @@ RETROFIT_FF_CUTOFF_WIDTH = 0.30
 RETROFIT_FRICTION_LAT_RISE = 0.20
 RETROFIT_FRICTION_JERK_RISE = 0.24
 RETROFIT_TURN_IN_BOOST = 0.0
+RETROFIT_UNWIND_BOOST = 0.0
 RETROFIT_UNWIND_TAPER = 0.55
 RETROFIT_TURN_IN_THRESHOLD_REDUCTION = 0.10
 RETROFIT_UNWIND_THRESHOLD_INCREASE = 0.50
@@ -717,7 +718,7 @@ RetrofitTuneParams = namedtuple('RetrofitTuneParams', [
   'transition_speed', 'phase_scale',
   'ff_gain', 'ff_onset', 'ff_onset_width', 'ff_cutoff', 'ff_cutoff_width',
   'friction_lat_rise', 'friction_jerk_rise',
-  'turn_in_boost', 'unwind_taper',
+  'turn_in_boost', 'unwind_boost', 'unwind_taper',
   'turn_in_threshold_reduction', 'unwind_threshold_increase',
   'turn_in_friction_boost', 'unwind_friction_reduction',
   'center_taper_max', 'center_taper_lat', 'center_taper_lat_width',
@@ -729,7 +730,7 @@ RETROFIT_TUNE_DEFAULTS = RetrofitTuneParams(
   ff_gain=RETROFIT_FF_GAIN, ff_onset=RETROFIT_FF_ONSET, ff_onset_width=RETROFIT_FF_ONSET_WIDTH,
   ff_cutoff=RETROFIT_FF_CUTOFF, ff_cutoff_width=RETROFIT_FF_CUTOFF_WIDTH,
   friction_lat_rise=RETROFIT_FRICTION_LAT_RISE, friction_jerk_rise=RETROFIT_FRICTION_JERK_RISE,
-  turn_in_boost=RETROFIT_TURN_IN_BOOST, unwind_taper=RETROFIT_UNWIND_TAPER,
+  turn_in_boost=RETROFIT_TURN_IN_BOOST, unwind_boost=RETROFIT_UNWIND_BOOST, unwind_taper=RETROFIT_UNWIND_TAPER,
   turn_in_threshold_reduction=RETROFIT_TURN_IN_THRESHOLD_REDUCTION, unwind_threshold_increase=RETROFIT_UNWIND_THRESHOLD_INCREASE,
   turn_in_friction_boost=RETROFIT_TURN_IN_FRICTION_BOOST, unwind_friction_reduction=RETROFIT_UNWIND_FRICTION_REDUCTION,
   center_taper_max=RETROFIT_CENTER_TAPER_MAX, center_taper_lat=RETROFIT_CENTER_TAPER_LAT,
@@ -1012,9 +1013,12 @@ def get_retrofit_ff_scale(desired_lateral_accel: float, desired_lateral_jerk: fl
   turn_in_weight = max(phase, 0.0)
   unwind_weight = max(-phase, 0.0)
   low_speed_factor = _retrofit_low_speed_factor(v_ego, tune)
-  turn_in_boost = 1.0 + (tune.turn_in_boost * turn_in_weight * (0.35 + 0.65 * low_speed_factor))
-  unwind_taper = 1.0 - (tune.unwind_taper * unwind_weight * (0.35 + 0.65 * low_speed_factor))
-  return 1.0 + (extra_scale * turn_in_boost * max(unwind_taper, 0.0))
+  speed_blend = 0.35 + 0.65 * low_speed_factor
+  turn_in_boost = 1.0 + (tune.turn_in_boost * turn_in_weight * speed_blend)
+  unwind_taper = 1.0 - (tune.unwind_taper * unwind_weight * speed_blend)
+  center_weight = 1.0 - onset
+  unwind_assist = tune.unwind_boost * unwind_weight * center_weight * speed_blend
+  return 1.0 + (extra_scale * turn_in_boost * max(unwind_taper, 0.0)) + unwind_assist
 
 
 def get_retrofit_friction_threshold(v_ego: float, desired_lateral_accel: float, desired_lateral_jerk: float, tune: RetrofitTuneParams = RETROFIT_TUNE_DEFAULTS) -> float:

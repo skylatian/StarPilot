@@ -546,6 +546,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RetrofitTuneTurnInBoost", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"RetrofitTuneTurnInFrictionBoost", {PERSISTENT, FLOAT, "0.04", "0.04", 2}},
     {"RetrofitTuneTurnInThresholdReduction", {PERSISTENT, FLOAT, "0.10", "0.10", 2}},
+    {"RetrofitTuneUnwindBoost", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"RetrofitTuneUnwindFrictionReduction", {PERSISTENT, FLOAT, "0.30", "0.30", 2}},
     {"RetrofitTuneUnwindTaper", {PERSISTENT, FLOAT, "0.55", "0.55", 2}},
     {"RetrofitTuneUnwindThresholdIncrease", {PERSISTENT, FLOAT, "0.50", "0.50", 2}},

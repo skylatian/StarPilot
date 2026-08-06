@@ -273,6 +273,7 @@ class LatControlTorque(LatControl):
           friction_lat_rise=max(_g('retrofit_tune_friction_lat_rise', 0.20), 0.01),
           friction_jerk_rise=max(_g('retrofit_tune_friction_jerk_rise', 0.24), 0.01),
           turn_in_boost=_g('retrofit_tune_turn_in_boost', 0.0),
+          unwind_boost=_g('retrofit_tune_unwind_boost', 0.0),
           unwind_taper=_g('retrofit_tune_unwind_taper', 0.55),
           turn_in_threshold_reduction=_g('retrofit_tune_turn_in_threshold_reduction', 0.10),
           unwind_threshold_increase=_g('retrofit_tune_unwind_threshold_increase', 0.50),

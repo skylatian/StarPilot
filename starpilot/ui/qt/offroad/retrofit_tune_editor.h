@@ -403,8 +403,9 @@ public:
     setContentsMargins(0, 0, 0, 0);
   }
 
-  void setDynamicsParams(float turn_in_boost, float unwind_taper) {
+  void setDynamicsParams(float turn_in_boost, float unwind_boost, float unwind_taper) {
     m_turn_in_boost = turn_in_boost;
+    m_unwind_boost = unwind_boost;
     m_unwind_taper = unwind_taper;
     update();
   }
@@ -424,7 +425,8 @@ protected:
     p.fillRect(plotRect, QColor(20, 20, 20));
 
     const float x_min = -1.0f, x_max = 1.0f;
-    const float y_min = 0.3f, y_max = 1.3f;
+    const float y_max_base = 1.3f + m_unwind_boost;
+    const float y_min = 0.3f, y_max = std::max(y_max_base, 1.3f);
 
     auto toSX = [&](float x) -> int { return pad_l + (int)((x - x_min) / (x_max - x_min) * plot_w); };
     auto toSY = [&](float y) -> int { return pad_t + (int)((y_max - y) / (y_max - y_min) * plot_h); };
@@ -433,7 +435,8 @@ protected:
     p.setPen(QPen(QColor(60, 60, 60), 1));
     for (float gx : {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f})
       p.drawLine(toSX(gx), pad_t, toSX(gx), pad_t + plot_h);
-    for (float gy : {0.4f, 0.6f, 0.8f, 1.0f, 1.2f})
+    float y_step = 0.2f;
+    for (float gy = y_min + y_step; gy < y_max - 0.01f; gy += y_step)
       p.drawLine(pad_l, toSY(gy), pad_l + plot_w, toSY(gy));
 
     // 1.0 reference
@@ -458,7 +461,7 @@ protected:
     p.drawText(pad_l + plot_w - 80, pad_t + plot_h + 38, "turn-in \xe2\x86\x92");
 
     p.setPen(QColor(150, 150, 150));
-    for (float gy : {0.4f, 0.6f, 0.8f, 1.0f, 1.2f})
+    for (float gy = y_min + y_step; gy < y_max - 0.01f; gy += y_step)
       p.drawText(5, toSY(gy) + 5, QString::number(gy, 'f', 1));
 
     // FF multiplier curve
@@ -471,7 +474,8 @@ protected:
       float unwind_weight = std::max(-phase, 0.0f);
       float boost = 1.0f + (m_turn_in_boost * turn_in_weight);
       float taper = 1.0f - (m_unwind_taper * unwind_weight);
-      float ff_mult = boost * std::max(taper, 0.0f);
+      float unwind_assist = m_unwind_boost * unwind_weight;
+      float ff_mult = boost * std::max(taper, 0.0f) + unwind_assist;
       QPointF pt(toSX(phase), toSY(ff_mult));
       if (has_prev) p.drawLine(prev, pt);
       prev = pt;
@@ -486,6 +490,7 @@ protected:
 
 private:
   float m_turn_in_boost = 0.0f;
+  float m_unwind_boost = 0.0f;
   float m_unwind_taper = 0.55f;
 };
 

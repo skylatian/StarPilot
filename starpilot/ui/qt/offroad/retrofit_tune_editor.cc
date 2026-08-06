@@ -215,10 +215,15 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   TurnDynamicsPreviewWidget *turnPreview = new TurnDynamicsPreviewWidget(this);
   turnPreview->setDynamicsParams(
       params.getFloat("RetrofitTuneTurnInBoost"),
+      params.getFloat("RetrofitTuneUnwindBoost"),
       params.getFloat("RetrofitTuneUnwindTaper"));
   turnList->addItem(turnPreview);
 
   TuneParam turnParams[] = {
+    {"RetrofitTuneUnwindBoost", tr("Unwind Boost"), 0.0f, 0.0f, 1.0f, 0.05f,
+     tr("Actively pushes the wheel back toward center when exiting a turn. "
+        "For cars with weak self-centering (e.g. dual power steering). "
+        "Higher = stronger centering assist. Start at 0.15-0.30 and increase if the car still feels lazy returning to straight.")},
     {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.0f, 0.05f,
      tr("How much to back off steering when exiting a turn (straightening out). "
         "Higher = pulls back more aggressively, preventing overshoot past center. "
@@ -280,6 +285,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
         toggle->refresh();
         turnPreview->setDynamicsParams(
             params.getFloat("RetrofitTuneTurnInBoost"),
+            params.getFloat("RetrofitTuneUnwindBoost"),
             params.getFloat("RetrofitTuneUnwindTaper"));
       }
     });
@@ -287,6 +293,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
     QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [turnPreview, this](float) {
       turnPreview->setDynamicsParams(
           params.getFloat("RetrofitTuneTurnInBoost"),
+          params.getFloat("RetrofitTuneUnwindBoost"),
           params.getFloat("RetrofitTuneUnwindTaper"));
     });
   }
