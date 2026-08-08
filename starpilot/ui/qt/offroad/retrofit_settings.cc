@@ -278,15 +278,16 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     }
   });
 
-  // update curve preview when any slider changes — use signal value directly,
-  // since params are only written to disk on hideEvent
   QObject::connect(strengthToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    strengthToggle->updateParam();
     curveWidget->setStrength(v);
   });
   QObject::connect(saturationToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    saturationToggle->updateParam();
     curveWidget->setSaturation(v);
   });
   QObject::connect(biasToggle, &StarPilotParamValueButtonControl::valueChanged, [this](float v) {
+    biasToggle->updateParam();
     curveWidget->setBias(v);
   });
 

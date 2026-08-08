@@ -504,6 +504,7 @@ public:
     } else {
       params.putFloat(key, value);
     }
+    previous_value = value;
   }
 
   void updateValue() {

@@ -28,6 +28,14 @@ public:
   void setBias(float v) { m_bias = v; update(); }
 
 protected:
+  void showEvent(QShowEvent *) override {
+    Params p;
+    setParams(
+        p.getFloat("RetrofitNonlinearStrength"),
+        p.getFloat("RetrofitNonlinearSaturation"),
+        p.getFloat("RetrofitNonlinearBias"));
+  }
+
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
