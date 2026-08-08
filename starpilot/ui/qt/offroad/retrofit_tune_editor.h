@@ -51,6 +51,8 @@ signals:
   void pointCommitted(int index, float value);
 
 protected:
+  void showEvent(QShowEvent *) override { reloadFromParams(); }
+
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -215,6 +217,16 @@ public:
   }
 
 protected:
+  void showEvent(QShowEvent *) override {
+    Params p;
+    setTaperParams(
+        p.getFloat("RetrofitTuneCenterTaperMax"),
+        p.getFloat("RetrofitTuneCenterTaperLat"),
+        p.getFloat("RetrofitTuneCenterTaperLatWidth"),
+        p.getFloat("RetrofitTuneCenterTaperSpeed"),
+        p.getFloat("RetrofitTuneCenterTaperSpeedWidth"));
+  }
+
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -313,6 +325,16 @@ public:
   }
 
 protected:
+  void showEvent(QShowEvent *) override {
+    Params p;
+    setFFParams(
+        p.getFloat("RetrofitTuneFFGain"),
+        p.getFloat("RetrofitTuneFFOnset"),
+        p.getFloat("RetrofitTuneFFOnsetWidth"),
+        p.getFloat("RetrofitTuneFFCutoff"),
+        p.getFloat("RetrofitTuneFFCutoffWidth"));
+  }
+
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -411,6 +433,14 @@ public:
   }
 
 protected:
+  void showEvent(QShowEvent *) override {
+    Params p;
+    setDynamicsParams(
+        p.getFloat("RetrofitTuneTurnInBoost"),
+        p.getFloat("RetrofitTuneUnwindBoost"),
+        p.getFloat("RetrofitTuneUnwindTaper"));
+  }
+
   void paintEvent(QPaintEvent *) override {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);

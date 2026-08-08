@@ -198,7 +198,8 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [ffPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [toggle, ffPreview, this](float) {
+      toggle->updateParam();
       ffPreview->setFFParams(
           params.getFloat("RetrofitTuneFFGain"),
           params.getFloat("RetrofitTuneFFOnset"),
@@ -290,7 +291,8 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [turnPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [toggle, turnPreview, this](float) {
+      toggle->updateParam();
       turnPreview->setDynamicsParams(
           params.getFloat("RetrofitTuneTurnInBoost"),
           params.getFloat("RetrofitTuneUnwindBoost"),
@@ -362,7 +364,8 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
       }
     });
 
-    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [centerPreview, this](float) {
+    QObject::connect(toggle, &StarPilotParamValueButtonControl::valueChanged, [toggle, centerPreview, this](float) {
+      toggle->updateParam();
       centerPreview->setTaperParams(
           params.getFloat("RetrofitTuneCenterTaperMax"),
           params.getFloat("RetrofitTuneCenterTaperLat"),
