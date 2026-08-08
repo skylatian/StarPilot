@@ -80,7 +80,7 @@ class CarInterface(CarInterfaceBase):
                params.get_float("RetrofitNonlinearRightC", default=0.2),
                params.get_float("RetrofitNonlinearRightD", default=0.0)]
     else:
-      strength = params.get_float("RetrofitNonlinearStrength", default=0.5)
+      strength = params.get_float("RetrofitNonlinearStrength", default=0.0)
       saturation = params.get_float("RetrofitNonlinearSaturation", default=2.5)
       bias = params.get_float("RetrofitNonlinearBias", default=0.0)
       left, right = _user_params_to_abcd(strength, saturation, bias)

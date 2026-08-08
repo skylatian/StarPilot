@@ -208,7 +208,7 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     params.getFloat("RetrofitNonlinearBias"));
   steeringList->addItem(curveWidget);
 
-  const float defaultStrength = 0.5f;
+  const float defaultStrength = 0.0f;
   std::vector<QString> strengthResetButton{tr("Reset")};
   strengthToggle = new StarPilotParamValueButtonControl(
       "RetrofitNonlinearStrength",

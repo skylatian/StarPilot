@@ -120,7 +120,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ButtonControl *kpResetButton = new ButtonControl(tr("Reset All KP"), tr("RESET"), "");
   QObject::connect(kpResetButton, &ButtonControl::clicked, [kpCurve, this]() {
     if (StarPilotConfirmationDialog::yesorno(tr("Reset all KP values to defaults?"), this)) {
-      float defaults[] = {100, 50, 30, 18, 8, 4.5f, 3.0f, 1.8f, 0.6f};
+      float defaults[] = {250, 120, 65, 30, 11.5f, 5.5f, 3.5f, 2.0f, 0.6f};
       const char *keys[] = {"RetrofitTuneKP1", "RetrofitTuneKP1_5", "RetrofitTuneKP2", "RetrofitTuneKP3",
                              "RetrofitTuneKP5", "RetrofitTuneKP7_5", "RetrofitTuneKP10", "RetrofitTuneKP15", "RetrofitTuneKP30"};
       for (int i = 0; i < 9; i++) {
@@ -155,7 +155,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   ffList->addItem(ffPreview);
 
   TuneParam ffParams[] = {
-    {"RetrofitTuneFFGain", tr("FF Gain"), 0.04f, 0.0f, 0.5f, 0.01f,
+    {"RetrofitTuneFFGain", tr("FF Gain"), 0.0f, 0.0f, 0.5f, 0.01f,
      tr("How much extra steering effort to add in the boost zone (see curve above). "
         "Higher = more aggressive mid-corner steering. 0 = no boost at all.")},
     {"RetrofitTuneFFOnset", tr("FF Onset"), 0.18f, 0.0f, 2.0f, 0.02f,
@@ -224,7 +224,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
      tr("Actively pushes the wheel back toward center when exiting a turn. "
         "For cars with weak self-centering (e.g. dual power steering). "
         "Higher = stronger centering assist. Start at 0.15-0.30 and increase if the car still feels lazy returning to straight.")},
-    {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.55f, 0.0f, 1.0f, 0.05f,
+    {"RetrofitTuneUnwindTaper", tr("Unwind Taper"), 0.0f, 0.0f, 1.0f, 0.05f,
      tr("How much to back off steering when exiting a turn (straightening out). "
         "Higher = pulls back more aggressively, preventing overshoot past center. "
         "0 = no reduction. Too high can make turn exits feel jerky.")},
@@ -248,19 +248,19 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
      tr("How much a sudden change in steering activates the friction adjustments. "
         "Smaller = quick flicks trigger friction changes. "
         "Larger = only sustained turning matters.")},
-    {"RetrofitTuneTurnInThresholdReduction", tr("TI Thresh. Reduction"), 0.10f, 0.0f, 0.5f, 0.02f,
+    {"RetrofitTuneTurnInThresholdReduction", tr("TI Thresh. Reduction"), 0.0f, 0.0f, 0.5f, 0.02f,
      tr("Adds extra resistance when entering a turn, helping the wheel hold its position. "
         "Higher = more holding force during turn-in. "
         "Useful if the wheel feels loose when starting to turn.")},
-    {"RetrofitTuneUnwindThresholdIncrease", tr("UW Thresh. Increase"), 0.50f, 0.0f, 1.0f, 0.05f,
+    {"RetrofitTuneUnwindThresholdIncrease", tr("UW Thresh. Increase"), 0.0f, 0.0f, 1.0f, 0.05f,
      tr("Reduces resistance when straightening out, letting the wheel return freely. "
         "Higher = less holding force during turn exit. "
         "Useful if the wheel feels sticky returning to center.")},
-    {"RetrofitTuneTurnInFrictionBoost", tr("TI Friction Boost"), 0.04f, 0.0f, 0.5f, 0.01f,
+    {"RetrofitTuneTurnInFrictionBoost", tr("TI Friction Boost"), 0.0f, 0.0f, 0.5f, 0.01f,
      tr("Adds extra overall friction compensation when entering turns. "
         "Higher = more torque to overcome real steering friction during turn-in. "
         "Increase if the car understeers slightly at the start of turns.")},
-    {"RetrofitTuneUnwindFrictionReduction", tr("UW Friction Reduction"), 0.30f, 0.0f, 1.0f, 0.05f,
+    {"RetrofitTuneUnwindFrictionReduction", tr("UW Friction Reduction"), 0.0f, 0.0f, 1.0f, 0.05f,
      tr("Reduces friction compensation when straightening out. "
         "Higher = less torque fighting the wheel as it returns to center. "
         "Increase if the car overshoots when exiting turns.")},
@@ -312,7 +312,7 @@ RetrofitTuneTablePanel::RetrofitTuneTablePanel(StarPilotSettingsWindow *parent, 
   centerList->addItem(centerPreview);
 
   TuneParam centerParams[] = {
-    {"RetrofitTuneCenterTaperMax", tr("Taper Max"), 0.20f, 0.0f, 0.5f, 0.02f,
+    {"RetrofitTuneCenterTaperMax", tr("Taper Max"), 0.0f, 0.0f, 0.5f, 0.02f,
      tr("How much to reduce steering when going mostly straight. "
         "0 = disabled. 0.20 = 20% quieter. Increase if you see jitter on highways. "
         "Too high can make the car slow to respond to gentle lane changes.")},
