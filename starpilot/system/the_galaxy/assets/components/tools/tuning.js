@@ -32,7 +32,7 @@ let initialized = false
 let statusPollHandle = null
 
 function isTuningRouteActive() {
-  return window.location.pathname === "/tuning" || window.location.pathname === "/lateral_maneuvers"
+  return window.location.pathname === "/tuning"
 }
 
 function formatTimestamp(value) {

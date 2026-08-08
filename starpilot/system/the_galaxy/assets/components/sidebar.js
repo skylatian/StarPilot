@@ -15,6 +15,7 @@ const MENU_ITEMS = {
     { name: "Error Logs", link: "/manage_error_logs", icon: "bi-exclamation-triangle" },
     { name: "Galaxy", link: "/galaxy", icon: "bi-globe2" },
     { name: "Lateral Tuning", link: "/tuning", icon: "bi-sign-turn-right" },
+    { name: "Lat Maneuvers", link: "/lateral_maneuvers", icon: "bi-arrows-move" },
     { name: "Long Maneuvers", link: "/longitudinal_maneuvers", icon: "bi-signpost-split" },
     { name: "Maps", link: "/manage_maps", icon: "bi-map" },
     { name: "Navigation", link: "/set_navigation_destination", icon: "bi-geo-alt-fill" },
@@ -33,7 +34,6 @@ const MENU_ITEMS = {
 
 function matchesPath(currentPath, link) {
   if (link === "/") return currentPath === "/";
-  if (link === "/tuning" && currentPath === "/lateral_maneuvers") return true;
   return currentPath === link || currentPath.startsWith(`${link}/`);
 }
 
