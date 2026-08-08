@@ -122,44 +122,86 @@ def _sine_action(amplitude, period, duration):
   return Action(accel.tolist(), t.tolist())
 
 
-MANEUVERS = [
-  Maneuver(
-    "step right 20mph",
-    [Action([0.5], [1.0]), Action([-0.5], [1.5])],
-    repeat=2,
-    initial_speed=20. * CV.MPH_TO_MS,
-  ),
-  Maneuver(
-    "step left 20mph",
-    [Action([-0.5], [1.0]), Action([0.5], [1.5])],
-    repeat=2,
-    initial_speed=20. * CV.MPH_TO_MS,
-  ),
-  Maneuver(
-    "sine 0.5Hz 20mph",
-    [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
-    repeat=2,
-    initial_speed=20. * CV.MPH_TO_MS,
-  ),
-  Maneuver(
-    "step right 30mph",
-    [Action([0.5], [1.0]), Action([-0.5], [1.5])],
-    repeat=2,
-    initial_speed=30. * CV.MPH_TO_MS,
-  ),
-  Maneuver(
-    "step left 30mph",
-    [Action([-0.5], [1.0]), Action([0.5], [1.5])],
-    repeat=2,
-    initial_speed=30. * CV.MPH_TO_MS,
-  ),
-  Maneuver(
-    "sine 0.5Hz 30mph",
-    [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
-    repeat=2,
-    initial_speed=30. * CV.MPH_TO_MS,
-  ),
+def _step_pair(amp, speed_mph, hold=1.0, return_hold=1.5):
+  speed = speed_mph * CV.MPH_TO_MS
+  return [
+    Maneuver(f"step right {amp} {speed_mph}mph",
+             [Action([amp], [hold]), Action([-amp], [return_hold])],
+             repeat=2, initial_speed=speed),
+    Maneuver(f"step left {amp} {speed_mph}mph",
+             [Action([-amp], [hold]), Action([amp], [return_hold])],
+             repeat=2, initial_speed=speed),
+  ]
+
+
+def _release_pair(amp, speed_mph, hold=2.0, release=3.0):
+  speed = speed_mph * CV.MPH_TO_MS
+  return [
+    Maneuver(f"release right {amp} {speed_mph}mph",
+             [Action([amp], [hold]), Action([0.0], [release])],
+             repeat=2, initial_speed=speed),
+    Maneuver(f"release left {amp} {speed_mph}mph",
+             [Action([-amp], [hold]), Action([0.0], [release])],
+             repeat=2, initial_speed=speed),
+  ]
+
+
+# Pack A: Sanity check — small steps at low speed
+PACK_A = []
+for mph in [15, 20]:
+  PACK_A += _step_pair(0.3, mph)
+
+# Pack B: Speed sweep — step responses across speed range
+PACK_B = []
+for mph in [15, 20, 25, 30]:
+  PACK_B += _step_pair(0.5, mph)
+
+# Pack C: Centering — steer then release to zero, measure return
+PACK_C = []
+for mph in [15, 20, 25, 30]:
+  PACK_C += _release_pair(0.5, mph)
+
+# Pack D: Amplitude sweep — map nonlinearity at 20 mph
+PACK_D = []
+for amp in [0.3, 0.5, 0.8, 1.0]:
+  PACK_D += _step_pair(amp, 20)
+
+# Pack E: Gentle high-speed steps
+PACK_E = []
+for mph in [30, 35]:
+  PACK_E += _step_pair(0.3, mph)
+  PACK_E += _release_pair(0.3, mph)
+
+# Original StarPilot maneuvers
+PACK_STOCK = [
+  Maneuver("step right 20mph", [Action([0.5], [1.0]), Action([-0.5], [1.5])],
+           repeat=2, initial_speed=20. * CV.MPH_TO_MS),
+  Maneuver("step left 20mph", [Action([-0.5], [1.0]), Action([0.5], [1.5])],
+           repeat=2, initial_speed=20. * CV.MPH_TO_MS),
+  Maneuver("sine 0.5Hz 20mph", [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
+           repeat=2, initial_speed=20. * CV.MPH_TO_MS),
+  Maneuver("step right 30mph", [Action([0.5], [1.0]), Action([-0.5], [1.5])],
+           repeat=2, initial_speed=30. * CV.MPH_TO_MS),
+  Maneuver("step left 30mph", [Action([-0.5], [1.0]), Action([0.5], [1.5])],
+           repeat=2, initial_speed=30. * CV.MPH_TO_MS),
+  Maneuver("sine 0.5Hz 30mph", [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
+           repeat=2, initial_speed=30. * CV.MPH_TO_MS),
 ]
+
+PACKS = {
+  "A": PACK_A,
+  "B": PACK_B,
+  "C": PACK_C,
+  "D": PACK_D,
+  "E": PACK_E,
+  "stock": PACK_STOCK,
+  "all": PACK_A + PACK_B + PACK_C + PACK_D + PACK_E,
+}
+
+
+def _get_maneuvers():
+  pack_name = Params().get("LateralManeuverPack", encoding="utf-8") or "stock"
+  return PACKS.get(pack_name.strip(), PACK_STOCK)
 
 
 def main():
@@ -172,7 +214,7 @@ def main():
   sm = messaging.SubMaster(['carState', 'carControl', 'controlsState', 'selfdriveState', 'modelV2'], poll='modelV2')
   pm = messaging.PubMaster(['lateralManeuverPlan', 'alertDebug'])
 
-  maneuvers = iter(MANEUVERS)
+  maneuvers = iter(_get_maneuvers())
   maneuver = None
   complete_cnt = 0
   display_holdoff = 0
