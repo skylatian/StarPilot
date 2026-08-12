@@ -387,6 +387,8 @@ def main() -> None:
 
   # *** setup messaging
   sm = messaging.SubMaster(['modelV2', 'carState', 'liveTracks'], poll='modelV2',
+                           ignore_alive=['starpilotPlan'],
+                           ignore_avg_freq=['starpilotPlan'],
                            ignore_valid=['starpilotPlan'])
   pm = messaging.PubMaster(['radarState'])
 
