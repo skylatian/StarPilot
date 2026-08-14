@@ -309,10 +309,16 @@ class SelfdriveD:
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
-    if self.sm.recv_frame['lateralManeuverPlan'] > 0:
+    # NB: use alive (currently receiving) not recv_frame (ever received). recv_frame
+    # is monotonic, so the old check latched the maneuver overlay on permanently after
+    # the first frame — it never cleared on disarm, costing ~24% UI framerate forever
+    # (see project_docs/phase3-starpilot-2026-08-13-ui-starvation-diagnosis.md). alive
+    # is computed even though these are in ignore_alive, and drops 0.5s after publishing
+    # stops. Both branches need it: lateral_maneuversd publishes alertDebug too.
+    if self.sm.alive['lateralManeuverPlan']:
       self.starpilot_events.add(StarPilotEventName.lateralManeuver)
       self.startup_event = None
-    elif self.sm.recv_frame['alertDebug'] > 0:
+    elif self.sm.alive['alertDebug']:
       self.events.add(EventName.longitudinalManeuver)
       self.startup_event = None
 
