@@ -147,22 +147,33 @@ void ui_stall_progress(UIStallPhase phase, uint64_t frame = 0) {
   }
 }
 
-// The HUD reads carState/modelV2 straight out of the SubMaster that only
-// UIState::update() refreshes, but it renders from paintEvent, which the vipc
-// thread drives independently. Qt drains posted events (paint requests) before
-// timers, so a paint-saturated main thread starves the 20Hz update timer and
-// everything openpilot draws goes stale while the camera texture keeps moving.
-// Report the loop's real cadence so that shows up in the rlog.
-void ui_report_update_rate() {
+// The onroad HUD reads carState/modelV2 out of the SubMaster that only
+// UIState::update() refreshes. Report, once per second: the loop's real cadence,
+// and — per service — how many of this second's update() calls actually received a
+// NEW frame ("fresh/s"), plus the carState values the UI currently sees. This
+// separates a stale-render bug (loop runs, fresh/s high, but display frozen) from a
+// delivery bug (fresh/s ~0 while the rlog shows the service still publishing). Call
+// AFTER update_sockets() so rcv_frame reflects this frame's poll.
+void ui_report_update_rate(SubMaster *sm) {
+  static constexpr const char *kServices[] = {
+    "carState", "modelV2", "controlsState", "deviceState", "liveCalibration",
+  };
+  static constexpr int kNum = sizeof(kServices) / sizeof(kServices[0]);
+
   static uint64_t window_start_ns = 0;
   static uint64_t last_call_ns = 0;
   static int calls = 0;
   static double max_gap_s = 0.0;
+  static uint64_t last_rcv[kNum] = {0};
+  static int fresh[kNum] = {0};
 
   const uint64_t now = nanos_since_boot();
   if (window_start_ns == 0) {
     window_start_ns = now;
     last_call_ns = now;
+    for (int i = 0; i < kNum; i++) {
+      last_rcv[i] = sm->rcv_frame(kServices[i]);
+    }
     return;
   }
 
@@ -170,17 +181,33 @@ void ui_report_update_rate() {
   max_gap_s = std::max(max_gap_s, ui_elapsed_s(now, last_call_ns));
   last_call_ns = now;
 
+  for (int i = 0; i < kNum; i++) {
+    const uint64_t rf = sm->rcv_frame(kServices[i]);
+    if (rf != last_rcv[i]) {
+      fresh[i]++;
+      last_rcv[i] = rf;
+    }
+  }
+
   const double window_s = ui_elapsed_s(now, window_start_ns);
   if (window_s < 1.0) {
     return;
   }
 
-  LOGW("UI update loop: %.1f Hz (target %d Hz) max_gap=%.3fs over %.2fs",
-       calls / window_s, UI_FREQ, max_gap_s, window_s);
+  const auto &cs = (*sm)["carState"].getCarState();
+  LOGW("UI update loop: %.1f Hz (target %d Hz) max_gap=%.3fs over %.2fs | "
+       "fresh/s carState=%d modelV2=%d controlsState=%d deviceState=%d liveCalib=%d | "
+       "UIsees vEgoCluster=%.2f vEgo=%.2f steerAngle=%.1f",
+       calls / window_s, UI_FREQ, max_gap_s, window_s,
+       fresh[0], fresh[1], fresh[2], fresh[3], fresh[4],
+       cs.getVEgoCluster(), cs.getVEgo(), cs.getSteeringAngleDeg());
 
   window_start_ns = now;
   calls = 0;
   max_gap_s = 0.0;
+  for (int i = 0; i < kNum; i++) {
+    fresh[i] = 0;
+  }
 }
 
 void start_ui_stall_monitor() {
@@ -415,9 +442,9 @@ UIState::UIState(QObject *parent) : QObject(parent) {
 }
 
 void UIState::update() {
-  ui_report_update_rate();
   ui_stall_progress(UIStallPhase::UPDATE_START, sm->frame);
   update_sockets(this);
+  ui_report_update_rate(sm.get());
   ui_stall_progress(UIStallPhase::AFTER_SOCKETS, sm->frame);
   update_state(this, starpilotUIState());
   ui_stall_progress(UIStallPhase::AFTER_STATE, sm->frame);
