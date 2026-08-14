@@ -71,6 +71,17 @@ class StarPilotRetrofitLayout(_SettingsPage):
           get_state=lambda: self._params.get_bool("RetrofitPauseSteering"),
           set_state=lambda s: self._params.put_bool("RetrofitPauseSteering", s),
         ),
+        SettingRow(
+          "RetrofitDisableMapd",
+          "toggle",
+          tr_noop("Disable Map Data (mapd)"),
+          subtitle=tr_noop(
+            "Stop the mapd process to free CPU (~50% of a core), which on a loaded device can "
+            "starve the UI. Disables map-based speed limits and curve speed control while off."
+          ),
+          get_state=lambda: self._params.get_bool("RetrofitDisableMapd"),
+          set_state=lambda s: self._params.put_bool("RetrofitDisableMapd", s),
+        ),
       ]),
       SettingSection(tr_noop("Steering"), [
         SettingRow(

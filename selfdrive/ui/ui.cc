@@ -147,6 +147,42 @@ void ui_stall_progress(UIStallPhase phase, uint64_t frame = 0) {
   }
 }
 
+// The HUD reads carState/modelV2 straight out of the SubMaster that only
+// UIState::update() refreshes, but it renders from paintEvent, which the vipc
+// thread drives independently. Qt drains posted events (paint requests) before
+// timers, so a paint-saturated main thread starves the 20Hz update timer and
+// everything openpilot draws goes stale while the camera texture keeps moving.
+// Report the loop's real cadence so that shows up in the rlog.
+void ui_report_update_rate() {
+  static uint64_t window_start_ns = 0;
+  static uint64_t last_call_ns = 0;
+  static int calls = 0;
+  static double max_gap_s = 0.0;
+
+  const uint64_t now = nanos_since_boot();
+  if (window_start_ns == 0) {
+    window_start_ns = now;
+    last_call_ns = now;
+    return;
+  }
+
+  calls++;
+  max_gap_s = std::max(max_gap_s, ui_elapsed_s(now, last_call_ns));
+  last_call_ns = now;
+
+  const double window_s = ui_elapsed_s(now, window_start_ns);
+  if (window_s < 1.0) {
+    return;
+  }
+
+  LOGW("UI update loop: %.1f Hz (target %d Hz) max_gap=%.3fs over %.2fs",
+       calls / window_s, UI_FREQ, max_gap_s, window_s);
+
+  window_start_ns = now;
+  calls = 0;
+  max_gap_s = 0.0;
+}
+
 void start_ui_stall_monitor() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -379,6 +415,7 @@ UIState::UIState(QObject *parent) : QObject(parent) {
 }
 
 void UIState::update() {
+  ui_report_update_rate();
   ui_stall_progress(UIStallPhase::UPDATE_START, sm->frame);
   update_sockets(this);
   ui_stall_progress(UIStallPhase::AFTER_SOCKETS, sm->frame);

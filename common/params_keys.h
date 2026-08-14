@@ -505,6 +505,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RelaxedJerkSpeedDecrease", {PERSISTENT, FLOAT, "100.0", "100.0", 3}},
     {"ReverseCruise", {PERSISTENT, BOOL, "0", "0", 1}},
     {"RecoveryPower", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
+    {"RetrofitDisableMapd", {PERSISTENT, BOOL, "0", "0", 2}},
     {"RetrofitNonlinearSteering", {PERSISTENT, BOOL, "0", "0", 2}},
     {"RetrofitNonlinearStrength", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"RetrofitNonlinearSaturation", {PERSISTENT, FLOAT, "2.5", "2.5", 2}},

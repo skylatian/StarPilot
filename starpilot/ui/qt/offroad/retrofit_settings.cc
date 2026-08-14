@@ -82,6 +82,18 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
   }
   retrofitList->addItem(pauseSteeringToggle);
 
+  ParamControl *disableMapdToggle = new ParamControl(
+      "RetrofitDisableMapd",
+      tr("Disable Map Data (mapd)"),
+      tr("<b>Stop the mapd process to free CPU.</b> Costs ~50% of a core, which on a loaded device can "
+         "starve the UI. Disables map-based speed limits and curve speed control while off. "
+         "Takes effect immediately."),
+      "");
+  if (forceOpenDescriptions) {
+    disableMapdToggle->showDescription();
+  }
+  retrofitList->addItem(disableMapdToggle);
+
   const float defaultSASOffset = 0.0f;
   std::vector<QString> sasOffsetResetButton{tr("Reset")};
   sasOffsetToggle = new StarPilotParamValueButtonControl(

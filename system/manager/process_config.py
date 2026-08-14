@@ -84,6 +84,11 @@ def run_speed_limit_vision(started: bool, params: Params, CP: car.CarParams, sta
 def run_navigationd(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return started and params.get("NavDestination") is not None
 
+def run_mapd(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  # mapd costs ~50% of a core. On a loaded C3 that contention starves the UI's
+  # update timer (see ui.cc), so allow trading map features away for headroom.
+  return not params.get_bool("RetrofitDisableMapd")
+
 
 class BigDeviceUIProcess:
   name = "ui"
@@ -234,7 +239,7 @@ else:
 procs += [
   PythonProcess("device_syncd", "starpilot.system.device_syncd", always_run),
   PythonProcess("starpilot_process", "starpilot.starpilot_process", always_run),
-  PythonProcess("mapd", "starpilot.navigation.mapd_wrapper", always_run, nice=19),
+  PythonProcess("mapd", "starpilot.navigation.mapd_wrapper", run_mapd, nice=19),
   PythonProcess("navigationd", "starpilot.navigation.navigationd", run_navigationd, nice=19),
   PythonProcess("speed_limit_filler", "starpilot.system.speed_limit_filler", run_speed_limit_filler, nice=19),
   PythonProcess("speed_limit_vision", "starpilot.system.speed_limit_vision", run_speed_limit_vision, nice=19),
