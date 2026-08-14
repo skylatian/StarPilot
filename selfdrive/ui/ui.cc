@@ -25,6 +25,9 @@
 #define BACKLIGHT_DT 0.05
 #define BACKLIGHT_TS 10.00
 
+// Debug: last speed the HUD computed to paint (see declaration in ui.h).
+double g_ui_hud_painted_speed = 0.0;
+
 namespace {
 
 enum class UIStallPhase {
@@ -197,10 +200,11 @@ void ui_report_update_rate(SubMaster *sm) {
   const auto &cs = (*sm)["carState"].getCarState();
   LOGW("UI update loop: %.1f Hz (target %d Hz) max_gap=%.3fs over %.2fs | "
        "fresh/s carState=%d modelV2=%d controlsState=%d deviceState=%d liveCalib=%d | "
-       "UIsees vEgoCluster=%.2f vEgo=%.2f steerAngle=%.1f",
+       "UIsees vEgoCluster=%.2f vEgo=%.2f steerAngle=%.1f | HUDpaints=%.1f",
        calls / window_s, UI_FREQ, max_gap_s, window_s,
        fresh[0], fresh[1], fresh[2], fresh[3], fresh[4],
-       cs.getVEgoCluster(), cs.getVEgo(), cs.getSteeringAngleDeg());
+       cs.getVEgoCluster(), cs.getVEgo(), cs.getSteeringAngleDeg(),
+       g_ui_hud_painted_speed);
 
   window_start_ns = now;
   calls = 0;

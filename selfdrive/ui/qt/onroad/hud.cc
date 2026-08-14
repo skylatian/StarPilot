@@ -89,6 +89,7 @@ void HudRenderer::updateState(const UIState &s) {
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
   float v_ego = v_ego_cluster_seen && !starpilot_toggles.value("use_wheel_speed").toBool() ? car_state.getVEgoCluster() : car_state.getVEgo();
   speed = std::max<float>(0.0f, v_ego * (is_metric ? MS_TO_KPH : MS_TO_MPH));
+  g_ui_hud_painted_speed = speed;  // debug: compare against value update() fetched
 
   navigation_enabled = params.getBool("NavigationUI");
   navigation_valid = false;

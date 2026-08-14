@@ -108,6 +108,12 @@ private:
 
 UIState *uiState();
 
+// Speed the HUD last computed to paint (display units: mph or kph). Written by
+// HudRenderer::updateState (paint thread) and read by the 1Hz UI update-loop logger
+// to compare "value the HUD paints" vs "value update() fetched into the SubMaster".
+// Both accesses are on the Qt main thread, so a plain double is safe. Debug-only.
+extern double g_ui_hud_painted_speed;
+
 // device management class
 class Device : public QObject {
   Q_OBJECT

@@ -262,7 +262,13 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   double dt = cur_draw_t - prev_draw_t;
   fps = fps_filter.update(1. / dt * 1000);
   if (fps < 15) {
-    LOGW("slow frame rate: %.2f fps", fps);
+    // Rate-limit to ~1/s. At paint rate this fired ~11x/s, flooding swaglog hard
+    // enough to drop other processes' log lines during the exact window we debug.
+    static double last_slow_fps_log_t = 0;
+    if (cur_draw_t - last_slow_fps_log_t > 1000.0) {
+      LOGW("slow frame rate: %.2f fps", fps);
+      last_slow_fps_log_t = cur_draw_t;
+    }
   }
   prev_draw_t = cur_draw_t;
 
