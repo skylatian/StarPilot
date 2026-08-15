@@ -6,6 +6,13 @@
 #include <atomic>
 
 #define DEFAULT_SEGMENT_SIZE (1 * 1024 * 1024)
+// DO NOT raise this. It sizes the shared-memory queue header, and it is NOT the single
+// source of truth: mapd is a Go binary using pfeiferj/gomsgq (own hardcoded 15) and the
+// prebuilt modeld/dmonitoringmodeld binaries also bake in 15 — none rebuild from this
+// tree. Changing it makes source-built processes disagree on the header layout with
+// those over the same /dev/shm segments, corrupting them (msgq_msg_recv size asserts +
+// gomsgq "index out of range [15]" panic, boot crash-loop). If a topic ever needs more
+// than 15 readers, reduce its subscribers instead of enlarging this table.
 #define NUM_READERS 15
 #define ALIGN(n) ((n + (8 - 1)) & -8)
 
