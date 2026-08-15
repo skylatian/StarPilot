@@ -951,6 +951,16 @@ class StarPilotSystemLayout(_SettingsPage):
       self._params.put_bool("ForceOffroad", False)
       self._params.put_bool("ForceOnroad", False)
     elif action_id == "DriveOnroad":
+      # Bench parity with the Qt UI's "Force Drive State -> ONROAD" (utilities.cc):
+      # seed a valid CarParams from the last real drive so selfdrived/controlsd can
+      # start with no car/CAN present. Inert in the car -- card overwrites CarParams
+      # as soon as real CAN arrives. Guard for None (device never completed a drive).
+      cp = self._params.get("CarParamsPersistent")
+      fpcp = self._params.get("StarPilotCarParamsPersistent")
+      if cp is not None:
+        self._params.put("CarParams", cp)
+      if fpcp is not None:
+        self._params.put("StarPilotCarParams", fpcp)
       self._params.put_bool("ForceOnroad", True)
       self._params.put_bool("ForceOffroad", False)
     elif action_id == "DriveOffroad":
