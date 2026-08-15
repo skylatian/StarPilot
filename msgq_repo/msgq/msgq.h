@@ -6,7 +6,13 @@
 #include <atomic>
 
 #define DEFAULT_SEGMENT_SIZE (1 * 1024 * 1024)
-#define NUM_READERS 15
+// Raised from upstream's 15. carState sits at exactly 15 subscribers on the C3, so
+// starting a 16th (lateral_maneuversd on arm, or longitudinal_maneuversd) tripped
+// msgq's evict-all-and-thrash (msgq.cc:191) and starved the UI's carState reader to
+// zero — the "speed/steering freeze on arm" bug. This sizes the per-queue reader
+// arrays, so every C++ and Python (msgq_pyx) client MUST be rebuilt consistently and
+// /dev/shm recreated (reboot). Do a full rebuild with prebuilt binaries OFF.
+#define NUM_READERS 20
 #define ALIGN(n) ((n + (8 - 1)) & -8)
 
 #define UNUSED(x) (void)x
