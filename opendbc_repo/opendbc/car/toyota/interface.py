@@ -169,7 +169,13 @@ class CarInterface(CarInterfaceBase):
     if candidate == CAR.LEXUS_IS or late_prius_camera:
       has_dsu_bypass = ((0x343 in camera_fingerprint and 0x343 not in fingerprint.get(1, {})) or
                         (0x4CB in camera_fingerprint and 0x4CB not in fingerprint.get(0, {})))
-    if not use_sdsu and candidate not in TSS2_CAR and has_dsu_bypass:
+    # Retrofit (COROLLA_RETROFIT): no stock DSU and no bypass adapter. openpilot generates
+    # ACC_CONTROL itself and nothing echoes it back. The C3 panda permanently forwards bus 0 -> bus 2,
+    # so the emulator's EPS-init 0x4CB on bus 0 always mirrors onto the camera bus (fingerprint[2]) and
+    # trips has_dsu_bypass -- this is standard panda forwarding, not a real bypass adapter. Setting
+    # DSU_BYPASS makes carstate require ACC_CONTROL on the PT bus, which never arrives -> canValid=False
+    # -> "Unknown Vehicle Variant". Never enable DSU_BYPASS for the retrofit platform.
+    if not use_sdsu and candidate not in TSS2_CAR and has_dsu_bypass and candidate != CAR.TOYOTA_COROLLA_RETROFIT:
       ret.flags |= ToyotaFlags.DSU_BYPASS.value
 
     # In TSS2 cars, the camera does long control
