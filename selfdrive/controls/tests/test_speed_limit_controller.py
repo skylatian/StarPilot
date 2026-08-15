@@ -21,6 +21,15 @@ class FakeParams:
   def get_float(self, key):
     return float(self.values.get(key, 0) or 0)
 
+  def get_int(self, key):
+    return int(self.values.get(key, 0) or 0)
+
+  def put_float(self, key, value):
+    self.values[key] = value
+
+  def put_int(self, key, value):
+    self.values[key] = value
+
   def put_nonblocking(self, key, value):
     self.values[key] = value
 
@@ -40,6 +49,7 @@ def make_toggles(**overrides):
     "speed_limit_confirmation_lower": False,
     "speed_limit_controller_override_manual": True,
     "speed_limit_controller_override_set_speed": False,
+    "redneck_cruise": False,
     "speed_limit_filler": False,
     "speed_limit_offset1": 0.0,
     "speed_limit_offset2": 0.0,
@@ -58,10 +68,10 @@ def make_toggles(**overrides):
   return SimpleNamespace(**defaults)
 
 
-def make_sm(*, gas_pressed, enabled=True, accel_pressed=False, decel_pressed=False):
+def make_sm(*, gas_pressed, enabled=True, accel_pressed=False, decel_pressed=False, long_active=True, v_cruise_kph=255.0):
   return {
-    "carControl": SimpleNamespace(longActive=True),
-    "carState": SimpleNamespace(gasPressed=gas_pressed, steeringAngleDeg=0.0),
+    "carControl": SimpleNamespace(longActive=long_active),
+    "carState": SimpleNamespace(gasPressed=gas_pressed, steeringAngleDeg=0.0, vCruise=v_cruise_kph),
     "liveParameters": SimpleNamespace(angleOffsetDeg=0.0),
     "mapdOut": SimpleNamespace(nextSpeedLimitDistance=0.0, nextSpeedLimit=0.0, speedLimit=0.0, waySelectionType=0),
     "selfdriveState": SimpleNamespace(enabled=enabled),
@@ -84,6 +94,122 @@ def make_controller(**toggle_overrides):
 
 def mph(value):
   return value * CV.MPH_TO_MS
+
+
+def test_large_vision_delta_requires_three_detector_frames():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(15))
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimitSupportSpeed", mph(15))
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 2)
+    sm = make_sm(gas_pressed=False, v_cruise_kph=75 * CV.MPH_TO_KPH)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(75), mph(70), sm)
+    assert controller.target == 0
+
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 3)
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(75), mph(70), sm)
+    assert controller.target == pytest.approx(mph(15))
+    assert controller.source == "Vision"
+  finally:
+    controller.shutdown()
+
+
+def test_normal_vision_delta_keeps_fast_path():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(50))
+    sm = make_sm(gas_pressed=False, v_cruise_kph=75 * CV.MPH_TO_KPH)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(75), mph(70), sm)
+    assert controller.target == pytest.approx(mph(50))
+    assert controller.source == "Vision"
+  finally:
+    controller.shutdown()
+
+
+def test_inactive_valid_cruise_still_applies_large_delta_guard():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(20))
+    sm = make_sm(gas_pressed=False, long_active=False, v_cruise_kph=60 * CV.MPH_TO_KPH)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(60), mph(25), sm)
+    assert controller.target == 0
+    assert controller.source == "None"
+  finally:
+    controller.shutdown()
+
+
+def test_unset_active_cruise_uses_vehicle_speed():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(55))
+    sm = make_sm(gas_pressed=False)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(90), mph(50), sm)
+    assert controller.target == pytest.approx(mph(55))
+    assert controller.source == "Vision"
+  finally:
+    controller.shutdown()
+
+
+def test_unset_cruise_applies_vehicle_speed_large_delta_guard():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(15))
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimitSupportSpeed", mph(15))
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 2)
+    sm = make_sm(gas_pressed=False)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(90), mph(75), sm)
+    assert controller.target == 0
+    assert controller.source == "None"
+
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 3)
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(90), mph(75), sm)
+    assert controller.target == pytest.approx(mph(15))
+    assert controller.source == "Vision"
+  finally:
+    controller.shutdown()
+
+
+def test_display_only_applies_large_delta_guard():
+  controller = make_controller(
+    speed_limit_priority1="Vision",
+    vision_speed_limit_detection=True,
+  )
+  try:
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimit", mph(15))
+    controller.starpilot_planner.params_memory.put_float("VisionSpeedLimitSupportSpeed", mph(15))
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 1)
+    sm = make_sm(gas_pressed=False, v_cruise_kph=75 * CV.MPH_TO_KPH)
+
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(75), mph(70), sm, display_only=True)
+    assert controller.target == 0
+    assert controller.source == "None"
+
+    controller.starpilot_planner.params_memory.put_int("VisionSpeedLimitSupportCount", 3)
+    controller.update_limits(0.0, datetime.now(timezone.utc), False, mph(75), mph(70), sm, display_only=True)
+    assert controller.target == pytest.approx(mph(15))
+    assert controller.source == "Vision"
+  finally:
+    controller.shutdown()
 
 
 def test_new_source_limit_clears_override_until_gas_release():
@@ -295,6 +421,115 @@ def test_higher_limit_does_not_clear_override():
       assert not controller_overridden_below.override_slc
     finally:
       controller_overridden_below.shutdown()
+  finally:
+    controller.shutdown()
+
+
+def test_set_speed_mode_overrides_on_raise_without_gas():
+  # Max Set Speed mode: raising the set speed (+/-) above the posted limit must override
+  # the SLC hold with no gas pedal, targeting the set speed.
+  controller = make_controller(
+    speed_limit_controller_override_manual=False,
+    speed_limit_controller_override_set_speed=True,
+  )
+  try:
+    controller.source = "Dashboard"
+    controller.target = mph(45)
+    controller.last_valid_limit = mph(45)
+
+    # Baseline frame at the limit establishes the previous set speed (no rising edge yet).
+    controller.update_override(mph(45), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert not controller.override_slc
+
+    # Driver presses + to 60 (rising edge): override arms and targets the set speed.
+    controller.update_override(mph(60), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(60))
+
+    # Holding 60 with no further press: override stays latched.
+    controller.update_override(mph(60), 0.0, mph(58), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(60))
+  finally:
+    controller.shutdown()
+
+
+def test_set_speed_override_clears_on_new_speed_zone():
+  # Entering a new (lower) posted limit clears the override; a steady high set speed must not
+  # re-arm it. Only a fresh +/- press re-arms.
+  controller = make_controller(
+    speed_limit_controller_override_manual=False,
+    speed_limit_controller_override_set_speed=True,
+  )
+  try:
+    controller.source = "Dashboard"
+    controller.target = mph(45)
+    controller.previous_source = "Dashboard"
+    controller.previous_target = mph(45)
+    controller.last_valid_limit = mph(45)
+
+    controller.update_override(mph(45), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    controller.update_override(mph(60), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+
+    # New lower zone (35): update_limits clears the override for the new segment.
+    controller.update_limits(mph(35), datetime.now(timezone.utc), False, mph(60), mph(58), make_sm(gas_pressed=False))
+    controller.update_override(mph(60), 0.0, mph(58), 0.0, make_sm(gas_pressed=False))
+    assert controller.target == pytest.approx(mph(35))
+    # Set speed unchanged at 60 -> no rising edge -> override stays cleared (car slows to 35).
+    assert not controller.override_slc
+    assert controller.overridden_speed == 0
+
+    # A fresh + press (60 -> 65) re-arms against the new limit.
+    controller.update_override(mph(65), 0.0, mph(35), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(65))
+  finally:
+    controller.shutdown()
+
+
+def test_redneck_set_speed_mode_overrides_in_both_directions():
+  controller = make_controller(
+    speed_limit_controller_override_manual=False,
+    speed_limit_controller_override_set_speed=True,
+    redneck_cruise=True,
+  )
+  try:
+    controller.source = "Dashboard"
+    controller.target = mph(45)
+    controller.last_valid_limit = mph(45)
+
+    controller.update_override(mph(45), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    controller.update_override(mph(60), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(60))
+
+    # A manual decrease below the posted limit must become the new redneck target.
+    controller.update_override(mph(35), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(35))
+  finally:
+    controller.shutdown()
+
+
+def test_gas_pedal_mode_ignores_set_speed_without_gas():
+  # Set With Gas Pedal mode: a high set speed alone must NOT override; gas is still required.
+  controller = make_controller(
+    speed_limit_controller_override_manual=True,
+    speed_limit_controller_override_set_speed=False,
+  )
+  try:
+    controller.source = "Dashboard"
+    controller.target = mph(45)
+    controller.last_valid_limit = mph(45)
+
+    controller.update_override(mph(60), 0.0, mph(45), 0.0, make_sm(gas_pressed=False))
+    assert not controller.override_slc
+    assert controller.overridden_speed == 0
+
+    controller.update_override(mph(60), 0.0, mph(50), 0.0, make_sm(gas_pressed=True))
+    assert controller.override_slc
+    assert controller.overridden_speed == pytest.approx(mph(50))
   finally:
     controller.shutdown()
 

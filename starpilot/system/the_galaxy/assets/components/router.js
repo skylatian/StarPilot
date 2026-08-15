@@ -1,7 +1,7 @@
 import { html, reactive } from "/assets/vendor/arrow-core.js"
 import { createBrowserHistory, createRouter } from "/assets/vendor/remix-router-1.3.1.js"
 import { hideSidebar } from "/assets/js/utils.js"
-import { DeviceSettings } from "/assets/components/tools/device_settings.js?v=flm-overrides-1"
+import { DeviceSettings } from "/assets/components/tools/device_settings.js?v=favorite-c4-hint-1"
 import { ErrorLogs } from "/assets/components/tools/error_logs.js"
 import { VehicleFeatures } from "/assets/components/tools/vehicle_features.js"
 import { GalaxyPairing } from "/assets/components/tools/galaxy.js"
@@ -9,7 +9,7 @@ import { Home } from "/assets/components/home/home.js"
 import { LateralManeuvers } from "/assets/components/tools/lateral_maneuvers.js"
 import { LongitudinalManeuvers } from "/assets/components/tools/longitudinal_maneuvers.js"
 import { MapsManager } from "/assets/components/tools/maps.js"
-import { NavDestination } from "/assets/components/navigation/navigation_destination.js?v=nav-search-context-1"
+import { NavDestination } from "/assets/components/navigation/navigation_destination.js?v=nav-search-context-2"
 import { NavKeys } from "/assets/components/navigation/navigation_keys.js?v=app-keys-session-1"
 import { RouteRecordings } from "/assets/components/recordings/dashcam_routes.js"
 import { SettingsView } from "/assets/components/settings.js"
@@ -20,11 +20,14 @@ import { ModelManager } from "/assets/components/tools/model_manager.js?v=202603
 import { LivePlots } from "/assets/components/tools/plots.js"
 import { ThemeMaker } from "/assets/components/tools/theme_maker.js"
 import { TestingGround } from "/assets/components/tools/testing_ground.js"
-import { Tuning } from "/assets/components/tools/tuning.js?v=flm-workspace-9"
+import { Tuning } from "/assets/components/tools/tuning.js?v=flm-route-length-1"
 import { Troubleshoot } from "/assets/components/tools/troubleshoot.js"
 import { TmuxLog } from "/assets/components/tools/tmux.js"
 import { ToggleControl } from "/assets/components/tools/toggles.js"
+import { VASMAnnotations } from "/assets/components/tools/v_asm.js"
+import { PipSideCamera } from "/assets/components/tools/pip_sidecam.js"
 import { UpdateManager } from "/assets/components/tools/update_manager.js"
+import { startSentryNotifications } from "/assets/components/sentry_notifications.js"
 
 let router, routerState
 
@@ -85,6 +88,8 @@ function Root() {
     createRoute("toggles", "/manage_toggles", ToggleControl),
     createRoute("updates", "/manage_updates", UpdateManager),
     createRoute("vehicle_features", "/vehicle_features", VehicleFeatures),
+    createRoute("v_asm", "/manage_v_asm", VASMAnnotations),
+    createRoute("pip_sidecam", "/manage_pip_sidecam", PipSideCamera),
   ]
 
   router = createRouter({
@@ -184,3 +189,5 @@ if (document.readyState === "loading") {
 } else {
   mountRouterWhenReady()
 }
+
+startSentryNotifications()

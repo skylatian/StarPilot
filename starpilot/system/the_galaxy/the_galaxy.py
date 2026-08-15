@@ -23,6 +23,9 @@ import selectors
 import shutil
 import signal
 import subprocess
+import numpy as np
+from msgq.visionipc import VisionIpcClient, VisionStreamType
+from PIL import Image
 import threading
 import time
 import traceback
@@ -34,8 +37,9 @@ from opendbc.car.gm.values import GMFlags
 from opendbc.car.toyota.carcontroller import LOCK_CMD, UNLOCK_CMD
 from opendbc.car.toyota.values import ToyotaStarPilotFlags
 from openpilot.common.constants import CV
-from openpilot.common.params import ParamKeyType, Params
+from openpilot.common.params import ParamKeyFlag, ParamKeyType, Params
 from openpilot.common.realtime import DT_HW
+from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.hardware import HARDWARE, PC
 from openpilot.system.hardware.hw import Paths
@@ -61,8 +65,15 @@ from openpilot.starpilot.common.maps_catalog import (
   schedule_label,
   schedule_param_value,
 )
+from openpilot.starpilot.common.maps_download_progress import load_size_cache, nonnegative_int, selection_key
 from openpilot.starpilot.common.experimental_state import sync_persist_chill_state, sync_persist_experimental_state
-from openpilot.starpilot.common.favorite_slots import FAVORITE_SLOTS_PARAM, normalize_favorite_slots
+from openpilot.starpilot.common.favorite_slots import (
+  FAVORITE_ACTION_OPTIONS,
+  FAVORITE_SLOTS_PARAM,
+  is_favorite_action_key,
+  normalize_favorite_slots,
+  trigger_favorite_action,
+)
 from openpilot.starpilot.common.lateral_delay import full_lateral_delay
 from openpilot.starpilot.common.starpilot_utilities import delete_file, get_lock_status, run_cmd
 from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH, ERROR_LOGS_PATH, EXCLUDED_KEYS, LEGACY_STARPILOT_PARAM_RENAMES, MAPS_PATH, MODELS_PATH, RESOURCES_REPO, SCREEN_RECORDINGS_PATH, STOCK_THEME_PATH, THEME_SAVE_PATH,\
@@ -86,6 +97,9 @@ GITLAB_API = "https://gitlab.com/api/v4"
 GITLAB_SUBMISSIONS_PROJECT_ID = "71992109"
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", "")
 LEGACY_LATERAL_METHOD_API_PREFIX = "/api/" + "".join(("f", "t", "m"))
+VASM_CONFIGURATION_KEYS = {"VASMEnabled", "VASMConfidenceThreshold", "VASMSmoothSeconds", "VASMAnnotationConfig"}
+PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM"}
+MODEL_SMOOTHING_KEYS = {"LatSmoothSeconds", "LongSmoothSeconds"}
 
 GALAXY_DEPS_PATH = "/data/galaxy_deps"
 LEGACY_GALAXY_DEPS_PATH = "/data/" + "".join(chr(code) for code in (112, 111, 110, 100)) + "_deps"
@@ -488,6 +502,179 @@ def _build_default_params():
 
 starpilot_default_params = _build_default_params()
 
+
+def _sentry_event_roots() -> tuple[Path, ...]:
+  roots = [Path("/data/media/0/sentryd")]
+  if PC:
+    roots.insert(0, Path(Paths.comma_home()) / "starpilot" / "data" / "sentryd")
+  return tuple(root.resolve() for root in roots)
+
+
+def _safe_sentry_image_paths(raw_paths) -> list[str]:
+  if not isinstance(raw_paths, list):
+    return []
+
+  roots = _sentry_event_roots()
+  safe_paths = []
+  for raw_path in raw_paths:
+    try:
+      path = Path(str(raw_path)).resolve()
+      if path.is_file() and any(path.is_relative_to(root) for root in roots):
+        safe_paths.append(str(path))
+    except (OSError, TypeError, ValueError):
+      continue
+  return safe_paths
+
+
+def _normalize_sentry_event(payload) -> dict | None:
+  if not isinstance(payload, dict):
+    return None
+
+  event_id = str(payload.get("eventId") or "").strip()
+  kind = str(payload.get("kind") or "").strip().lower()
+  if not event_id or kind not in {"warning", "alarm"}:
+    return None
+
+  return {
+    "eventId": event_id[:96],
+    "kind": kind,
+    "detectedAt": str(payload.get("detectedAt") or ""),
+    "message": str(payload.get("message") or "Movement detected while parked.")[:500],
+    "imagePaths": _safe_sentry_image_paths(payload.get("imagePaths")),
+  }
+
+
+def _dispatch_sentry_event(event: dict) -> None:
+  message = f"🚨 StarPilot Sentry Mode: {event['message']}"
+  webhook = (params.get("SentryModeWebhook", encoding="utf-8") or "").strip()
+  if webhook:
+    files = []
+    handles = []
+    try:
+      for image_path in event.get("imagePaths", []):
+        handle = open(image_path, "rb")
+        handles.append(handle)
+        files.append(("file", (Path(image_path).name, handle, "image/jpeg")))
+
+      body = {"content": message, "event": json.dumps(event, separators=(",", ":"))}
+      response = requests.post(webhook, data=body, files=files or None, timeout=10)
+      response.raise_for_status()
+    except Exception:
+      cloudlog.exception("Galaxy: sentry webhook notification failed")
+    finally:
+      for handle in handles:
+        try:
+          handle.close()
+        except OSError:
+          pass
+
+  ntfy_url = (params.get("SentryModeNtfyUrl", encoding="utf-8") or "").strip()
+  if ntfy_url:
+    try:
+      response = requests.post(
+        ntfy_url,
+        data=message.encode("utf-8"),
+        headers={"Title": "StarPilot Sentry Mode", "Priority": "urgent", "Tags": "warning,car"},
+        timeout=10,
+      )
+      response.raise_for_status()
+    except Exception:
+      cloudlog.exception("Galaxy: ntfy notification failed")
+
+TOGGLE_BACKUP_FORMAT = "starpilot-toggle-backup"
+TOGGLE_BACKUP_VERSION = 1
+TOGGLE_BACKUP_MAX_ENCODED_BYTES = 2_000_000
+TOGGLE_BACKUP_NO_DEFAULT_KEYS = {
+  "AdbEnabled",
+  "AlphaLongitudinalEnabled",
+  "AlwaysOnDM",
+  "ExperimentalMode",
+  "ExperimentalModeConfirmed",
+  "IsLdwEnabled",
+  "IsMetric",
+  "IsRHD",
+  "IsRHDOverride",
+  "RecordAudio",
+  "RecordFront",
+  "SshEnabled",
+}
+
+
+def _get_toggle_backup_keys():
+  keys = set()
+  for key, default_value, _, _ in starpilot_default_params:
+    if key in EXCLUDED_KEYS:
+      continue
+    if default_value is None and key not in TOGGLE_BACKUP_NO_DEFAULT_KEYS:
+      continue
+
+    try:
+      flags = _params_raw.get_key_flag(key)
+    except Exception:
+      continue
+
+    if not flags & ParamKeyFlag.PERSISTENT or flags & ParamKeyFlag.DONT_LOG:
+      continue
+
+    keys.add(key)
+
+  return keys
+
+
+def _coerce_toggle_restore_value(key, value):
+  value_type = _get_param_key_type(_params_raw, key)
+
+  if value_type == ParamKeyType.BOOL:
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, numbers.Real) and value in (0, 1):
+      return bool(value)
+    if isinstance(value, str):
+      normalized = value.strip().lower()
+      if normalized in {"1", "true", "yes", "on"}:
+        return True
+      if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"Invalid boolean value for {key}")
+
+  if value_type == ParamKeyType.INT:
+    if isinstance(value, bool):
+      raise ValueError(f"Invalid integer value for {key}")
+    return int(float(value))
+
+  if value_type == ParamKeyType.FLOAT:
+    if isinstance(value, bool):
+      raise ValueError(f"Invalid numeric value for {key}")
+    result = float(value)
+    if not math.isfinite(result):
+      raise ValueError(f"Invalid numeric value for {key}")
+    return result
+
+  if value_type == ParamKeyType.JSON:
+    if isinstance(value, str):
+      value = json.loads(value)
+    if not isinstance(value, (dict, list)):
+      raise ValueError(f"Invalid JSON value for {key}")
+    return value
+
+  if value_type == ParamKeyType.BYTES:
+    if isinstance(value, bytes):
+      return value
+    if isinstance(value, str):
+      return value.encode("utf-8")
+    raise ValueError(f"Invalid byte value for {key}")
+
+  if value_type == ParamKeyType.TIME:
+    if isinstance(value, datetime):
+      return value
+    if isinstance(value, str):
+      return datetime.fromisoformat(value)
+    raise ValueError(f"Invalid time value for {key}")
+
+  if value is None or isinstance(value, (dict, list)):
+    raise ValueError(f"Invalid string value for {key}")
+  return str(value)
+
 params = ParamsCompat(_params_raw)
 params_memory = ParamsCompat(_params_memory_raw)
 STATS_RESPONSE_CACHE_SECONDS = 2.0
@@ -530,9 +717,12 @@ MODEL_DOWNLOAD_ALL_PARAM = "DownloadAllModels"
 MODEL_DOWNLOAD_PROGRESS_PARAM = "ModelDownloadProgress"
 MODEL_CANCEL_DOWNLOAD_PARAM = "CancelModelDownload"
 MODEL_SORT_MODE_PARAM = "ModelSortMode"
+DEFAULT_MODEL_SORT_MODE = "release_date"
 MODEL_USER_FAVORITES_PARAM = "UserFavorites"
 MAPS_DOWNLOAD_PARAM = "DownloadMaps"
 MAPS_CANCEL_DOWNLOAD_PARAM = "CancelDownloadMaps"
+MAPS_DOWNLOAD_PROGRESS_PARAM = "MapsDownloadProgress"
+MAPS_DOWNLOAD_SIZE_CACHE_PARAM = "MapsDownloadSizeCache"
 
 
 def _get_galaxy_dir():
@@ -698,7 +888,7 @@ FINGERPRINT_MAKE_TO_VALUES_DIR = {
   "volkswagen": "volkswagen",
 }
 
-_FINGERPRINT_CARDOCS_RE = re.compile(r'\w*CarDocs\(\s*"([^"]+)"')
+_FINGERPRINT_CARDOCS_RE = re.compile(r'\w*CarDocs\w*\(\s*"([^"]+)"')
 _FINGERPRINT_PLATFORM_RE = re.compile(r'(\w+)\s*=\s*\w+\s*\(\s*\[([\s\S]*?)\]\s*,')
 _FINGERPRINT_PLATFORM_NAME_RE = re.compile(r'^[A-Z0-9_]+$')
 _FINGERPRINT_VALID_NAME_RE = re.compile(r'^[A-Za-z0-9 \u0160.(),&\-]+$')
@@ -749,6 +939,7 @@ _fast_update_state = {
   "progressLabel": "Idle",
   "progressDetail": "",
 }
+_ROUTE_DELETE_LOCK = threading.Lock()
 
 _FACTORY_RESET_WIPE_PATHS = [
   "/data/params",
@@ -842,6 +1033,7 @@ _TROUBLESHOOT_CEM_KEYS = [
   "CELead",
   "CESlowerLead",
   "CEStoppedLead",
+  "CEOpenRoad",
   "CEModelStopTime",
   "CESignalSpeed",
   "ShowCEMStatus",
@@ -859,6 +1051,11 @@ _TROUBLESHOOT_ADVANCED_LATERAL_KEYS = [
   "ForceAutoTune",
   "ForceAutoTuneOff",
   "ForceTorqueController",
+  "CameraOffset",
+  "LaneCentering",
+  "LaneCenteringPauseOnSignal",
+  "LaneCenteringE2EAuthority",
+  "LaneCenterOffset",
 ]
 
 _TROUBLESHOOT_ADVANCED_LONGITUDINAL_KEYS = [
@@ -900,11 +1097,6 @@ _TROUBLESHOOT_SECTION_DEFINITIONS = [
     "id": "personality_settings",
     "title": "Personality Profile Settings",
     "keys": _TROUBLESHOOT_PERSONALITY_KEYS,
-  },
-  {
-    "id": "model_stop_distance",
-    "title": "Model Stop Distance",
-    "keys": ["StopDistance"],
   },
   {
     "id": "cem_settings",
@@ -2291,6 +2483,7 @@ def _get_favorite_slot_options():
 
   allowed_keys, value_types = _get_param_type_info()
   options = []
+  options.extend(dict(option) for option in FAVORITE_ACTION_OPTIONS)
   try:
     layout_path = os.path.join(os.path.dirname(__file__), "assets", "components", "tools", "device_settings_layout.json")
     with open(layout_path) as f:
@@ -2306,6 +2499,8 @@ def _get_favorite_slot_options():
         if key not in allowed_keys or value_types.get(key) is not bool:
           continue
         if param_data.get("ui_type") != "toggle" or param_data.get("data_type") != "bool":
+          continue
+        if key == "AlphaLongitudinalEnabled" and not _get_alpha_longitudinal_available():
           continue
 
         seen.add(key)
@@ -2326,7 +2521,14 @@ def _favorite_slot_values(options):
   return {
     option["key"]: _safe_params_get_bool(option["key"])
     for option in options
-    if option.get("key")
+    if option.get("key") and not is_favorite_action_key(option.get("key"))
+  }
+
+def _configured_favorite_slot_values(slots):
+  return {
+    slot["key"]: _safe_params_get_bool(slot["key"])
+    for slot in slots
+    if slot.get("key") and not is_favorite_action_key(slot.get("key"))
   }
 
 _cached_allowed_keys = None
@@ -2445,6 +2647,105 @@ def _safe_params_get_bool(key, default=False):
     return params.get_bool(key)
   except Exception:
     return bool(default)
+
+def _normalize_vasm_config(data):
+  if not isinstance(data, dict):
+    raise ValueError("Configuration must be a JSON object.")
+
+  try:
+    width = int(data.get("width", 0))
+    height = int(data.get("height", 0))
+  except (TypeError, ValueError) as exc:
+    raise ValueError("Invalid camera dimensions.") from exc
+  if not (1 <= width <= 8192 and 1 <= height <= 8192):
+    raise ValueError("Camera dimensions are out of range.")
+
+  def normalize_polygon(key):
+    polygon = data.get(key, [])
+    if not isinstance(polygon, list) or len(polygon) > 64:
+      raise ValueError(f"{key} must contain at most 64 points.")
+    if polygon and len(polygon) < 3:
+      raise ValueError(f"{key} requires at least 3 points.")
+
+    normalized = []
+    for point in polygon:
+      if not isinstance(point, (list, tuple)) or len(point) != 2:
+        raise ValueError(f"{key} contains an invalid point.")
+      try:
+        x, y = float(point[0]), float(point[1])
+      except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} contains a non-numeric point.") from exc
+      if not (math.isfinite(x) and math.isfinite(y) and 0 <= x <= width and 0 <= y <= height):
+        raise ValueError(f"{key} contains a point outside the camera frame.")
+      normalized.append([round(x), round(y)])
+    return normalized
+
+  config = {
+    "width": width,
+    "height": height,
+    "poly_left": normalize_polygon("poly_left"),
+    "poly_right": normalize_polygon("poly_right"),
+  }
+  if not config["poly_left"] and not config["poly_right"]:
+    raise ValueError("At least one window polygon is required.")
+  return config
+
+
+def _normalize_pip_preview_config(data):
+  if not isinstance(data, dict):
+    raise ValueError("Configuration must be a JSON object.")
+
+  try:
+    width = int(data.get("width", 0))
+    height = int(data.get("height", 0))
+  except (TypeError, ValueError) as exc:
+    raise ValueError("Invalid camera dimensions.") from exc
+  if not (1 <= width <= 8192 and 1 <= height <= 8192):
+    raise ValueError("Camera dimensions are out of range.")
+
+  try:
+    crop_size = int(data.get("crop_size", 0))
+  except (TypeError, ValueError) as exc:
+    raise ValueError("Invalid crop size.") from exc
+  if not (10 <= crop_size <= 8192):
+    raise ValueError("Crop size is out of range.")
+
+  def normalize_center(key):
+    point = data.get(key)
+    if not point:
+      return []
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+      raise ValueError(f"{key} requires an (x, y) center point.")
+    try:
+      x, y = float(point[0]), float(point[1])
+    except (TypeError, ValueError) as exc:
+      raise ValueError(f"{key} contains a non-numeric point.") from exc
+    if not (math.isfinite(x) and math.isfinite(y) and 0 <= x <= width and 0 <= y <= height):
+      raise ValueError(f"{key} center is outside the camera frame.")
+    return [round(x), round(y)]
+
+  config = {
+    "width": width,
+    "height": height,
+    "center_left": normalize_center("center_left"),
+    "center_right": normalize_center("center_right"),
+    "crop_size": crop_size,
+  }
+  if not config["center_left"] and not config["center_right"]:
+    raise ValueError("At least one window center is required.")
+  return config
+
+
+def _decode_json_object(value):
+  if isinstance(value, bytes):
+    value = value.decode("utf-8", errors="replace")
+  if isinstance(value, str):
+    try:
+      value = json.loads(value)
+    except json.JSONDecodeError:
+      return {}
+  return value if isinstance(value, dict) else {}
+
 
 def _is_blank_param_raw(raw_value):
   if raw_value is None:
@@ -2766,6 +3067,20 @@ def _resolve_troubleshoot_default_value(key, value_type, default_values):
 
   return _coerce_param_value(default_raw_value, safe_type)
 
+def _normalize_troubleshoot_current_display_value(key, current_value, default_value):
+  if key != "SteerDelay":
+    return current_value
+
+  try:
+    full_current_delay = full_lateral_delay(float(current_value))
+    numeric_default = float(default_value)
+  except (TypeError, ValueError):
+    return current_value
+
+  if math.isfinite(full_current_delay) and math.isfinite(numeric_default) and math.isclose(full_current_delay, numeric_default, abs_tol=1e-6):
+    return default_value
+  return current_value
+
 def _normalize_live_delay_status(status):
   status_text = str(status or "").strip().lower()
   if status_text in {"estimated", "unestimated", "invalid"}:
@@ -2972,6 +3287,41 @@ def _get_starpilot_toggles_snapshot():
   except Exception:
     return {}
 
+def _get_has_radar():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return not bool(getattr(cp, "radarUnavailable", False))
+  except Exception:
+    return False
+
+def _get_vehicle_parked():
+  try:
+    sm = messaging.SubMaster(["carState"], poll="carState")
+    sm.update(100)
+    if not sm.seen["carState"] or not sm.alive["carState"] or not sm.valid["carState"]:
+      return False
+
+    gear_shifter = getattr(getattr(car, "CarState", None), "GearShifter", None)
+    park_value = getattr(gear_shifter, "park", None)
+    return park_value is not None and getattr(sm["carState"], "gearShifter", None) == park_value
+  except Exception:
+    return False
+
+def _get_alpha_longitudinal_available():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return bool(getattr(cp, "alphaLongitudinalAvailable", False))
+  except Exception:
+    return False
+
 def _get_hardware_snapshot_items():
   starpilot_toggles = _get_starpilot_toggles_snapshot()
 
@@ -3084,6 +3434,7 @@ def _build_troubleshoot_section_payload(section_definition, value_types, default
     try:
       current_value = _resolve_troubleshoot_current_value(key, value_type, default_values)
       default_value = _resolve_troubleshoot_default_value(key, value_type, default_values)
+      current_value = _normalize_troubleshoot_current_display_value(key, current_value, default_value)
     except Exception:
       current_value = "Unavailable"
       default_value = "n/a"
@@ -3789,11 +4140,18 @@ def setup(app):
   def disable_device_settings_asset_cache(response):
     if request.path in {
       "/assets/components/router.js",
+      "/assets/components/sentry_notifications.js",
       "/assets/components/home/home.js",
       "/assets/components/home/home.css",
       "/assets/components/tools/device_settings.js",
       "/assets/components/tools/device_settings.css",
       "/assets/components/tools/device_settings_layout.json",
+      "/assets/components/tools/galaxy.js",
+      "/assets/components/tools/v_asm.js",
+      "/assets/components/tools/v_asm.css",
+      "/assets/components/tools/pip_sidecam.js",
+      "/assets/components/tools/pip_sidecam.css",
+      "/assets/components/tools/toggles.js",
     }:
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
@@ -3927,6 +4285,7 @@ def setup(app):
       "amap2Key": params.get("AMapKey2", encoding="utf8") or "",
       "destination": params.get("NavDestination", encoding="utf8") or "",
       "isMetric": params.get_bool("IsMetric"),
+      "language": params.get("LanguageSetting", encoding="utf8") or "",
       "lastPosition": {
         "latitude": str(last_position.get("latitude", "")),
         "longitude": str(last_position.get("longitude", ""))
@@ -4114,7 +4473,7 @@ def setup(app):
           continue
         key = str(raw_slot.get("key") or "").strip()
         if key and key not in eligible_keys:
-          return jsonify(error=f"Favorite #{idx + 1} must use a Galaxy-exposed boolean toggle."), 400
+          return jsonify(error=f"Favorite #{idx + 1} must use a Galaxy-exposed toggle or action."), 400
 
       slots = normalize_favorite_slots(raw_slots, params=params, eligible_keys=eligible_keys)
 
@@ -4144,6 +4503,23 @@ def setup(app):
       "options": options,
       "values": _favorite_slot_values(options),
     }), 200
+
+  @app.route("/api/favorites/values", methods=["GET"])
+  def favorite_values():
+    options = _get_favorite_slot_options()
+    eligible_keys = {option["key"] for option in options}
+    slots = normalize_favorite_slots(params.get(FAVORITE_SLOTS_PARAM), params=params, eligible_keys=eligible_keys)
+    return jsonify({"values": _configured_favorite_slot_values(slots)}), 200
+
+  @app.route("/api/favorites/action", methods=["POST"])
+  def favorite_action():
+    data = request.get_json() or {}
+    key = str(data.get("key") or "").strip()
+    if not is_favorite_action_key(key):
+      return jsonify({"error": "Unknown favorite action."}), 400
+    if not trigger_favorite_action(key, params_memory):
+      return jsonify({"error": "Favorite action failed."}), 400
+    return jsonify({"message": "Favorite action sent."}), 200
 
   @app.route("/api/params", methods=["GET", "PUT"])
   def get_param():
@@ -4183,6 +4559,16 @@ def setup(app):
         "drivingmodel": "DrivingModel",
         "drivingmodelversion": "DrivingModelVersion",
       }.get(key.lower(), key)
+      if key in MODEL_SMOOTHING_KEYS:
+        if not params.get_bool("DeveloperUI"):
+          return jsonify({"error": "Model smoothing is available only with Developer UI enabled."}), 403
+        try:
+          numeric = float(data["value"])
+        except (TypeError, ValueError):
+          return jsonify({"error": f"{key} must be numeric."}), 400
+        if not math.isfinite(numeric) or numeric < 0.005 or numeric > 2.0:
+          return jsonify({"error": f"{key} must be between 0.005 and 2.0 seconds."}), 400
+        data["value"] = round(numeric / 0.005) * 0.005
       val = data["value"]
       selected_label_input = str(data.get("label") or "").strip()
 
@@ -4216,6 +4602,34 @@ def setup(app):
           "updated": updated,
         }), 200
 
+      if key == "AlphaLongitudinalEnabled":
+        if not _get_alpha_longitudinal_available():
+          return jsonify({"error": "Alpha Longitudinal is not available for the detected vehicle."}), 403
+        if params.get_bool("IsOnroad"):
+          return jsonify({"error": "Cannot change Alpha Longitudinal while driving."}), 403
+
+        enabled = str_val.strip() in ("1", "true", "True")
+        params.put_bool(key, enabled)
+        params.put_bool("OnroadCycleRequested", True)
+        update_starpilot_toggles()
+        return jsonify({
+          "message": f"Parameter '{key}' updated successfully. The driving stack will restart shortly.",
+          "updated": {key: enabled},
+        }), 200
+
+      if key == "ForceOffroad":
+        if not _get_vehicle_parked():
+          return jsonify({"error": "Force Offroad is only available while the vehicle is in Park."}), 403
+
+        enabled = str_val.strip() in ("1", "true", "True")
+        params.put_bool("ForceOffroad", enabled)
+        params.put_bool("ForceOnroad", False)
+        update_starpilot_toggles()
+        return jsonify({
+          "message": f"Force Offroad {'enabled' if enabled else 'disabled'}.",
+          "updated": {"ForceOffroad": enabled, "ForceOnroad": False},
+        }), 200
+
       # 1. Prevent changing the model or reboot-required toggles while the car is actively driving
       reboot_keys = {"Model", "DrivingModel", "AlwaysOnLateral", "DisableOpenpilotLongitudinal", "ForceTorqueController", "NNFF", "NNFFLite"}
       if key in reboot_keys and params.get_bool("IsOnroad"):
@@ -4233,6 +4647,15 @@ def setup(app):
 
       if key == "AutomaticUpdates" and params.get_bool("IsOnroad"):
         return jsonify({"error": "Cannot change Automatic Updates while driving."}), 403
+
+      if key in VASM_CONFIGURATION_KEYS and params.get_bool("IsOnroad"):
+        return jsonify({"error": "Cannot change V-ASM configuration while driving."}), 403
+
+      if key in PIP_PREVIEW_CONFIGURATION_KEYS:
+        if not params.get_bool("GalaxyDeveloperMode"):
+          return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
+        if params.get_bool("IsOnroad"):
+          return jsonify({"error": "Cannot change PiP Side Camera configuration while driving."}), 403
 
       if key in PANDA_FIRMWARE_TOGGLE_KEYS and params.get_bool("IsOnroad"):
         return jsonify({"error": "Cannot flash Panda firmware while driving."}), 403
@@ -4544,6 +4967,23 @@ def setup(app):
       return canonical_model_key(str(value).strip()), 200
     return value, 200
 
+  @app.route("/api/curve_speed_controller/reset", methods=["POST"])
+  def reset_curve_speed_controller_data():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Curve Speed Controller data can only be reset while parked."}), 403
+
+    params.put("CalibratedLateralAcceleration", 2.0)
+    params.remove("CalibrationProgress")
+    params.remove("CurvatureData")
+
+    return jsonify({
+      "message": "Curve Speed Controller data reset. Training will restart on the next drive.",
+      "updated": {
+        "CalibratedLateralAcceleration": 2.0,
+        "CalibrationProgress": 0.0,
+      },
+    }), 200
+
   @app.route("/api/params/all", methods=["GET"])
   def get_all_params():
     migrate_cancel_button_controls(params)
@@ -4557,6 +4997,10 @@ def setup(app):
         result[key] = _get_current_param_value(key, t, defaults_lookup)
       except Exception:
         result[key] = None
+
+    result["HasRadar"] = _get_has_radar()
+    result["VehicleParked"] = _get_vehicle_parked()
+    result["AlphaLongitudinalAvailable"] = _get_alpha_longitudinal_available()
 
     return jsonify(_sanitize_json_value(result)), 200
 
@@ -4655,7 +5099,7 @@ def setup(app):
   def get_or_set_models_preferences():
     if request.method == "GET":
       return jsonify({
-        "sortMode": read_legacy_param_file(MODEL_SORT_MODE_PARAM, "alphabetical"),
+        "sortMode": read_legacy_param_file(MODEL_SORT_MODE_PARAM, DEFAULT_MODEL_SORT_MODE),
         "userFavorites": [entry for entry in (params.get(MODEL_USER_FAVORITES_PARAM, encoding="utf-8") or "").split(",") if entry],
       }), 200
 
@@ -4663,7 +5107,7 @@ def setup(app):
     changed = []
 
     if "sortMode" in data:
-      sort_mode = str(data.get("sortMode") or "alphabetical").strip() or "alphabetical"
+      sort_mode = str(data.get("sortMode") or DEFAULT_MODEL_SORT_MODE).strip() or DEFAULT_MODEL_SORT_MODE
       write_legacy_param_file(MODEL_SORT_MODE_PARAM, sort_mode)
       changed.append("sort mode")
 
@@ -4691,7 +5135,7 @@ def setup(app):
 
     downloading = bool(model_to_download) or download_all
     current_model = _current_model_key()
-    sort_mode = read_legacy_param_file(MODEL_SORT_MODE_PARAM, "alphabetical")
+    sort_mode = read_legacy_param_file(MODEL_SORT_MODE_PARAM, DEFAULT_MODEL_SORT_MODE)
     terminal = progress in ("Downloaded!", "All models downloaded!") or bool(re.search(r"cancelled|exists|failed|offline|invalid|error", progress, re.IGNORECASE))
     summary = {
       "installed": sum(1 for model in models if model["installed"]),
@@ -4895,6 +5339,60 @@ def setup(app):
       except Exception:
         storage_bytes = 0
 
+    selected_key = selection_key(selected_locations)
+    raw_progress = params_memory.get(MAPS_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
+    try:
+      download_progress = json.loads(raw_progress) if raw_progress else {}
+    except (TypeError, ValueError):
+      download_progress = {}
+    if not isinstance(download_progress, dict):
+      download_progress = {}
+
+    if not params_memory.get_bool(MAPS_DOWNLOAD_PARAM) and selected_key and download_progress.get("selectedKey") != selected_key:
+      size_cache = load_size_cache(params.get(MAPS_DOWNLOAD_SIZE_CACHE_PARAM, encoding="utf-8") or "")
+      cached_entry = size_cache.get(selected_key, {})
+      cached_bytes = nonnegative_int(cached_entry.get("downloadBytes", 0)) if isinstance(cached_entry, dict) else 0
+      if cached_bytes > 0:
+        download_progress = {
+          "active": False,
+          "cancelled": False,
+          "completed": False,
+          "downloadedBytes": 0,
+          "downloadedFiles": 0,
+          "estimatedDownloadBytes": cached_bytes,
+          "estimateSource": "previous_download",
+          "etaSeconds": 0,
+          "percent": 0,
+          "phase": "idle",
+          "primaryLocation": "",
+          "selectedKey": selected_key,
+          "selectedLocations": selected_locations,
+          "storageBytes": storage_bytes,
+          "totalFiles": nonnegative_int(cached_entry.get("totalFiles", 0)),
+          "updatedAt": cached_entry.get("updatedAt", ""),
+          "bytesPerSecond": 0,
+        }
+      else:
+        download_progress = {
+          "active": False,
+          "cancelled": False,
+          "completed": False,
+          "downloadedBytes": 0,
+          "downloadedFiles": 0,
+          "estimatedDownloadBytes": 0,
+          "estimateSource": "",
+          "etaSeconds": 0,
+          "percent": 0,
+          "phase": "idle",
+          "primaryLocation": "",
+          "selectedKey": selected_key,
+          "selectedLocations": selected_locations,
+          "storageBytes": storage_bytes,
+          "totalFiles": 0,
+          "updatedAt": "",
+          "bytesPerSecond": 0,
+        }
+
     return {
       "selectedLocations": selected_locations,
       "selectedEntries": selected_entries,
@@ -4909,6 +5407,7 @@ def setup(app):
       "scheduleOptions": MAP_SCHEDULE_OPTIONS,
       "scheduleValue": schedule_param_value(params.get("PreferredSchedule")),
       "storageBytes": storage_bytes,
+      "downloadProgress": download_progress,
     }
 
   @app.route("/api/maps/catalog", methods=["GET"])
@@ -5005,14 +5504,14 @@ def setup(app):
 
   def _default_model_key():
     default_key = _param_text(params.get_default_value("Model") or params.get_default_value("DrivingModel"))
-    return canonical_model_key(default_key) or "sc2"
+    return canonical_model_key(default_key) or "rdf43"
 
   def _default_model_name():
-    return _param_text(params.get_default_value("DrivingModelName")) or "South Carolina"
+    return _param_text(params.get_default_value("DrivingModelName")) or "Regret Driven Framework V4"
 
   def _default_model_version():
     default_version = _param_text(params.get_default_value("ModelVersion") or params.get_default_value("DrivingModelVersion"))
-    return default_version or "v11"
+    return default_version or "v15"
 
   def _current_model_key():
     current_model = _param_text(params.get("Model", encoding="utf-8") or params.get("DrivingModel", encoding="utf-8"))
@@ -5116,13 +5615,20 @@ def setup(app):
   @app.route("/api/routes", methods=["GET"])
   def list_routes():
     def generate():
-      routes = [(path, name) for path in FOOTAGE_PATHS for name in utilities.get_routes_names(path)]
+      routes = [
+        (path, name, segment_count)
+        for path in FOOTAGE_PATHS
+        for name, segment_count in utilities.get_routes_with_segment_counts(path)
+      ]
       total = len(routes)
       connect_dongle_id = params.get("StockDongleId", encoding="utf-8") or params.get("DongleId", encoding="utf-8") or ""
       yield f"data: {json.dumps({'progress': 0, 'total': total, 'connectDongleId': connect_dongle_id})}\n\n"
 
       with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(utilities.process_route, path, name): (path, name) for path, name in routes}
+        futures = {
+          executor.submit(utilities.process_route, path, name, segment_count): (path, name)
+          for path, name, segment_count in routes
+        }
         for processed, future in enumerate(as_completed(futures), start=1):
           try:
             result = future.result()
@@ -5141,22 +5647,43 @@ def setup(app):
           delete_file(os.path.join(footage_path, segment))
     return {"message": "Route deleted!"}, 200
 
-  @app.route("/api/routes/delete_all", methods=["DELETE"])
+  @app.route("/api/routes/delete_all", methods=["DELETE", "POST"])
   def delete_all_routes():
-    route_names = set()
-    for footage_path in FOOTAGE_PATHS:
-      if os.path.exists(footage_path):
-        for segment in os.listdir(footage_path):
-          route_names.add(segment.split("--")[0])
+    if _safe_params_get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot delete driving routes while driving."}), 409
 
-    for route_name in sorted(list(route_names)):
+    if not _ROUTE_DELETE_LOCK.acquire(blocking=False):
+      return jsonify({"error": "Route deletion is already in progress."}), 409
+
+    try:
+      utilities.stop_dashboard_background_analysis()
+
+      route_paths = []
+      seen_paths = set()
       for footage_path in FOOTAGE_PATHS:
-        if os.path.exists(footage_path):
-          for segment in os.listdir(footage_path):
-            if segment.startswith(route_name):
-              delete_file(os.path.join(footage_path, segment))
+        path = str(footage_path).rstrip("/")
+        if path and path not in seen_paths:
+          seen_paths.add(path)
+          route_paths.append(path)
 
-    return {"message": "All routes deleted!"}, 200
+      for route_path in route_paths:
+        _run_factory_reset_delete(route_path)
+
+      persisted_route_count = utilities.clear_dashboard_route_history(params)
+      _STATS_RESPONSE_CACHE.update({
+        "updated_at": 0.0,
+        "payload": None,
+      })
+      return jsonify({
+        "success": True,
+        "message": "All local driving routes deleted. Saved personal records were kept.",
+        "deletedPaths": len(route_paths),
+        "clearedDashboardRoutes": persisted_route_count,
+      }), 200
+    except Exception as exception:
+      return jsonify({"error": f"Failed to delete driving routes: {exception}"}), 500
+    finally:
+      _ROUTE_DELETE_LOCK.release()
 
   @app.route("/api/routes/<name>/preserve", methods=["POST"])
   def preserve_route(name):
@@ -5692,12 +6219,16 @@ def setup(app):
   @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/status", methods=["GET"])
   @app.route("/api/flm/status", methods=["GET"])
   def get_flm_status():
+    is_onroad = params.get_bool("IsOnroad")
+    if is_onroad:
+      flm_workspace.cancel_flm_if_onroad()
     workspace = flm_workspace.list_workspace()
     return jsonify({
-      "isOnroad": params.get_bool("IsOnroad"),
+      "isOnroad": is_onroad,
       "status": flm_workspace.read_flm_status(),
       "activeTrial": workspace.get("activeTrial"),
       "reports": workspace.get("reports", [])[:10],
+      "savedTunes": workspace.get("savedTunes", []),
     }), 200
 
   @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/analyze", methods=["POST"])
@@ -5711,7 +6242,12 @@ def setup(app):
     if not route_names:
       return jsonify({"error": "No routes were selected."}), 400
 
-    started = flm_workspace.start_flm_background_analysis(route_names, FOOTAGE_PATHS)
+    try:
+      segment_ranges = flm_workspace.normalize_segment_ranges(route_names, data.get("segmentRanges", {}))
+    except (TypeError, ValueError) as error:
+      return jsonify({"error": str(error)}), 400
+
+    started = flm_workspace.start_flm_background_analysis(route_names, FOOTAGE_PATHS, segment_ranges)
     if not started:
       return jsonify({"error": "Failed to start FLM analysis."}), 500
 
@@ -5776,6 +6312,61 @@ def setup(app):
     except RuntimeError as error:
       return jsonify({"error": str(error)}), 409
 
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/saved-tunes", methods=["POST"])
+  @app.route("/api/flm/saved-tunes", methods=["POST"])
+  def save_flm_tune():
+    data = request.get_json(silent=True) or {}
+    try:
+      return jsonify(flm_workspace.save_active_trial_as_tune(str(data.get("name") or ""))), 200
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/saved-tunes/<tune_id>/apply", methods=["POST"])
+  @app.route("/api/flm/saved-tunes/<tune_id>/apply", methods=["POST"])
+  def apply_flm_saved_tune(tune_id):
+    try:
+      return jsonify(flm_workspace.apply_saved_tune(tune_id)), 200
+    except FileNotFoundError:
+      return jsonify({"error": "Saved FLM tune not found."}), 404
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/saved-tunes/<tune_id>/submit", methods=["POST"])
+  @app.route("/api/flm/saved-tunes/<tune_id>/submit", methods=["POST"])
+  def submit_flm_saved_tune(tune_id):
+    data = request.get_json(silent=True) or {}
+    try:
+      return jsonify(flm_workspace.submit_saved_tune(tune_id, str(data.get("discordUsername") or ""))), 200
+    except FileNotFoundError:
+      return jsonify({"error": "Saved FLM tune not found."}), 404
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/saved-tunes/<tune_id>", methods=["PATCH"])
+  @app.route("/api/flm/saved-tunes/<tune_id>", methods=["PATCH"])
+  def rename_flm_saved_tune(tune_id):
+    data = request.get_json(silent=True) or {}
+    try:
+      return jsonify(flm_workspace.rename_saved_tune(tune_id, str(data.get("name") or ""))), 200
+    except FileNotFoundError:
+      return jsonify({"error": "Saved FLM tune not found."}), 404
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
+
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/saved-tunes/<tune_id>", methods=["DELETE"])
+  @app.route("/api/flm/saved-tunes/<tune_id>", methods=["DELETE"])
+  def delete_flm_saved_tune(tune_id):
+    try:
+      return jsonify(flm_workspace.delete_saved_tune(tune_id)), 200
+    except FileNotFoundError:
+      return jsonify({"error": "Saved FLM tune not found."}), 404
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+
   @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/trials/apply", methods=["POST"])
   @app.route("/api/flm/trials/apply", methods=["POST"])
   def apply_flm_trial():
@@ -5801,6 +6392,8 @@ def setup(app):
       result = flm_workspace.revert_trial_profile()
     except FileNotFoundError:
       return jsonify({"error": "No active FLM trial snapshot was found."}), 404
+    except Exception as error:
+      return jsonify({"error": f"{type(error).__name__}: {error}"}), 500
 
     return jsonify(result), 200
 
@@ -6105,6 +6698,38 @@ def setup(app):
       "warning": "This wipes local params, backups, themes, models, maps, and route data.",
     }), 202
 
+  @app.route("/api/sentry/status", methods=["GET"])
+  def sentry_status():
+    raw_event = params.get("SentryModeLastEvent", encoding="utf-8") or "{}"
+    raw_status = params.get("SentryModeStatus", encoding="utf-8") or "{}"
+    try:
+      last_event = json.loads(raw_event)
+    except (TypeError, ValueError, json.JSONDecodeError):
+      last_event = {}
+    try:
+      status = json.loads(raw_status)
+    except (TypeError, ValueError, json.JSONDecodeError):
+      status = {}
+
+    return jsonify({
+      "enabled": params.get_bool("SentryModeEnabled"),
+      "status": status if isinstance(status, dict) else {},
+      "lastEvent": last_event if isinstance(last_event, dict) else {},
+    })
+
+  @app.route("/api/sentry/events", methods=["POST"])
+  def sentry_event():
+    if request.remote_addr not in {None, "127.0.0.1", "::1"}:
+      return jsonify({"error": "Sentry events must originate on the device."}), 403
+
+    event = _normalize_sentry_event(request.get_json(silent=True))
+    if event is None:
+      return jsonify({"error": "Invalid sentry event."}), 400
+
+    params.put("SentryModeLastEvent", json.dumps(event, separators=(",", ":")))
+    threading.Thread(target=_dispatch_sentry_event, args=(event,), name="galaxy-sentry-notify", daemon=True).start()
+    return jsonify({"accepted": True, "eventId": event["eventId"]}), 202
+
   # ── Galaxy pairing (mirrors settings.cc L262-282) ──────────────────
   GALAXY_DIR = _get_galaxy_dir()
   GALAXY_AUTH_FILE = GALAXY_DIR / "glxyauth"
@@ -6142,10 +6767,10 @@ def setup(app):
     pw_hash = hashlib.sha256(password.encode()).hexdigest()
     GALAXY_DIR.mkdir(parents=True, exist_ok=True)
     GALAXY_AUTH_FILE.write_text(pw_hash)
-    
+
     # Generate 256-bit secure session token
     GALAXY_SESSION_FILE.write_text(secrets.token_hex(32))
-    
+
     # Generate 16-character alphanumeric routing slug
     charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     slug = ''.join(secrets.choice(charset) for _ in range(16))
@@ -7103,21 +7728,27 @@ def setup(app):
   @app.route("/api/toggles/backup", methods=["POST"])
   def backup_toggle_values():
     toggle_values = {}
-    for key, _, _, _ in starpilot_default_params:
-      if key in EXCLUDED_KEYS:
+    default_values = _get_static_default_param_values()
+    for key in sorted(_get_toggle_backup_keys()):
+      raw_value = _params_raw.get(key)
+      if raw_value is None:
+        raw_value = default_values.get(key)
+      if raw_value is None:
         continue
-
-      raw_value = params.get(key)
       value = _sanitize_json_value(raw_value)
-      if value is None:
-        value = "0"
-      elif not isinstance(value, (str, int, float, bool, dict, list)):
+      if not isinstance(value, (str, int, float, bool, dict, list)):
         value = str(value)
 
       toggle_values[key] = value
 
     encoded = utilities.encode_parameters(toggle_values)
-    wrapped = json.dumps({"data": encoded}, indent=2)
+    wrapped = json.dumps({
+      "format": TOGGLE_BACKUP_FORMAT,
+      "version": TOGGLE_BACKUP_VERSION,
+      "createdAt": datetime.now(timezone.utc).isoformat(),
+      "settingsCount": len(toggle_values),
+      "data": encoded,
+    }, indent=2)
 
     buffer = BytesIO(wrapped.encode("utf-8"))
     buffer.seek(0)
@@ -7126,30 +7757,206 @@ def setup(app):
 
   @app.route("/api/toggles/restore", methods=["POST"])
   def restore_toggle_values():
-    request_data = request.get_json()
-    if not request_data or "data" not in request_data:
-      return jsonify({"success": False, "message": "Missing 'data' in request."}), 400
+    request_data = request.get_json(silent=True)
+    if not isinstance(request_data, dict):
+      return jsonify({"success": False, "message": "Invalid toggle backup file."}), 400
 
-    allowed_keys = {key for key, _, _, _ in starpilot_default_params if key not in EXCLUDED_KEYS}
+    backup_format = request_data.get("format")
+    if backup_format not in (None, TOGGLE_BACKUP_FORMAT):
+      return jsonify({"success": False, "message": "This file is not a Galaxy toggle backup."}), 400
 
-    toggle_values = utilities.decode_parameters(request_data["data"])
+    backup_version = request_data.get("version", 1)
+    if not isinstance(backup_version, int) or backup_version > TOGGLE_BACKUP_VERSION:
+      return jsonify({"success": False, "message": "This toggle backup requires a newer Galaxy version."}), 400
+
+    encoded_data = request_data.get("data")
+    if not isinstance(encoded_data, str) or not encoded_data.strip():
+      return jsonify({"success": False, "message": "Toggle backup data is missing."}), 400
+    if len(encoded_data.encode("utf-8")) > TOGGLE_BACKUP_MAX_ENCODED_BYTES:
+      return jsonify({"success": False, "message": "Toggle backup file is too large."}), 413
+
+    try:
+      toggle_values = utilities.decode_parameters(encoded_data)
+    except Exception:
+      return jsonify({"success": False, "message": "Toggle backup data is damaged or invalid."}), 400
+    if not isinstance(toggle_values, dict):
+      return jsonify({"success": False, "message": "Toggle backup does not contain settings."}), 400
+
+    allowed_keys = _get_toggle_backup_keys()
+    restored_count = 0
+    skipped_count = 0
     for key, value in toggle_values.items():
+      if not isinstance(key, str):
+        skipped_count += 1
+        continue
+
       mapped_key = LEGACY_STARPILOT_PARAM_RENAMES.get(key, key)
-      if mapped_key in allowed_keys:
-        params.put(mapped_key, value)
+      if mapped_key not in allowed_keys:
+        skipped_count += 1
+        continue
+
+      try:
+        _params_raw.put(mapped_key, _coerce_toggle_restore_value(mapped_key, value))
+        restored_count += 1
+      except (TypeError, ValueError, json.JSONDecodeError):
+        skipped_count += 1
+
+    if restored_count == 0:
+      return jsonify({"success": False, "message": "No compatible toggle settings were found in this backup."}), 400
 
     update_starpilot_toggles()
-    return jsonify({"success": True, "message": "Toggles restored!"})
+    message = f"Restored {restored_count} toggle settings."
+    if skipped_count:
+      message += f" Skipped {skipped_count} incompatible or unavailable settings."
+    return jsonify({
+      "success": True,
+      "message": message,
+      "restoredCount": restored_count,
+      "skippedCount": skipped_count,
+    })
 
   @app.route("/api/toggles/reset_default", methods=["POST"])
   def reset_toggle_values():
-    params.put_bool("DoToggleReset", True)
-    HARDWARE.reboot()
+    for raw_key in _params_raw.all_keys():
+      key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
+      if key in EXCLUDED_KEYS:
+        continue
 
-  @app.route("/api/toggles/reset_stock", methods=["POST"])
-  def reset_toggle_values_to_stock():
-    params.put_bool("DoToggleResetStock", True)
+      default_value = _params_raw.get_default_value(raw_key)
+      if default_value is not None:
+        _params_raw.put(raw_key, default_value)
+
+    update_starpilot_toggles()
     HARDWARE.reboot()
+    return jsonify({"success": True, "message": "Toggles reset to default StarPilot values. Rebooting..."})
+
+  @app.route("/api/v_asm/snapshot", methods=["GET"])
+  def v_asm_snapshot():
+    jpeg = _get_live_driver_jpeg()
+    if jpeg is not None:
+      return Response(jpeg, mimetype="image/jpeg")
+    return jsonify({"error": "Unable to capture live frame from driver camera."}), 503
+
+
+  def _get_live_driver_jpeg():
+    from openpilot.system.manager.process_config import managed_processes
+    started = False
+    try:
+      try:
+        subprocess.check_call(["pgrep", "camerad"])
+      except subprocess.CalledProcessError:
+        managed_processes['camerad'].start()
+        started = True
+
+      client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_DRIVER, True)
+      if not client.connect(True):
+        return None
+
+      if started:
+        settle_deadline = time.monotonic() + 4.0
+        while time.monotonic() < settle_deadline:
+          client.recv(timeout_ms=100)
+
+      buf = client.recv(timeout_ms=5000)
+      if buf is None:
+        return None
+
+      y = np.array(buf.data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
+      u = np.array(buf.data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
+      v = np.array(buf.data[buf.uv_offset + 1::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
+
+      ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+      vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+
+      yuv = np.dstack((y, ul, vl)).astype(np.int16)
+      yuv[:, :, 1:] -= 128
+
+      m = np.array([
+        [1.00000,  1.00000, 1.00000],
+        [0.00000, -0.39465, 2.03211],
+        [1.13983, -0.58060, 0.00000],
+      ])
+      rgb = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
+
+      img = Image.fromarray(rgb)
+      buf_io = BytesIO()
+      img.save(buf_io, format="JPEG", quality=85)
+      return buf_io.getvalue()
+    except Exception:
+      return None
+    finally:
+      if started:
+        managed_processes['camerad'].stop()
+
+  @app.route("/api/v_asm/config", methods=["GET"])
+  def v_asm_get_config():
+    return jsonify(_decode_json_object(params.get("VASMAnnotationConfig")))
+
+  @app.route("/api/v_asm/config", methods=["POST"])
+  def v_asm_save_config():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot change V-ASM configuration while driving."}), 409
+    try:
+      config = _normalize_vasm_config(request.get_json(silent=True))
+    except ValueError as exc:
+      return jsonify({"error": str(exc)}), 400
+
+    params.put("VASMAnnotationConfig", config)
+    params.put_bool("VASMEnabled", True)
+    update_starpilot_toggles()
+    return jsonify({"success": True, "message": "Annotation config saved. V-ASM enabled."})
+
+  @app.route("/api/v_asm/config", methods=["DELETE"])
+  def v_asm_delete_config():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot change V-ASM configuration while driving."}), 409
+    params.put_bool("VASMEnabled", False)
+    params.put("VASMAnnotationConfig", {})
+    update_starpilot_toggles()
+    return jsonify({"success": True, "message": "Annotation config cleared. V-ASM disabled."})
+
+  @app.route("/api/pip_preview/snapshot", methods=["GET"])
+  def pip_preview_snapshot():
+    if not params.get_bool("GalaxyDeveloperMode"):
+      return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Camera snapshots are unavailable while driving."}), 403
+    jpeg = _get_live_driver_jpeg()
+    if jpeg is not None:
+      return Response(jpeg, mimetype="image/jpeg")
+    return jsonify({"error": "Unable to capture live frame from driver camera."}), 503
+
+  @app.route("/api/pip_preview/config", methods=["GET"])
+  def pip_preview_get_config():
+    if not params.get_bool("GalaxyDeveloperMode"):
+      return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
+    return jsonify(_decode_json_object(params.get("PIPPreviewMask")))
+
+  @app.route("/api/pip_preview/config", methods=["POST"])
+  def pip_preview_save_config():
+    if not params.get_bool("GalaxyDeveloperMode"):
+      return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot change PiP Side Camera configuration while driving."}), 403
+    try:
+      config = _normalize_pip_preview_config(request.get_json(silent=True))
+    except ValueError as exc:
+      return jsonify({"error": str(exc)}), 400
+
+    params.put("PIPPreviewMask", config)
+    update_starpilot_toggles()
+    return jsonify({"success": True, "message": "PiP Preview mask saved."})
+
+  @app.route("/api/pip_preview/config", methods=["DELETE"])
+  def pip_preview_delete_config():
+    if not params.get_bool("GalaxyDeveloperMode"):
+      return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot change PiP Side Camera configuration while driving."}), 403
+    params.put("PIPPreviewMask", {})
+    params.put_bool("PIPPreviewEnabled", False)
+    update_starpilot_toggles()
+    return jsonify({"success": True, "message": "PiP Preview mask cleared."})
 
   @app.route("/mapbox-help/<path:filename>", methods=["GET"])
   def serve_mapbox_help(filename):

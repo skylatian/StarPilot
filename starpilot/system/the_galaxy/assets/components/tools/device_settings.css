@@ -356,6 +356,16 @@
   flex-direction: column;
 }
 
+.ds-row-text-input {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--gap-sm);
+}
+
+.ds-row-text-input .ds-row-info {
+  margin-bottom: 0;
+}
+
 .ds-row-info {
   align-items: center;
   display: flex;
@@ -441,6 +451,19 @@
   outline: none;
 }
 
+.ds-text-input {
+  appearance: none;
+  box-sizing: border-box;
+  cursor: text;
+  min-height: 2.25rem;
+  width: 100%;
+}
+
+.ds-text-input:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
 .ds-apply-btn {
   background: transparent;
   border: var(--border-style-main);
@@ -515,6 +538,35 @@
   opacity: var(--disabled-opacity);
 }
 
+.ds-slider-container {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .ds-slider-container {
+    max-width: 420px;
+  }
+}
+
+.ds-slider {
+  accent-color: var(--main-fg);
+  cursor: pointer;
+  width: 100%;
+}
+
+.ds-slider:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
+.ds-slider-scale {
+  color: var(--text-muted);
+  display: flex;
+  font-size: var(--font-size-xs);
+  justify-content: space-between;
+  margin-top: 0.1rem;
+}
+
 /* ――― Favorite Slots ――― */
 .ds-favorites-panel {
   display: grid;
@@ -533,14 +585,19 @@
   background: var(--color-gray-950);
   border: 2px solid var(--sidebar-border-color);
   border-radius: var(--border-radius-base);
+  box-sizing: border-box;
+  color: inherit;
   cursor: pointer;
   display: flex;
+  font-family: var(--font-body);
   gap: var(--gap-base);
   justify-content: space-between;
   min-height: 8.5rem;
   padding: 1.1rem;
+  text-align: left;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
   user-select: none;
+  width: 100%;
 }
 
 .ds-favorite-quick-card:hover {
@@ -605,6 +662,20 @@
 
 .ds-favorite-quick-toggle:checked::after {
   transform: translateX(1.75rem);
+}
+
+.ds-favorite-action-chip {
+  align-items: center;
+  background: var(--main-fg);
+  border-radius: var(--border-radius-base);
+  color: var(--color-black);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  justify-content: center;
+  min-width: 4.25rem;
+  padding: 0.55rem 0.75rem;
 }
 
 .ds-favorite-card {

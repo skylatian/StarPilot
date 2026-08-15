@@ -2,10 +2,11 @@ import time
 import pyray as rl
 from collections.abc import Callable
 from enum import IntEnum
-from openpilot.common.params import Params
+from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.widgets.offroad_alerts import UpdateAlert, OffroadAlert
 from openpilot.selfdrive.ui.widgets.exp_mode_button import ExperimentalModeButton
-from openpilot.selfdrive.ui.widgets.prime import PrimeWidget
+from openpilot.selfdrive.ui.widgets.drive_stats import DriveStatsDashboard
+from openpilot.selfdrive.ui.widgets.home_info_card import HomeInfoCard
 from openpilot.selfdrive.ui.widgets.setup import SetupWidget
 from openpilot.selfdrive.ui.lib.starpilot_version import starpilot_display_description
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -31,7 +32,7 @@ class HomeLayoutState(IntEnum):
 class HomeLayout(Widget):
   def __init__(self):
     super().__init__()
-    self.params = Params()
+    self.params = ui_state.ui_params
 
     self.update_alert = UpdateAlert()
     self.offroad_alert = OffroadAlert()
@@ -56,14 +57,16 @@ class HomeLayout(Widget):
     self.update_notif_rect = rl.Rectangle(0, 0, 200, HEADER_HEIGHT - 10)
     self.alert_notif_rect = rl.Rectangle(0, 0, 220, HEADER_HEIGHT - 10)
 
-    self._prime_widget = PrimeWidget()
+    self._drive_stats = DriveStatsDashboard(self.params)
     self._setup_widget = SetupWidget()
+    self._home_info_card = self._child(HomeInfoCard(params=self.params, drive_stats=self._drive_stats))
 
     self._exp_mode_button = ExperimentalModeButton()
     self._setup_callbacks()
 
   def show_event(self):
     self._exp_mode_button.show_event()
+    super().show_event()
     self.last_refresh = time.monotonic()
     self._refresh()
 
@@ -178,7 +181,12 @@ class HomeLayout(Widget):
 
     version_rect = rl.Rectangle(self.header_rect.x + self.header_rect.width - version_text_width, self.header_rect.y,
                                 version_text_width, self.header_rect.height)
-    gui_label(version_rect, self._version_text, 48, rl.WHITE, alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
+    version_font_size = 48
+    version_text_size = measure_text_cached(font, self._version_text, version_font_size)
+    if version_text_size.x > version_rect.width:
+      version_font_size = max(32, int(version_font_size * version_rect.width / version_text_size.x))
+    gui_label(version_rect, self._version_text, version_font_size, rl.WHITE, font_weight=FontWeight.MEDIUM,
+              alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
   def _render_home_content(self):
     self._render_left_column()
@@ -191,7 +199,7 @@ class HomeLayout(Widget):
     self.offroad_alert.render(self.content_rect)
 
   def _render_left_column(self):
-    self._prime_widget.render(self.left_column_rect)
+    self._drive_stats.render_overview(self.left_column_rect)
 
   def _render_right_column(self):
     exp_height = 125
@@ -206,9 +214,14 @@ class HomeLayout(Widget):
       self.right_column_rect.width,
       self.right_column_rect.height - exp_height - SPACING,
     )
-    self._setup_widget.render(setup_rect)
+    if ui_state.prime_state.is_paired():
+      self._home_info_card.render(setup_rect)
+    else:
+      self._setup_widget.render(setup_rect)
 
   def _refresh(self):
+    self._drive_stats.refresh()
+    self._home_info_card.refresh()
     self._version_text = self._get_version_text()
     update_available = self.update_alert.refresh()
     alert_count = self.offroad_alert.refresh()
@@ -228,6 +241,17 @@ class HomeLayout(Widget):
     self._prev_alerts_present = alerts_present
 
   def _get_version_text(self) -> str:
-    brand = "openpilot"
+    brand = "StarPilot"
     description = starpilot_display_description(self.params.get("UpdaterCurrentDescription"))
-    return f"{brand} {description}" if description else brand
+    version_text = f"{brand} {description}" if description else brand
+
+    model_name = self.params.get("DrivingModelName", encoding="utf-8") or self.params.get_default_value("DrivingModelName")
+    if isinstance(model_name, bytes):
+      model_name = model_name.decode("utf-8", errors="ignore")
+    model_name = str(model_name or "").replace("_default", "").replace("(Default)", "").strip()
+
+    if not model_name:
+      model_name = (self.params.get("Model", encoding="utf-8") or
+                    self.params.get("DrivingModel", encoding="utf-8") or "").strip()
+
+    return f"{version_text} - {model_name}" if model_name else version_text

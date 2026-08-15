@@ -13,11 +13,14 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 # New subarus angle based controllers
 "SUBARU_FORESTER_2022" = [nan, 3.0, nan]
 "SUBARU_OUTBACK_2023" = [nan, 3.0, nan]
+"SUBARU_LEGACY_2025" = [nan, 3.0, nan]
 "SUBARU_ASCENT_2023" = [nan, 3.0, nan]
+"SUBARU_CROSSTREK_2025" = [nan, 3.0, nan]
 
 # Toyota LTA also has torque
 "TOYOTA_RAV4_TSS2_2023" = [nan, 3.0, nan]
 "TOYOTA_COROLLA" = [4.05, 1.84, 0.10]
+"TOYOTA_RAV4_PRIME" = [1.7, 2.0, 0.14]
 
 # Tesla angle based controllers
 "TESLA_MODEL_3" = [nan, 2.5, nan]
@@ -90,6 +93,8 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 "KIA_NIRO_EV_2ND_GEN" = [2.05, 2.5, 0.14]
 "GENESIS_GV80" = [2.5, 2.5, 0.1]
 "KIA_CARNIVAL_4TH_GEN" = [1.75, 1.75, 0.15]
+"KIA_CARNIVAL_2025" = [1.75, 1.75, 0.15]
+"KIA_CARNIVAL_HEV_4TH_GEN" = [1.75, 1.75, 0.15]
 "GMC_ACADIA" = [1.6, 1.6, 0.2]
 "LEXUS_IS_TSS2" = [2.0, 2.0, 0.1]
 "HYUNDAI_KONA_EV_2ND_GEN" = [2.5, 2.5, 0.1]
@@ -134,3 +139,4 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 "HONDA_HRV_3G" = [2.5, 1.2, 0.2]
 
 "CHEVROLET_MALIBU_CC" = [1.85, 1.85, 0.075]
+"CHEVROLET_TRAX" = [0.95, 0.95, 0.17]

@@ -1,13 +1,42 @@
 import hashlib
+import io
+import json
+import sys
+from pathlib import Path
 
+from scripts import model_compiler
+from scripts import reconcile_v23_artifacts
 from scripts.model_compiler import split_oversized_artifact
+from openpilot.common import file_chunker
+from openpilot.selfdrive.modeld import compile_modeld
 from openpilot.starpilot.assets import download_functions
+from openpilot.starpilot.assets import model_manager
 from openpilot.starpilot.assets.model_manager import MANIFEST_CANDIDATES, ModelManager
 from openpilot.starpilot.common.model_versions import UNIFIED_ARTIFACT_FORMAT
 
 
-def test_v22_is_the_only_manifest_candidate():
-  assert MANIFEST_CANDIDATES == ("v22",)
+def test_v23_is_the_only_manifest_candidate():
+  assert MANIFEST_CANDIDATES == ("v23",)
+
+
+def test_v23_manifest_is_loaded_from_models_checkout():
+  assert ModelManager._manifest_paths("v23") == ("Models/model_names_v23.json",)
+
+
+def test_old_manifest_ids_resolve_to_v23_namespace():
+  manager = object.__new__(ModelManager)
+  manager.available_models = ["pop223", "tr14223"]
+  assert manager._resolve_manifest_model_key("pop22") == "pop223"
+  assert manager._resolve_manifest_model_key("tr1422") == "tr14223"
+  assert manager._resolve_manifest_model_key("missing") == "missing"
+
+
+def test_model_cleanup_matches_legacy_split_artifacts():
+  assert model_manager.is_driving_artifact_file("pop223_driving_tinygrad.pkl")
+  assert model_manager.is_driving_artifact_file("driving_vision_tinygrad.pkl")
+  assert model_manager.is_driving_artifact_file("driving_off_policy_tinygrad.pkl.p00")
+  assert not model_manager.is_driving_artifact_file("dmonitoring_model_tinygrad.pkl")
+  assert not model_manager.is_driving_artifact_file("local-test_driving_tinygrad.pkl")
 
 
 def test_behavior_version_does_not_control_artifact_layout():
@@ -19,6 +48,133 @@ def test_behavior_version_does_not_control_artifact_layout():
     "example_driving_tinygrad.pkl",
   ]
   assert manager._required_files("example", "split") == []
+
+
+def test_external_gpu_requirement_is_cached_from_manifest(tmp_path, monkeypatch):
+  monkeypatch.setattr(model_manager, "MODELS_PATH", tmp_path)
+  manager = object.__new__(ModelManager)
+  metadata = manager._build_artifact_metadata_map([
+    {"id": "large", "artifact_format": UNIFIED_ARTIFACT_FORMAT, "uses_external_gpu": True},
+    {"id": "normal", "artifact_format": UNIFIED_ARTIFACT_FORMAT},
+  ])
+  (tmp_path / model_manager.ARTIFACT_METADATA_CACHE).write_text(json.dumps(metadata))
+
+  assert model_manager.model_uses_external_gpu("large")
+  assert not model_manager.model_uses_external_gpu("normal")
+  assert not model_manager.model_uses_external_gpu("missing")
+
+
+def test_external_gpu_compilation_is_opt_in(tmp_path, monkeypatch):
+  invocations = []
+  monkeypatch.setattr(model_compiler, "build_compile_env", lambda **_: {
+    "DEV": "QCOM", "IMAGE": "2", "NOLOCALS": "1", "OPENPILOT_HACKS": "1",
+  })
+  monkeypatch.setattr(model_compiler.subprocess, "run", lambda command, **kwargs: invocations.append((command, kwargs)))
+  monkeypatch.setattr(model_compiler, "wait_for_external_gpu", lambda _: None)
+  files = {"driving_supercombo": tmp_path / "model.onnx"}
+
+  model_compiler.compile_driving("normal", files, "supercombo", "v15", tmp_path, "policy")
+  model_compiler.compile_driving("large", files, "supercombo", "v15", tmp_path, "policy", external_gpu=True)
+
+  normal_command, normal_kwargs = invocations[0]
+  external_command, external_kwargs = invocations[1]
+  assert "--out-of-band" not in normal_command
+  assert normal_kwargs["env"]["DEV"] == "QCOM"
+  assert normal_kwargs["env"]["IMAGE"] == "2"
+  assert "--out-of-band" in external_command
+  assert external_kwargs["env"]["DEV"] == "USB+AMD:LLVM"
+  assert external_kwargs["env"]["WARP_DEV"] == "QCOM"
+  assert all(flag not in external_kwargs["env"] for flag in ("IMAGE", "NOLOCALS", "OPENPILOT_HACKS"))
+
+
+def test_compile_clears_only_selected_model_outputs(tmp_path, monkeypatch):
+  monkeypatch.setattr(model_compiler, "build_compile_env", lambda **_: {})
+  monkeypatch.setattr(model_compiler.subprocess, "run", lambda *args, **kwargs: None)
+  (tmp_path / "normal_driving_tinygrad.pkl").write_bytes(b"old")
+  (tmp_path / "normal_driving_tinygrad.pkl.p00").write_bytes(b"old")
+  (tmp_path / "other_driving_tinygrad.pkl").write_bytes(b"keep")
+
+  model_compiler.compile_driving(
+    "normal", {"driving_supercombo": tmp_path / "model.onnx"}, "supercombo", "v15", tmp_path, "policy",
+  )
+
+  assert not (tmp_path / "normal_driving_tinygrad.pkl").exists()
+  assert not (tmp_path / "normal_driving_tinygrad.pkl.p00").exists()
+  assert (tmp_path / "other_driving_tinygrad.pkl").read_bytes() == b"keep"
+
+
+def test_v23_namespace_mapping_does_not_cascade(tmp_path):
+  (tmp_path / "deeprl3_driving_tinygrad.pkl.p00").write_bytes(b"base")
+  (tmp_path / "deeprl33_driving_tinygrad.pkl.p00").write_bytes(b"v3")
+
+  reconcile_v23_artifacts.normalize_artifact_names(tmp_path)
+
+  assert (tmp_path / "deeprl33_driving_tinygrad.pkl.p00").read_bytes() == b"base"
+  assert (tmp_path / "deeprl333_driving_tinygrad.pkl.p00").read_bytes() == b"v3"
+
+
+def test_gpu_is_external_gpu_cli_alias(monkeypatch):
+  monkeypatch.setattr(sys, "argv", ["models", "--model", "large", "--gpu"])
+  args = model_compiler.parse_args()
+  assert args.external_gpu
+
+
+def test_requested_model_id_uses_only_staged_source(tmp_path):
+  source = tmp_path / "big_driving_supercombo.onnx"
+  source.touch()
+  assert model_compiler.resolve_model_files(tmp_path, "lebowski") == {
+    "driving_supercombo": source,
+  }
+
+
+def test_regular_fat_onnx_is_parsed_in_place(tmp_path, monkeypatch):
+  source = tmp_path / "big_driving_supercombo.onnx"
+  source.write_bytes(b"model")
+  monkeypatch.setattr(file_chunker, "open_file_chunked", lambda _: (_ for _ in ()).throw(AssertionError("must not copy")))
+
+  assert compile_modeld.read_file_chunked_to_disk(source) == str(source)
+
+
+def test_chunked_fat_onnx_is_streamed_to_disk(tmp_path, monkeypatch):
+  payload = b"fat model" * 1024
+
+  class StreamingOnly(io.BytesIO):
+    def read(self, size=-1):
+      assert size >= 0, "staging must not materialize the whole ONNX"
+      return super().read(size)
+
+  monkeypatch.setattr(file_chunker, "open_file_chunked", lambda _: StreamingOnly(payload))
+  source = tmp_path / "big_driving_supercombo.onnx"
+  staged = compile_modeld.read_file_chunked_to_disk(source)
+  try:
+    assert staged == f"{source}.unchunked"
+    assert Path(staged).read_bytes() == payload
+  finally:
+    Path(staged).unlink(missing_ok=True)
+
+
+def test_onnx_preflight_accepts_graph_without_reading_weights(tmp_path):
+  source = tmp_path / "model.onnx"
+  source.write_bytes(b"\x08\x09\x3a\x02\x12\x00")
+
+  model_compiler.validate_onnx_source(source)
+
+
+def test_onnx_preflight_rejects_empty_truncated_and_lfs_sources(tmp_path):
+  empty = tmp_path / "empty.onnx"
+  empty.touch()
+  truncated = tmp_path / "truncated.onnx"
+  truncated.write_bytes(b"\x3a\x08bad")
+  pointer = tmp_path / "pointer.onnx"
+  pointer.write_text("version https://git-lfs.github.com/spec/v1\n")
+
+  for source, message in ((empty, "empty"), (truncated, "truncated"), (pointer, "Git LFS pointer")):
+    try:
+      model_compiler.validate_onnx_source(source)
+    except ValueError as error:
+      assert message in str(error)
+    else:
+      raise AssertionError(f"{source} should have failed validation")
 
 
 def test_dropbox_urls_are_direct_downloads():

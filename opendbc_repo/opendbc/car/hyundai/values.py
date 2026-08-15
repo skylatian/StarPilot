@@ -77,11 +77,14 @@ class CarControllerParams:
       self.STEER_DELTA_DOWN = 3
 
     elif CP.flags & HyundaiFlags.CAN_CANFD_BLENDED:
-      self.STEER_MAX = 404
-      self.STEER_DRIVER_ALLOWANCE = 50
-      self.STEER_THRESHOLD = 150
-      self.STEER_DELTA_UP = 2
-      self.STEER_DELTA_DOWN = 3
+      if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+        self.STEER_MAX = 384
+      else:
+        self.STEER_MAX = 404
+        self.STEER_DRIVER_ALLOWANCE = 50
+        self.STEER_THRESHOLD = 150
+        self.STEER_DELTA_UP = 2
+        self.STEER_DELTA_DOWN = 3
 
     # Default for most HKG
     else:
@@ -103,16 +106,19 @@ class HyundaiSafetyFlags(IntFlag):
   NON_SCC = 4096
   CAN_CANFD_BLENDED = 8192
   CANCEL_BTN_ENABLE = 16384
+  CAN_REFRESH_MSGS = 32768
   CCNC = 32768
 
 
 class HyundaiStarPilotSafetyFlags(IntFlag):
+  AOL_MAIN_LKAS_SYNC = 32
   HAS_LDA_BUTTON = 1024
   AOL_LKAS_ON_ENGAGE = 2048
 
 
 class HyundaiStarPilotFlags(IntFlag):
   SPEED_LIMIT_AVAILABLE = 1
+  MAIN_CRUISE_STATE_TRACKING = 2 ** 2
 
 
 class HyundaiFlags(IntFlag):
@@ -219,6 +225,11 @@ class HyundaiPlatformConfig(PlatformConfig):
 
 
 @dataclass
+class HyundaiRefreshPlatformConfig(HyundaiPlatformConfig):
+  dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: "hyundai_can_refresh_generated"})
+
+
+@dataclass
 class HyundaiCanFDPlatformConfig(PlatformConfig):
   dbc_dict: DbcDict = field(default_factory=lambda: {Bus.pt: "hyundai_canfd_generated"})
   radar_dbc: str | None = None
@@ -289,7 +300,7 @@ class CAR(Platforms):
     CarSpecs(mass=2800 * CV.LB_TO_KG, wheelbase=2.72, steerRatio=12.9, tireStiffnessFactor=0.65),
     flags=HyundaiFlags.CHECKSUM_CRC8,
   )
-  HYUNDAI_ELANTRA_2024 = HyundaiPlatformConfig(
+  HYUNDAI_ELANTRA_2024 = HyundaiRefreshPlatformConfig(
     [HyundaiCarDocs("Hyundai Elantra 2024-25", car_parts=CarParts.common([CarHarness.hyundai_k]))],
     CarSpecs(mass=2797 * CV.LB_TO_KG, wheelbase=2.72, steerRatio=12.9, tireStiffnessFactor=0.65),
     flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.CAMERA_SCC,
@@ -300,7 +311,7 @@ class CAR(Platforms):
     CarSpecs(mass=3017 * CV.LB_TO_KG, wheelbase=2.72, steerRatio=12.9, tireStiffnessFactor=0.65),
     flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID,
   )
-  HYUNDAI_ELANTRA_HEV_2024 = HyundaiPlatformConfig(
+  HYUNDAI_ELANTRA_HEV_2024 = HyundaiRefreshPlatformConfig(
     [
       HyundaiCarDocs("Hyundai Elantra Hybrid 2024-26", car_parts=CarParts.common([CarHarness.hyundai_k])),
       HyundaiCarDocs("Hyundai i30 Hybrid 2024", car_parts=CarParts.common([CarHarness.hyundai_k])),
@@ -470,8 +481,12 @@ class CAR(Platforms):
     [
       HyundaiCarDocs("Hyundai Palisade (without HDA II) 2023-25", "Highway Driving Assist",
                      car_parts=CarParts.common([CarHarness.hyundai_a])),
+      HyundaiCarDocs("Hyundai Palisade (with HDA II) 2023-24", "Highway Driving Assist II",
+                     car_parts=CarParts.common([CarHarness.hyundai_r])),
       HyundaiCarDocs("Kia Telluride (without HDA II) 2023-25", "Highway Driving Assist",
                      car_parts=CarParts.common([CarHarness.hyundai_l])),
+      HyundaiCarDocs("Kia Telluride (with HDA II) 2023-24", "Highway Driving Assist II",
+                     car_parts=CarParts.common([CarHarness.hyundai_p])),
     ],
     HYUNDAI_PALISADE.specs,
     flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.CAN_CANFD_BLENDED | HyundaiFlags.RADAR_SCC,
@@ -507,8 +522,8 @@ class CAR(Platforms):
                      car_parts=CarParts.common([CarHarness.hyundai_q]))
     ],
     HYUNDAI_IONIQ_5.specs,
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
-    radar_dbc=HYUNDAI_MRR30_RADAR_DBC,
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING | HyundaiFlags.CCNC,
+    radar_dbc=HYUNDAI_MRR35_RADAR_DBC,
   )
   HYUNDAI_IONIQ_5_N = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Ioniq 5 N (with HDA II) 2024", car_parts=CarParts.common([CarHarness.hyundai_s]))],
@@ -777,7 +792,7 @@ class CAR(Platforms):
       HyundaiCarDocs("Kia EV9 2025-26", car_parts=CarParts.common([CarHarness.hyundai_r]))
     ],
     CarSpecs(mass=2664, wheelbase=3.1, steerRatio=16),
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING | HyundaiFlags.CCNC,
     radar_dbc=HYUNDAI_MRR35_RADAR_DBC,
   )
   KIA_CARNIVAL_4TH_GEN = HyundaiCanFDPlatformConfig(
@@ -787,6 +802,24 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=2087, wheelbase=3.09, steerRatio=14.23),
     flags=HyundaiFlags.RADAR_SCC,
+  )
+  KIA_CARNIVAL_2025 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia Carnival 2025", car_parts=CarParts.common([CarHarness.hyundai_k])),
+      HyundaiCarDocs("Kia Carnival (with HDA II) 2025", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_q])),
+    ],
+    KIA_CARNIVAL_4TH_GEN.specs,
+    flags=HyundaiFlags.CCNC,
+  )
+  KIA_CARNIVAL_HEV_4TH_GEN = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia Carnival Hybrid 2025", car_parts=CarParts.common([CarHarness.hyundai_k])),
+      HyundaiCarDocs("Kia Carnival Hybrid 2026", car_parts=CarParts.common([CarHarness.hyundai_a])),
+      HyundaiCarDocs("Kia Carnival Hybrid (with HDA II) 2025-26", "Highway Driving Assist II",
+                     car_parts=CarParts.common([CarHarness.hyundai_q])),
+    ],
+    CarSpecs(mass=2253, wheelbase=3.09, steerRatio=14.23),
+    flags=HyundaiFlags.CCNC,
   )
 
   # Genesis
@@ -1013,7 +1046,7 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
       if not any(found_platform_code in expected_platform_codes for found_platform_code in found_platform_codes):
         break
 
-      if ecu[0] in DATE_FW_ECUS:
+      if ecu[0] in DATE_FW_ECUS and candidate not in DATELESS_FUZZY_CARS:
         # If ECU can have a FW date, require it to exist
         # (this excludes candidates in the database without dates)
         if not len(expected_dates) or not len(found_dates):
@@ -1051,8 +1084,8 @@ PART_NUMBER_FW_PATTERN = re.compile(b'(?<=[0-9][.,][0-9]{2} )([0-9]{5}[-/]?[A-Z]
 
 # We've seen both ICE and hybrid for these platforms, and they have hybrid descriptors (e.g. MQ4 vs MQ4H)
 CANFD_FUZZY_WHITELIST = {CAR.KIA_SORENTO_4TH_GEN, CAR.KIA_SORENTO_HEV_4TH_GEN, CAR.KIA_K8_HEV_1ST_GEN,
-                         # TODO: the hybrid variant is not out yet
-                         CAR.KIA_CARNIVAL_4TH_GEN, CAR.KIA_SORENTO_HEV_4TH_GEN_LFA2}
+                         CAR.KIA_CARNIVAL_4TH_GEN, CAR.KIA_CARNIVAL_2025, CAR.KIA_CARNIVAL_HEV_4TH_GEN,
+                         CAR.KIA_SORENTO_HEV_4TH_GEN_LFA2}
 
 # List of ECUs expected to have platform codes, camera and radar should exist on all cars
 # TODO: use abs, it has the platform code and part number on many platforms
@@ -1060,6 +1093,8 @@ PLATFORM_CODE_ECUS = [Ecu.fwdRadar, Ecu.fwdCamera, Ecu.eps]
 # So far we've only seen dates in fwdCamera
 # TODO: there are date codes in the ABS firmware versions in hex
 DATE_FW_ECUS = [Ecu.fwdCamera]
+
+DATELESS_FUZZY_CARS = {CAR.HYUNDAI_KONA_NON_SCC}
 
 # Note: an ECU on CAN FD cars may sometimes send 0x30080aaaaaaaaaaa (flow control continue) while we
 # are attempting to query ECUs. This currently does not seem to affect fingerprinting from the camera
@@ -1148,10 +1183,15 @@ CANFD_CAR = CAR.with_flags(HyundaiFlags.CANFD)
 CANFD_RADAR_SCC_CAR = CAR.with_flags(HyundaiFlags.RADAR_SCC)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
 
 # CAN-FD cars with ADAS ECUs that work with the communication-control path.
-CANFD_SECURITYACCESS_CAR = {CAR.HYUNDAI_IONIQ_5, CAR.HYUNDAI_IONIQ_6, CAR.HYUNDAI_KONA_EV_2ND_GEN}
+CANFD_SECURITYACCESS_CAR = {
+  CAR.HYUNDAI_IONIQ_5, CAR.HYUNDAI_IONIQ_5_PE, CAR.HYUNDAI_IONIQ_6, CAR.HYUNDAI_KONA_EV_2ND_GEN, CAR.KIA_EV9,
+}
 CANFD_UNSUPPORTED_LONGITUDINAL_CAR = CAR.with_flags(HyundaiFlags.CANFD_NO_RADAR_DISABLE) - CANFD_SECURITYACCESS_CAR  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
-CANFD_ANGLE_LONGITUDINAL_CAR = set()
-CANFD_RADAR_LIVE_LONGITUDINAL_CAR = {CAR.HYUNDAI_IONIQ_5, CAR.HYUNDAI_IONIQ_6, CAR.KIA_EV6, CAR.GENESIS_GV60_EV_1ST_GEN}
+CANFD_ANGLE_LONGITUDINAL_CAR = {CAR.KIA_EV9, CAR.HYUNDAI_IONIQ_5_PE}
+CANFD_CORNER_RADAR_BSM_CAR = {CAR.HYUNDAI_IONIQ_6, CAR.HYUNDAI_IONIQ_5_PE, CAR.KIA_EV9}
+CANFD_RADAR_LIVE_LONGITUDINAL_CAR = {
+  CAR.HYUNDAI_IONIQ_5, CAR.HYUNDAI_IONIQ_5_PE, CAR.HYUNDAI_IONIQ_6, CAR.KIA_EV6, CAR.KIA_EV9, CAR.GENESIS_GV60_EV_1ST_GEN,
+}
 RADAR_LIVE_LONGITUDINAL_CAR = CANFD_RADAR_LIVE_LONGITUDINAL_CAR | {
   CAR.HYUNDAI_IONIQ,
   CAR.HYUNDAI_KONA_EV_2022,

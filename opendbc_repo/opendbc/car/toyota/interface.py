@@ -124,6 +124,9 @@ class CarInterface(CarInterfaceBase):
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
     ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate]
 
+    if candidate == CAR.LEXUS_IS:
+      ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.ALT_CRUISE.value
+
     # BRAKE_MODULE is on a different address for these cars
     if DBC[candidate][Bus.pt] == "toyota_new_mc_pt_generated":
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.ALT_BRAKE.value
@@ -156,6 +159,19 @@ class CarInterface(CarInterfaceBase):
       # sDSU / radar filter hardware needs the Toyota safety long-filter TX set.
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.LONG_FILTER.value
 
+    # A DSU bypass adapter reroutes the stock DSU messages to the camera bus.
+    # These messages are normally absent there on pre-TSS2 platforms.
+    camera_fingerprint = fingerprint.get(2, {})
+    has_dsu_bypass = 0x343 in camera_fingerprint or 0x4CB in camera_fingerprint
+    late_prius_camera = candidate == CAR.TOYOTA_PRIUS and any(
+      fw.ecu == Ecu.fwdCamera and bytes(fw.fwVersion).startswith(b'8646F4705') for fw in car_fw
+    )
+    if candidate == CAR.LEXUS_IS or late_prius_camera:
+      has_dsu_bypass = ((0x343 in camera_fingerprint and 0x343 not in fingerprint.get(1, {})) or
+                        (0x4CB in camera_fingerprint and 0x4CB not in fingerprint.get(0, {})))
+    if not use_sdsu and candidate not in TSS2_CAR and has_dsu_bypass:
+      ret.flags |= ToyotaFlags.DSU_BYPASS.value
+
     # In TSS2 cars, the camera does long control
     found_ecus = [fw.ecu for fw in car_fw]
 
@@ -180,7 +196,7 @@ class CarInterface(CarInterfaceBase):
       # https://engage.toyota.com/static/images/toyota_safety_sense/TSS_Applicability_Chart.pdf
       stop_and_go = candidate != CAR.TOYOTA_AVALON
 
-    elif candidate in (CAR.TOYOTA_RAV4_TSS2, CAR.TOYOTA_RAV4_TSS2_2022, CAR.TOYOTA_RAV4_TSS2_2023, CAR.TOYOTA_RAV4_PRIME, CAR.TOYOTA_SIENNA_4TH_GEN):
+    elif candidate in (CAR.TOYOTA_RAV4_TSS2, CAR.TOYOTA_RAV4_TSS2_2022, CAR.TOYOTA_RAV4_TSS2_2023, CAR.TOYOTA_RAV4_PRIME):
       ret.lateralTuning.init('pid')
       ret.lateralTuning.pid.kiBP = [0.0]
       ret.lateralTuning.pid.kpBP = [0.0]
@@ -237,6 +253,7 @@ class CarInterface(CarInterfaceBase):
     #  - TSS2 radar ACC cars (disables radar)
 
     ret.openpilotLongitudinalControl = (use_sdsu or
+                                        bool(ret.flags & ToyotaFlags.DSU_BYPASS.value) or
                                         candidate in (TSS2_CAR - RADAR_ACC_CAR) or
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
 
@@ -289,6 +306,12 @@ class CarInterface(CarInterfaceBase):
       ret.vEgoStopping = 0.25
       ret.vEgoStarting = 0.25
       ret.stoppingDecelRate = 0.3
+
+    if candidate == CAR.TOYOTA_HIGHLANDER and ret.openpilotLongitudinalControl and not ret.flags & ToyotaFlags.HYBRID.value:
+      ret.longitudinalActuatorDelay = 0.4
+
+    if candidate == CAR.TOYOTA_SIENNA and ret.openpilotLongitudinalControl:
+      ret.longitudinalActuatorDelay = 0.5
 
     if ret.enableGasInterceptorDEPRECATED:
       # Pedal/SDSU Toyotas feel best with a softer final stop clamp.

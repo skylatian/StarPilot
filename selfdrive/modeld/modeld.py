@@ -16,7 +16,7 @@ from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.file_chunker import read_file_chunked
+from openpilot.common.file_chunker import file_chunked_exists, open_file_chunked, read_file_chunked
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.common.transformations.model import get_warp_matrix
@@ -38,8 +38,9 @@ from openpilot.selfdrive.modeld.compile_modeld import (
   make_split_input_queues,
   make_supercombo_input_queues,
 )
-from openpilot.selfdrive.modeld.helpers import get_tg_input_devices
-from openpilot.starpilot.assets.model_manager import ModelManager
+from openpilot.selfdrive.modeld.helpers import get_tg_input_devices, load_oob, tinygrad_dev_config, usbgpu_present
+from openpilot.selfdrive.modeld.usbgpu_link import wait_usbgpu_link
+from openpilot.starpilot.assets.model_manager import ModelManager, model_uses_external_gpu
 from openpilot.starpilot.common.model_versions import is_tinygrad_model_version
 from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles, MODELS_PATH, params_memory
 
@@ -47,12 +48,20 @@ from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles
 PROCESS_NAME = "selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
-BUILTIN_MODEL_KEY = "sc2"
-BUILTIN_MODEL_ALIASES = {BUILTIN_MODEL_KEY, "sc"}
+BUILTIN_MODEL_KEY = "rdf43"
+BUILTIN_MODEL_ALIASES = {BUILTIN_MODEL_KEY, "rdf"}
+MODEL_ID_ALIASES = {"sc": "sc2"}
 
 
-LAT_SMOOTH_SECONDS = 0.0
+LAT_SMOOTH_SECONDS = 0.1
 LONG_SMOOTH_SECONDS = 0.3
+SMOOTH_SECONDS_STEP = 0.005
+
+def _model_smooth_seconds(params, key, default):
+  if not params.get_bool("DeveloperUI") or params.get_bool("SafeMode"):
+    return default
+  value = params.get_float(key, return_default=True, default=default)
+  return round(min(max(value, SMOOTH_SECONDS_STEP), 2.0) / SMOOTH_SECONDS_STEP) * SMOOTH_SECONDS_STEP
 MIN_LAT_CONTROL_SPEED = 0.3
 
 
@@ -108,12 +117,21 @@ def _resolve_mirrored_param(params: Params, primary_key: str, secondary_key: str
 
 def _canonical_model_id(model_id: str) -> str:
   key = (model_id or "").strip().lower()
-  return BUILTIN_MODEL_KEY if key in BUILTIN_MODEL_ALIASES else key
+  if key in BUILTIN_MODEL_ALIASES:
+    return BUILTIN_MODEL_KEY
+  return MODEL_ID_ALIASES.get(key, key)
+
+
+def _select_builtin_model(params: Params) -> None:
+  params.put("Model", BUILTIN_MODEL_KEY)
+  params.put("DrivingModel", BUILTIN_MODEL_KEY)
+  params.put("DrivingModelName", "Regret Driven Framework V4")
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
                           lat_action_t: float, long_action_t: float, v_ego: float, mlsim: bool,
-                          is_v9: bool, is_v14: bool, is_v15: bool, starpilot_toggles) -> log.ModelDataV2.Action:
+                          is_v9: bool, is_v14: bool, is_v15: bool, starpilot_toggles,
+                          lat_smooth_seconds=LAT_SMOOTH_SECONDS, long_smooth_seconds=LONG_SMOOTH_SECONDS) -> log.ModelDataV2.Action:
     if is_v14 or is_v15:
       desired_curv_unscaled, desired_accel = model_output['action'][0]
       if is_v15:
@@ -122,9 +140,9 @@ def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.
         desired_curvature = float(desired_curv_unscaled) / 100.0
       should_stop = (v_ego < 0.3 and desired_accel < 0.1)
 
-      desired_accel = smooth_value(float(desired_accel), prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
+      desired_accel = smooth_value(float(desired_accel), prev_action.desiredAcceleration, long_smooth_seconds)
       if v_ego > MIN_LAT_CONTROL_SPEED:
-        desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
+        desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, lat_smooth_seconds)
       else:
         desired_curvature = prev_action.desiredCurvature
 
@@ -143,7 +161,7 @@ def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.
                                                                  ModelConstants.T_IDXS,
                                                                  action_t=long_action_t,
                                                                  vEgoStopping=v_ego_stopping)
-    desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
+    desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, long_smooth_seconds)
 
     if is_v9:
       # V9: use desired_curvature if present; otherwise do NOT fall back to plan
@@ -154,7 +172,7 @@ def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.
     else:
       desired_curvature = get_curvature_from_output(model_output, plan, v_ego, lat_action_t, mlsim=mlsim)
     if v_ego > MIN_LAT_CONTROL_SPEED:
-      desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
+      desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, lat_smooth_seconds)
     else:
       desired_curvature = prev_action.desiredCurvature
 
@@ -170,6 +188,21 @@ class FrameMeta:
   def __init__(self, vipc=None):
     if vipc is not None:
       self.frame_id, self.timestamp_sof, self.timestamp_eof = vipc.frame_id, vipc.timestamp_sof, vipc.timestamp_eof
+
+
+def _load_model_artifact(path: Path):
+  """Load legacy pickle artifacts and the streaming OOB format used by large GPU models."""
+  with open_file_chunked(path) as artifact_file:
+    pickle_header = artifact_file.peek(2)[:2]
+    legacy_pickle = (
+      len(pickle_header) == 2 and pickle_header[0] == 0x80 and pickle_header[1] <= pickle.HIGHEST_PROTOCOL
+    )
+    if legacy_pickle:
+      return pickle.load(artifact_file)
+
+  with open_file_chunked(path) as artifact_file:
+    return load_oob(artifact_file)
+
 
 class ModelState:
   prev_desire: np.ndarray
@@ -190,9 +223,13 @@ class ModelState:
     )
     return numpy_inputs, prev_desired_curv_key
 
-  def __init__(self, cam_w: int, cam_h: int):
+  def __init__(self, cam_w: int, cam_h: int, external_gpu_active: bool = False):
     params = Params()
     model_id = _canonical_model_id(_resolve_mirrored_param(params, "Model", "DrivingModel") or BUILTIN_MODEL_KEY)
+    requires_external_gpu = model_uses_external_gpu(model_id)
+    if requires_external_gpu and not external_gpu_active:
+      cloudlog.error(f"Model {model_id} requires an external GPU; falling back to {BUILTIN_MODEL_KEY}")
+      model_id = BUILTIN_MODEL_KEY
     use_builtin = model_id == BUILTIN_MODEL_KEY
     loaded_builtin = use_builtin
     if use_builtin:
@@ -200,22 +237,25 @@ class ModelState:
     else:
       model_path = MODELS_PATH / f"{model_id}_driving_tinygrad.pkl"
 
-    if not model_path.is_file() and not use_builtin:
+    if not file_chunked_exists(model_path) and not use_builtin:
       cloudlog.error(f"Missing model artifact {model_path}, downloading {model_id}...")
       try:
         ModelManager(params, params_memory).download_model(model_id)
       except Exception:
         cloudlog.exception(f"Failed to download model {model_id}")
-    if not model_path.is_file() and not use_builtin:
+    if not file_chunked_exists(model_path) and not use_builtin:
       fallback_path = Path(__file__).parent / "models" / "driving_tinygrad.pkl"
-      if fallback_path.is_file():
+      if file_chunked_exists(fallback_path):
         cloudlog.error(f"Falling back to builtin model artifact after {model_id} download failed")
         model_path = fallback_path
         loaded_builtin = True
-    if not model_path.is_file():
+        requires_external_gpu = False
+    if not file_chunked_exists(model_path):
       raise FileNotFoundError(model_path)
 
-    artifact = pickle.loads(read_file_chunked(str(model_path)))
+    self.uses_external_gpu = external_gpu_active and requires_external_gpu and not loaded_builtin
+    artifact = (_load_model_artifact(model_path) if self.uses_external_gpu
+                else pickle.loads(read_file_chunked(str(model_path))))
     if artifact.get("format_version") != ARTIFACT_FORMAT_VERSION:
       raise ValueError(
         f"Unsupported model artifact format {artifact.get('format_version')!r}; "
@@ -270,9 +310,9 @@ class ModelState:
           model_version = str(json.loads(versions_path.read_text()).get(model_id) or "")
         except Exception:
           pass
-    if loaded_builtin and not use_builtin:
-      model_version = str(artifact.get("behavior_version") or "v11")
-    self.policy_generation = model_version or ("v11" if loaded_builtin else "v8")
+    if loaded_builtin:
+      model_version = str(artifact.get("behavior_version") or "v15")
+    self.policy_generation = model_version or ("v15" if loaded_builtin else "v8")
     self.is_v9 = self.policy_generation == "v9"
     self.is_v14 = self.policy_generation == "v14"
     self.is_v15 = self.policy_generation == "v15"
@@ -294,7 +334,7 @@ class ModelState:
   @property
   def QUEUE_DEV(self) -> str:
     if not hasattr(self, "_queue_dev"):
-      devices = get_tg_input_devices(PROCESS_NAME, usbgpu=False)
+      devices = get_tg_input_devices(PROCESS_NAME, usbgpu=self.uses_external_gpu)
       self._warp_dev = devices["WARP_DEV"]
       self._queue_dev = devices["QUEUE_DEV"]
     return self._queue_dev
@@ -386,6 +426,13 @@ class ModelState:
       )
     outputs = [output.numpy().flatten() for output in output_tensors]
 
+    # USB GPU failures can produce NaNs/Infs instead of raising. Never publish
+    # one of those frames; the next frame can recover without affecting the
+    # native GPU/CPU model paths.
+    if self.uses_external_gpu and any(not np.isfinite(output).all() for output in outputs):
+      cloudlog.error("external GPU produced non-finite model output, dropping frame")
+      return None
+
     if self.model_type == "supercombo":
       model_output = outputs[0]
       parsed = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
@@ -407,6 +454,24 @@ class ModelState:
     return parsed
 
 
+def _load_model_state(cam_w: int, cam_h: int, selected_model: str, external_gpu_requested: bool,
+                      params: Params) -> ModelState:
+  try:
+    return ModelState(cam_w, cam_h, external_gpu_requested)
+  except Exception:
+    if selected_model == BUILTIN_MODEL_KEY:
+      raise
+
+    cloudlog.exception(f"Failed to load model {selected_model}; falling back to {BUILTIN_MODEL_KEY}")
+    _select_builtin_model(params)
+    if external_gpu_requested:
+      from tinygrad.helpers import DEV
+      device_config = tinygrad_dev_config(False, TICI)
+      DEV.value = device_config
+      os.environ["DEV"] = device_config
+    return ModelState(cam_w, cam_h, False)
+
+
 def main(demo=False):
   cloudlog.warning("modeld init")
 
@@ -414,6 +479,23 @@ def main(demo=False):
   cloudlog.bind(daemon=PROCESS_NAME)
   setproctitle(PROCESS_NAME)
   config_realtime_process(7, 54)
+
+  params = Params()
+  selected_model = _canonical_model_id(_resolve_mirrored_param(params, "Model", "DrivingModel") or BUILTIN_MODEL_KEY)
+  usbgpu_present_now = usbgpu_present()
+  external_model_selected = model_uses_external_gpu(selected_model)
+  external_artifact = MODELS_PATH / f"{selected_model}_driving_tinygrad.pkl"
+  external_artifact_ready = external_model_selected and file_chunked_exists(external_artifact)
+  external_gpu_requested = usbgpu_present_now and external_model_selected
+  params.put_bool("UsbGpuPresent", usbgpu_present_now)
+  params.put_bool("UsbGpuCompiled", external_artifact_ready)
+  params.put_bool("UsbGpuActive", False)
+  params.put_bool("UsbGpuLoading", external_gpu_requested)
+  if external_gpu_requested:
+    from tinygrad.helpers import DEV
+    device_config = tinygrad_dev_config(True, TICI)
+    DEV.value = device_config
+    os.environ["DEV"] = device_config
 
   # visionipc clients
   while True:
@@ -440,7 +522,13 @@ def main(demo=False):
 
   start_time = time.monotonic()
   cloudlog.warning("loading model")
-  model = ModelState(vipc_client_main.width, vipc_client_main.height)
+  if external_gpu_requested:
+    wait_usbgpu_link()
+  model = _load_model_state(vipc_client_main.width, vipc_client_main.height, selected_model, external_gpu_requested, params)
+  external_gpu_active = model.uses_external_gpu
+  params.put_bool("UsbGpuCompiled", external_model_selected and file_chunked_exists(external_artifact))
+  params.put_bool("UsbGpuActive", external_gpu_active)
+  params.put_bool("UsbGpuLoading", False)
   cloudlog.warning(f"model loaded in {time.monotonic() - start_time:.1f}s, modeld starting")
 
   # messaging
@@ -448,7 +536,6 @@ def main(demo=False):
   sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay", "starpilotPlan"])
 
   publish_state = PublishState()
-  params = Params()
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / ModelConstants.MODEL_FREQ)
   frame_id = 0
@@ -471,9 +558,9 @@ def main(demo=False):
     CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
   cloudlog.info("modeld got CarParams: %s", CP.brand)
 
-  # TODO this needs more thought, use .2s extra for now to estimate other delays
-  # TODO Move smooth seconds to action function
-  long_delay = CP.longitudinalActuatorDelay + LONG_SMOOTH_SECONDS
+  lat_smooth_seconds = _model_smooth_seconds(params, "LatSmoothSeconds", LAT_SMOOTH_SECONDS)
+  long_smooth_seconds = _model_smooth_seconds(params, "LongSmoothSeconds", LONG_SMOOTH_SECONDS)
+  long_delay = CP.longitudinalActuatorDelay + long_smooth_seconds
   prev_action = log.ModelDataV2.Action()
 
   DH = DesireHelper()
@@ -514,11 +601,14 @@ def main(demo=False):
       meta_extra = meta_main
 
     sm.update(0)
+    lat_smooth_seconds = _model_smooth_seconds(params, "LatSmoothSeconds", LAT_SMOOTH_SECONDS)
+    long_smooth_seconds = _model_smooth_seconds(params, "LongSmoothSeconds", LONG_SMOOTH_SECONDS)
+    long_delay = CP.longitudinalActuatorDelay + long_smooth_seconds
     desire = DH.desire
     is_rhd = sm["driverMonitoringState"].isRHD
     frame_id = sm["roadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
-    lat_delay = sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    lat_delay = sm["liveDelay"].lateralDelay + lat_smooth_seconds
     lateral_control_params = np.array([v_ego, lat_delay], dtype=np.float32)
     if sm.frame % 60 == 0:
       camera_offset.set_target(params.get_float("CameraOffset", return_default=True))
@@ -607,6 +697,7 @@ def main(demo=False):
         lat_action_t,
         long_action_t,
         v_ego, model.mlsim, model.is_v9, model.is_v14, model.is_v15, starpilot_toggles,
+        lat_smooth_seconds, long_smooth_seconds,
       )
       prev_action = action
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,

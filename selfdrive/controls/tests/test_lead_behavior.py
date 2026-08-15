@@ -74,6 +74,11 @@ def test_disable_far_lead_throttle_keeps_mild_coast_near_target_gap():
   assert should_disable
 
 
+def test_disable_far_lead_throttle_waits_until_reduced_gap():
+  should_disable = should_disable_far_lead_throttle(31.4, 43.5, 38.0, 0.5, False)
+  assert should_disable
+
+
 def test_disable_far_lead_throttle_rejects_fast_closing():
   should_disable = should_disable_far_lead_throttle(31.4, 52.0, 38.0, 3.5, False)
   assert not should_disable
@@ -155,6 +160,20 @@ def test_should_hold_tracked_vision_lead_releases_beyond_exit_gap():
   assert not should_hold_tracked_vision_lead(
     True, 57.0, 174.0, 6.0, 16.8,
     model_prob=0.99, y_rel=0.0, radar=False,
+  )
+
+
+def test_should_hold_tracked_vision_lead_ignores_shortened_model_horizon_in_bolt_stutter_case():
+  assert should_hold_tracked_vision_lead(
+    True, 54.6, 40.0, 6.0, 19.4,
+    model_prob=1.0, y_rel=0.05, radar=False,
+  )
+
+
+def test_should_hold_tracked_vision_lead_does_not_extend_low_confidence_short_horizon_case():
+  assert not should_hold_tracked_vision_lead(
+    True, 54.6, 40.0, 6.0, 19.4,
+    model_prob=0.90, y_rel=0.05, radar=False,
   )
 
 

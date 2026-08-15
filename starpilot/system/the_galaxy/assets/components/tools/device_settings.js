@@ -8,12 +8,49 @@ const COLOR_UI_DEFAULTS = {
   PathColor: "#30ff9c",
 }
 const FAVORITE_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+const FAVORITE_ACTION_PREFIX = "__starpilot_favorite_action__:"
+const GALAXY_DEVELOPER_MODE_KEY = "GalaxyDeveloperMode"
+const HIDDEN_SECTION_NAMES = new Set(["Model & Customization"])
+const HIDDEN_SETTING_KEYS = new Set(["HumanAcceleration", "ReverseCruise"])
+const GM_MAKES = ["Buick", "Cadillac", "Chevrolet", "GMC", "Holden"]
+const HKG_MAKES = ["Genesis", "Hyundai", "Kia"]
+const VEHICLE_SETTING_MAKES = {
+  TeslaCoopSteering: ["Tesla"],
+  NAPRadarEnabled: ["Tesla"],
+  NAPRadarBehindNosecone: ["Tesla"],
+  NAPRadarOffset: ["Tesla"],
+  NAPPedalEnabled: ["Tesla"],
+  NAPPedalCanBus: ["Tesla"],
+  NAPAdaptiveAccel: ["Tesla"],
+  NAPPedalCalibDone: ["Tesla"],
+  NAPPedalCalibFactor: ["Tesla"],
+  NAPPedalCalibZero: ["Tesla"],
+  GMPedalLongitudinal: GM_MAKES,
+  GMDashSpoofOffsets: GM_MAKES,
+  IgnoreIgnitionLine: GM_MAKES,
+  LongPitch: GM_MAKES,
+  RemoteStartBootsComma: GM_MAKES,
+  HKGRemoteStartBootsComma: HKG_MAKES,
+  VoltSNG: ["Chevrolet", "Holden"],
+  GMAutoHold: ["Chevrolet", "Holden"],
+  VoltOnePedalMode: ["Chevrolet", "Holden"],
+  RemapCancelToDistance: ["Chevrolet", "Holden"],
+  JeepBrakeHold: ["Jeep"],
+  SubaruSNG: ["Subaru"],
+  SubaruSNGManualParkingBrake: ["Subaru"],
+  ClusterOffset: ["Lexus", "Toyota"],
+  SNGHack: ["Lexus", "Toyota"],
+  ToyotaAutoHold: ["Lexus", "Toyota"],
+}
+const RADAR_REQUIRED_KEYS = new Set(["HumanLaneChanges", "RadarTakeoffs"])
 
 // Plain variables — scheduling/routing flags that must NOT be reactive
 let syncScheduled = false
 let lastParams = null
 let flmWorkspaceInflight = null
 let lastFlmWorkspaceFetch = 0
+let favoritePollInflight = null
+let favoritePollTimer = null
 const DYNAMIC_DEFAULT_DEP_KEYS = new Set(["AccelerationProfile", "EVTuning", "TruckTuning"])
 const PANDA_FIRMWARE_TOGGLE_KEYS = new Set(["IgnoreIgnitionLine", "RemoteStartBootsComma", "HKGRemoteStartBootsComma"])
 const FLM_ADVANCED_LATERAL_KEYS = new Set([
@@ -36,6 +73,8 @@ const state = reactive({
   fetched: false,
   activeSectionSlug: "",
   numericUpdating: {},
+  sliderPreviewValues: {},
+  actionUpdating: {},
   favoriteLoading: false,
   favoriteSaving: false,
   favoriteOptions: [],
@@ -51,11 +90,36 @@ function slugifySectionName(name) {
     .replace(/^-+|-+$/g, "")
 }
 
+function normalizeVehicleMake(value) {
+  return String(value || "").trim().toLowerCase()
+}
+
+function isVehicleSettingVisible(section, param) {
+  if (section.name !== "Vehicle") return true
+  const allowedMakes = VEHICLE_SETTING_MAKES[param.key]
+  if (!allowedMakes) return true
+  const selectedMake = normalizeVehicleMake(state.values.CarMake)
+  return allowedMakes.some(make => normalizeVehicleMake(make) === selectedMake)
+}
+
+function isSettingVisible(section, param) {
+  // This policy controls Galaxy rendering only; hidden params retain their stored values.
+  if (HIDDEN_SETTING_KEYS.has(param.key) || !isVehicleSettingVisible(section, param)) return false
+  if (RADAR_REQUIRED_KEYS.has(param.key) && !state.values.HasRadar) return false
+  if (param.key === "AlphaLongitudinalEnabled" && !state.values.AlphaLongitudinalAvailable) return false
+  if (state.values[GALAXY_DEVELOPER_MODE_KEY]) return true
+  return section.name === "Favorites" || param.settings_tier === "simple"
+}
+
 function getSectionsWithSlug() {
-  return state.layout.map(section => ({
-    ...section,
-    slug: slugifySectionName(section.name),
-  }))
+  return state.layout
+    .filter(section => !HIDDEN_SECTION_NAMES.has(section.name))
+    .map(section => ({
+      ...section,
+      params: (section.params || []).filter(param => isSettingVisible(section, param)),
+      slug: slugifySectionName(section.name),
+    }))
+    .filter(section => section.params.length > 0)
 }
 
 function isGroupParam(param) {
@@ -208,6 +272,11 @@ function syncInputs() {
     el.value = resolveColorInputValue(param)
   }
 
+  for (const el of document.querySelectorAll("input.ds-text-input[id^='ds-']")) {
+    if (document.activeElement === el) continue
+    el.value = toSelectValue(state.values[el.id.slice(3)])
+  }
+
   // Sync selects — hydrate options + set value
   for (const el of document.querySelectorAll("select.ds-select[id^='ds-']")) {
     const key = el.id.slice(3)
@@ -314,7 +383,7 @@ async function fetchLayoutAndParams() {
   state.loadingValues = true
 
   try {
-    const layoutRes = await fetch("/assets/components/tools/device_settings_layout.json?v=favorite-slots-5", { cache: "no-store" })
+    const layoutRes = await fetch("/assets/components/tools/device_settings_layout.json?v=settings-tier-1", { cache: "no-store" })
     const rawLayoutData = await layoutRes.json()
 
     const layoutData = rawLayoutData
@@ -374,6 +443,10 @@ function formatSliderValue(val, stepStr, precisionInt, key) {
   if (key === "SwitchbackModeCooldown") {
     if (v === 0) return "Off"
     return v === 1 ? "1 min" : `${v} min`
+  }
+
+  if (key === "DeviceShutdown") {
+    return v === 1 ? "1 hour" : `${v} hours`
   }
 
   const volumeKeys = [
@@ -507,6 +580,14 @@ function favoriteOptionMatchesFilter(option, filter) {
     .some(value => String(value || "").toLowerCase().includes(q))
 }
 
+function isFavoriteActionKey(key) {
+  return String(key || "").startsWith(FAVORITE_ACTION_PREFIX)
+}
+
+function isFavoriteActionOption(option) {
+  return isFavoriteActionKey(option?.key) || !!option?.action
+}
+
 function filteredFavoriteOptions(index) {
   const filter = state.favoriteFilters[index] || ""
   return normalizeFavoriteOptions(state.favoriteOptions).filter(opt => favoriteOptionMatchesFilter(opt, filter))
@@ -530,7 +611,7 @@ function populateFavoriteSelect(index, selectEl = null) {
 async function fetchFavoriteSlots() {
   state.favoriteLoading = true
   try {
-    const res = await fetch("/api/favorites/slots")
+    const res = await fetch("/api/favorites/slots", { cache: "no-store" })
     const data = await res.json()
     if (res.ok) {
       state.favoriteOptions = normalizeFavoriteOptions(data.options)
@@ -542,6 +623,45 @@ async function fetchFavoriteSlots() {
     console.error("Failed to fetch favorite slots:", e)
   }
   state.favoriteLoading = false
+}
+
+async function refreshFavoriteValues() {
+  if (favoritePollInflight || state.favoriteSaving || state.favoriteLoading) return favoritePollInflight
+
+  favoritePollInflight = fetch("/api/favorites/values", { cache: "no-store" })
+    .then(async res => {
+      if (!res.ok) return
+
+      const data = await res.json()
+      const values = (data.values && typeof data.values === "object") ? data.values : {}
+      const changed = Object.entries(values).some(([key, value]) => state.values[key] !== value)
+      if (!changed) return
+
+      state.favoriteValues = { ...state.favoriteValues, ...values }
+      state.values = { ...state.values, ...values }
+      scheduleSyncInputs()
+    })
+    .catch(() => {})
+    .finally(() => {
+      favoritePollInflight = null
+    })
+
+  return favoritePollInflight
+}
+
+function ensureFavoriteValuePolling() {
+  if (favoritePollTimer !== null) return
+
+  favoritePollTimer = setInterval(() => {
+    if (!window.location.pathname.startsWith("/device_settings")) {
+      clearInterval(favoritePollTimer)
+      favoritePollTimer = null
+      return
+    }
+    if (document.visibilityState === "visible") {
+      refreshFavoriteValues()
+    }
+  }, 1000)
 }
 
 async function saveFavoriteSlots(slots) {
@@ -640,6 +760,25 @@ async function updateFavoriteValue(key, checked, sourceEl = null) {
   }
 }
 
+async function activateFavoriteAction(key) {
+  try {
+    const res = await fetch("/api/favorites/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    })
+    const data = await res.json()
+
+    if (res.ok) {
+      showParamSnackbar(data.message || "Favorite action sent.")
+    } else {
+      showParamSnackbar(data.error || "Failed to send favorite action", "error")
+    }
+  } catch (e) {
+    showParamSnackbar("Network error — is the device reachable?", "error")
+  }
+}
+
 function stepPrecision(step, explicitPrecision) {
   if (explicitPrecision !== undefined && explicitPrecision !== null && explicitPrecision !== "") {
     const parsed = Number.parseInt(explicitPrecision, 10)
@@ -712,6 +851,16 @@ function getParamDisplayLabel(key) {
   return state.paramMetaByKey[key]?.label || key
 }
 
+function getSliderDescription(param, value) {
+  const steps = Array.isArray(param.description_steps) ? param.description_steps : []
+  if (!steps.length) return param.description || ""
+
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return param.description || ""
+  const selected = steps.find(step => numericValue <= Number(step.max)) || steps[steps.length - 1]
+  return selected.description || param.description || ""
+}
+
 function confirmPandaFirmwareToggle(key, enabled) {
   if (!PANDA_FIRMWARE_TOGGLE_KEYS.has(key)) return true
 
@@ -742,7 +891,12 @@ function syncNumericDisplay(param, rawValue) {
 
 async function updateNumericParam(param, numericValue, options = {}) {
   const key = param.key
-  const current = state.values[key]
+  const current = options.previousValue !== undefined ? options.previousValue : state.values[key]
+  if (Object.prototype.hasOwnProperty.call(state.sliderPreviewValues, key)) {
+    const nextPreviewValues = { ...state.sliderPreviewValues }
+    delete nextPreviewValues[key]
+    state.sliderPreviewValues = nextPreviewValues
+  }
   const successMessage = options.successMessage
   state.numericUpdating = { ...state.numericUpdating, [key]: true }
   state.values = { ...state.values, [key]: numericValue }
@@ -775,6 +929,40 @@ async function updateNumericParam(param, numericValue, options = {}) {
     syncNumericDisplay(param, current)
     showParamSnackbar("Network error — is the device reachable?", "error")
   }
+}
+
+function previewSliderParam(param, rawValue) {
+  if (isNumericUpdating(param.key)) return
+
+  const bounds = numericBounds(param)
+  const precision = stepPrecision(bounds.step, param.precision)
+  const snapped = snapNumericToBoundsAndStep(rawValue, bounds, precision)
+  if (snapped === null) return
+
+  state.sliderPreviewValues = { ...state.sliderPreviewValues, [param.key]: snapped }
+  syncNumericDisplay(param, snapped)
+}
+
+function commitSliderParam(param, rawValue) {
+  if (isNumericUpdating(param.key)) return
+
+  const bounds = numericBounds(param)
+  const precision = stepPrecision(bounds.step, param.precision)
+  const next = snapNumericToBoundsAndStep(rawValue, bounds, precision)
+  if (next === null) return
+
+  const current = resolveCurrentNumericValue(param, bounds)
+  const previewValues = { ...state.sliderPreviewValues }
+  delete previewValues[param.key]
+  state.sliderPreviewValues = previewValues
+
+  const epsilon = Math.pow(10, -(precision + 2))
+  if (Math.abs(next - current) <= epsilon) {
+    syncNumericDisplay(param, current)
+    return
+  }
+
+  updateNumericParam(param, next, { previousValue: current })
 }
 
 function stepNumericParam(param, direction) {
@@ -860,6 +1048,35 @@ async function resetNumericParam(param) {
   })
 }
 
+async function runSettingAction(param) {
+  const key = String(param?.key || "")
+  const endpoint = String(param?.action_endpoint || "")
+  if (!key || !endpoint || state.actionUpdating[key]) return
+
+  const confirmation = String(param?.confirm_message || `Run ${param?.label || key}?`)
+  if (!window.confirm(confirmation)) return
+
+  state.actionUpdating = { ...state.actionUpdating, [key]: true }
+  try {
+    const response = await fetch(endpoint, { method: "POST" })
+    const payload = await response.json()
+    if (!response.ok) {
+      throw new Error(payload.error || response.statusText || "Action failed")
+    }
+
+    const updated = payload.updated && typeof payload.updated === "object" ? payload.updated : {}
+    state.values = { ...state.values, ...updated }
+    showParamSnackbar(payload.message || `${param?.label || key} completed.`)
+    scheduleSyncInputs()
+  } catch (error) {
+    showParamSnackbar(error?.message || `${param?.label || key} failed.`, "error")
+  } finally {
+    const next = { ...state.actionUpdating }
+    delete next[key]
+    state.actionUpdating = next
+  }
+}
+
 async function updateParam(key, elType) {
   if (String(key).toLowerCase() === "starpilotfavoriteslots") {
     await saveFavoriteSlots(state.favoriteSlots)
@@ -886,6 +1103,11 @@ async function updateParam(key, elType) {
   }
 
   if (elType === "checkbox" && !confirmPandaFirmwareToggle(key, formattedVal)) {
+    revertInput(key, current, elType)
+    return
+  }
+
+  if (elType === "checkbox" && formattedVal && param.confirm_message && !window.confirm(param.confirm_message)) {
     revertInput(key, current, elType)
     return
   }
@@ -1020,8 +1242,20 @@ function clearSearchFilter() {
 const cancelButtonKeys = new Set(["CancelButtonControl", "LongCancelButtonControl", "VeryLongCancelButtonControl"])
 
 function getSettingLockReason(param) {
+  if (param?.requires_offroad && state.values.IsOnroad) {
+    return "This setting can only be changed while parked."
+  }
+  if (param?.requires_parked && !state.values.VehicleParked) {
+    return "This setting can only be changed while the vehicle is in Park."
+  }
   if (param?.disabled_when_key_true && state.values[param.disabled_when_key_true]) {
     return param.disabled_reason || "Disabled by another setting."
+  }
+  if (param?.requires_nonempty_key) {
+    const val = state.values[param.requires_nonempty_key]
+    if (!val || val === "{}" || val === "") {
+      return param.disabled_reason || "Required configuration missing."
+    }
   }
   return ""
 }
@@ -1121,15 +1355,31 @@ function renderFavoriteSlotsPanel() {
             const selectedOption = favorite.selectedOption
             const selectedKey = favorite.selectedKey
             const selectedValue = favorite.selectedValue
+            const isAction = isFavoriteActionOption(selectedOption)
+            const quickCopy = html`
+              <div class="ds-favorite-quick-copy">
+                <span class="ds-favorite-quick-slot">Favorite #${favorite.index + 1}</span>
+                <span class="ds-favorite-quick-title">${selectedOption.label || favorite.slot.label || selectedKey}</span>
+                ${selectedOption.section ? html`<span class="ds-favorite-quick-section">${selectedOption.section}</span>` : ""}
+                ${selectedOption.description ? html`<span class="ds-favorite-quick-desc">${selectedOption.description}</span>` : ""}
+              </div>
+            `
+
+            if (isAction) {
+              return html`
+                <button
+                  type="button"
+                  class="ds-favorite-quick-card ds-favorite-action-card"
+                  @click="${() => activateFavoriteAction(selectedKey)}">
+                  ${quickCopy}
+                  <span class="ds-favorite-action-chip">Press</span>
+                </button>
+              `
+            }
 
             return html`
               <label class="ds-favorite-quick-card">
-                <div class="ds-favorite-quick-copy">
-                  <span class="ds-favorite-quick-slot">Favorite #${favorite.index + 1}</span>
-                  <span class="ds-favorite-quick-title">${selectedOption.label || favorite.slot.label || selectedKey}</span>
-                  ${selectedOption.section ? html`<span class="ds-favorite-quick-section">${selectedOption.section}</span>` : ""}
-                  ${selectedOption.description ? html`<span class="ds-favorite-quick-desc">${selectedOption.description}</span>` : ""}
-                </div>
+                ${quickCopy}
                 <input
                   type="checkbox"
                   class="ds-toggle ds-favorite-quick-toggle"
@@ -1197,7 +1447,7 @@ function renderFavoriteSlotsPanel() {
               </label>
 
               <label class="ds-favorite-switch">
-                <span>Show On-Road Button</span>
+                <span>On-Road Button (C4: tap invisible third)</span>
                 <input
                   type="checkbox"
                   class="ds-toggle"
@@ -1229,7 +1479,10 @@ function renderSettingRow(p) {
   }
 
   const isNumeric = p.ui_type === "numeric"
+  const isSlider = isNumeric && p.control === "slider"
+  const isText = p.ui_type === "text"
   const isColor = p.ui_type === "color"
+  const isAction = p.ui_type === "action"
   const isGroup = isGroupParam(p)
   const isChild = p.parent_key ? "ds-child-modifier" : ""
   const lockReason = () => getSettingLockReason(p)
@@ -1238,7 +1491,51 @@ function renderSettingRow(p) {
   const flmTrialSummary = p.key === "AdvancedLateralTune" ? getFlmTrialSummary() : null
   let rowControl = ""
 
-  if (isNumeric) {
+  if (isAction) {
+    rowControl = html`
+      <button
+        class="ds-reset-btn"
+        disabled="${() => isLocked() || !!state.actionUpdating[p.key]}"
+        @click="${() => runSettingAction(p)}">
+        ${() => state.actionUpdating[p.key] ? "Resetting..." : (p.action_label || "Run")}
+      </button>
+    `
+  } else if (isSlider) {
+    rowControl = html`
+      <div class="ds-slider-container">
+        <input
+          type="range"
+          class="ds-slider"
+          min="${numericBounds(p).min}"
+          max="${numericBounds(p).max}"
+          step="${numericBounds(p).step}"
+          aria-label="${p.label}"
+          disabled="${() => isLocked() || isNumericUpdating(p.key)}"
+          value="${() => {
+            const bounds = numericBounds(p)
+            const preview = state.sliderPreviewValues[p.key]
+            return formatNumericForInput(preview ?? resolveCurrentNumericValue(p, bounds), stepPrecision(bounds.step, p.precision))
+          }}"
+          @input="${(event) => previewSliderParam(p, event.currentTarget.value)}"
+          @change="${(event) => commitSliderParam(p, event.currentTarget.value)}" />
+        <div class="ds-slider-scale">
+          <span>${formatSliderValue(numericBounds(p).min, String(numericBounds(p).step), p.precision, p.key)}</span>
+          <span>${formatSliderValue(numericBounds(p).max, String(numericBounds(p).step), p.precision, p.key)}</span>
+        </div>
+        <button
+          class="ds-reset-btn"
+          disabled="${() => {
+            const bounds = numericBounds(p)
+            const defaultValue = resolveDefaultNumericValue(p, bounds)
+            const currentValue = resolveCurrentNumericValue(p, bounds)
+            const precision = stepPrecision(bounds.step, p.precision)
+            const epsilon = Math.pow(10, -(precision + 2))
+            return isLocked() || isNumericUpdating(p.key) || defaultValue === null || Math.abs(defaultValue - currentValue) <= epsilon
+          }}"
+          @click="${() => resetNumericParam(p)}">Reset to Default</button>
+      </div>
+    `
+  } else if (isNumeric) {
     rowControl = html`
       <div class="ds-stepper-container">
         ${(() => {
@@ -1254,7 +1551,7 @@ function renderSettingRow(p) {
         ? formatSliderValue(defaultNumeric, String(bounds.step), p.precision, p.key)
         : "N/A"
       const canReset = !updating && defaultNumeric !== null && Math.abs(defaultNumeric - currentNumeric) > epsilon
-      const stepLabel = formatStepValue(bounds.step, precision)
+      const stepLabel = p.key === "DeviceShutdown" ? "1 hour" : formatStepValue(bounds.step, precision)
       return html`
             <div class="ds-stepper">
               <button
@@ -1309,6 +1606,17 @@ function renderSettingRow(p) {
         <option value="">Loading...</option>
       </select>
     `
+  } else if (isText) {
+    rowControl = html`
+      <input
+        type="${p.input_type || "text"}"
+        class="ds-manual-input ds-text-input"
+        id="ds-${p.key}"
+        value="${() => toSelectValue(state.values[p.key])}"
+        placeholder="${p.placeholder || ""}"
+        disabled="${() => isLocked()}"
+        @change="${() => updateParam(p.key, "text")}" />
+    `
   } else if (p.ui_type === "color") {
     rowControl = html`
       <div style="display:flex; align-items:center; gap:0.75rem;">
@@ -1347,20 +1655,23 @@ function renderSettingRow(p) {
           type="checkbox"
           class="ds-toggle"
           id="ds-${p.key}"
+          disabled="${() => isLocked()}"
           @change="${() => updateParam(p.key, "checkbox")}" />
       `
     }
   }
 
   return html`
-    <div class="ds-row ${isNumeric ? "ds-row-numeric" : ""} ${isChild}">
+    <div class="ds-row ${isNumeric ? "ds-row-numeric" : ""} ${isText ? "ds-row-text-input" : ""} ${isChild}">
       <div class="ds-row-info">
         <div class="ds-row-text">
           <div class="ds-row-heading">
             <span class="ds-row-label">${p.label}</span>
             ${flmParamStatus ? html`<span class="ds-flm-badge">Currently overridden by FLM</span>` : ""}
           </div>
-          ${p.description ? html`<div class="ds-row-desc">${p.description}</div>` : ""}
+          ${p.description_steps
+            ? html`<div class="ds-row-desc">${() => getSliderDescription(p, state.sliderPreviewValues[p.key] ?? state.values[p.key])}</div>`
+            : (p.description ? html`<div class="ds-row-desc">${p.description}</div>` : "")}
           ${() => {
             const reason = lockReason()
             return reason ? html`<div class="ds-row-desc"><strong>Locked:</strong> ${reason}</div>` : ""
@@ -1394,7 +1705,7 @@ function renderSettingRow(p) {
         </div>
         ${(isNumeric || isColor) ? html`<span class="ds-row-value" id="ds-display-${p.key}">${() => {
             if (isColor) return formatColorDisplayValue(p)
-            const currentValue = state.values[p.key]
+            const currentValue = state.sliderPreviewValues[p.key] ?? state.values[p.key]
             const bounds = numericBounds(p)
             return currentValue !== undefined ? formatSliderValue(currentValue, String(bounds.step), p.precision, p.key) : ".."
           }}</span>` : ""}
@@ -1447,6 +1758,7 @@ export function DeviceSettings({ params }) {
   lastParams = params
 
   fetchFlmWorkspace()
+  ensureFavoriteValuePolling()
 
   if (!state.fetched) {
     state.fetched = true

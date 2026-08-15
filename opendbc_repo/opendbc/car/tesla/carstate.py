@@ -4,13 +4,21 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_DISENGAGE_THRESHOLD, STEER_THRESHOLD, TeslaSafetyFlags, CAR
 from opendbc.car.tesla.preap.carstate import get_preap_can_parsers, update_preap
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 
 ButtonType = structs.CarState.ButtonEvent.Type
+
+TESLA_GAS_PRESS_ON = 0.8
+TESLA_GAS_PRESS_OFF = 0.4
+
+
+def update_tesla_gas_pressed(previous: bool, pedal_position: float) -> bool:
+  threshold = TESLA_GAS_PRESS_OFF if previous else TESLA_GAS_PRESS_ON
+  return float(pedal_position) > threshold
 
 
 class CarState(CarStateBase):
@@ -28,8 +36,12 @@ class CarState(CarStateBase):
     self.das_control = None
     self.cruise_buttons = 0
     self.prev_cruise_buttons = 0
+    self.gas_pressed = False
     self.msg_stw_actn_req = None
     self.speed_units = "MPH"
+    self.cooperative_steering = any(
+      config.safetyParam & TeslaSafetyFlags.COOP_STEERING.value for config in CP.safetyConfigs
+    )
 
     if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
       self.engagement = PreAPEngagement(nap_conf.double_pull_enabled, nap_conf.double_pull_window_ms)
@@ -73,7 +85,11 @@ class CarState(CarStateBase):
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
 
     # Gas pedal
-    ret.gasPressed = cp_party.vl["DI_systemStatus"]["DI_accelPedalPos"] > 0
+    self.gas_pressed = update_tesla_gas_pressed(
+      self.gas_pressed,
+      cp_party.vl["DI_systemStatus"]["DI_accelPedalPos"],
+    )
+    ret.gasPressed = self.gas_pressed
 
     # Brake pedal
     ret.brake = 0
@@ -95,8 +111,11 @@ class CarState(CarStateBase):
 
     # FSD disengages using union of handsOnLevel (slow overrides) and high angle rate faults (fast overrides, high speed)
     eac_error_code = self.can_define.dv["EPAS3S_sysStatus"]["EPAS3S_eacErrorCode"].get(int(epas_status["EPAS3S_eacErrorCode"]), None)
-    ret.steeringDisengage = self.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
-                                                         eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
+    ret.steeringDisengage = (
+      self.hands_on_level >= 3 or
+      (eac_status == "EAC_INHIBITED" and eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY") or
+      (self.cooperative_steering and abs(ret.steeringTorque) > STEER_DISENGAGE_THRESHOLD)
+    )
 
     # Cruise state
     cruise_state = self.can_define.dv["DI_state"]["DI_cruiseState"].get(int(cp_party.vl["DI_state"]["DI_cruiseState"]), None)

@@ -24,6 +24,8 @@ const MENU_ITEMS = {
     { name: "Plots", link: "/plots", icon: "bi-graph-up-arrow" },
     { name: "Testing Ground", link: "/testing_ground", icon: "bi-bezier2" },
     { name: "Troubleshoot", link: "/troubleshoot", icon: "bi-tools" },
+    { name: "V-Adj Spot Monitor", link: "/manage_v_asm", icon: "bi-eye" },
+    { name: "PiP Side Camera", link: "/manage_pip_sidecam", icon: "bi-badge-hd", developerOnly: true },
     { name: "Theme Maker", link: "/theme_maker", icon: "bi-palette-fill" },
     { name: "Tmux Log", link: "/manage_tmux", icon: "bi-terminal" },
     { name: "Backup and Restore", link: "/manage_toggles", icon: "bi-arrow-repeat" },
@@ -32,13 +34,15 @@ const MENU_ITEMS = {
   ],
 };
 
+let galaxyDeveloperMode = false;
+
 function matchesPath(currentPath, link) {
   if (link === "/") return currentPath === "/";
   return currentPath === link || currentPath.startsWith(`${link}/`);
 }
 
 function buildSectionMarkup(section, links, currentPath) {
-  const linksMarkup = links.map((link) => {
+  const linksMarkup = links.filter((link) => !link.developerOnly || galaxyDeveloperMode).map((link) => {
     const active = matchesPath(currentPath, link.link) ? "active" : "";
     return `
       <li class="${active}">
@@ -62,6 +66,21 @@ function buildSectionMarkup(section, links, currentPath) {
       </ul>
     </div>
   `;
+}
+
+async function refreshGalaxyDeveloperMode() {
+  try {
+    const response = await fetch("/api/params/all", { cache: "no-store" });
+    if (!response.ok) return;
+    const values = await response.json();
+    const next = Boolean(values?.GalaxyDeveloperMode);
+    if (next !== galaxyDeveloperMode) {
+      galaxyDeveloperMode = next;
+      renderSidebarIntoShell();
+    }
+  } catch (error) {
+    console.warn("Unable to determine Galaxy Developer Mode:", error);
+  }
 }
 
 function bindSidebarHandlers() {
@@ -134,6 +153,9 @@ function renderSidebarIntoShell(currentPath) {
 }
 
 export function Sidebar(currentPath) {
-  setTimeout(() => renderSidebarIntoShell(currentPath), 0);
+  setTimeout(() => {
+    renderSidebarIntoShell(currentPath);
+    refreshGalaxyDeveloperMode();
+  }, 0);
   return html`<div id="sidebar_shell"></div>`;
 }

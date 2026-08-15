@@ -30,13 +30,25 @@ FPS_CRITICAL_THRESHOLD = 0.5  # Critical threshold for triggering strict actions
 MOUSE_THREAD_RATE = 140  # touch controller runs at 140Hz
 DESKTOP_MOUSE_THREAD_RATE = int(os.getenv("DESKTOP_MOUSE_RATE", "500"))
 DESKTOP_CLICK_DEBOUNCE = float(os.getenv("DESKTOP_CLICK_DEBOUNCE", "0.2"))
+UI_IDLE_FPS = int(os.getenv("UI_IDLE_FPS", "0"))
+UI_INTERACTION_FPS_DURATION = 1.25
 MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
 
 BIG_UI = os.getenv("BIG", "0") == "1"
 MACOS = platform.system() == "Darwin"
 ENABLE_VSYNC = os.getenv("ENABLE_VSYNC", "0") == "1"
-MICI_FORCE_RENDER_TEXTURE = os.getenv("MICI_FORCE_RENDER_TEXTURE", "1" if DEVICE_TYPE == "mici" else "0") == "1"
+MICI_FORCE_RENDER_TEXTURE = os.getenv("MICI_FORCE_RENDER_TEXTURE", "0") == "1"
+BURN_IN_PREVENTION = os.getenv("BURN_IN_PREVENTION", "0" if PC else "1") == "1"
+BURN_IN_SHIFT_INTERVAL = max(1.0, float(os.getenv("BURN_IN_SHIFT_INTERVAL", "180")))
+BURN_IN_SHIFT_PIXELS = max(0, int(os.getenv("BURN_IN_SHIFT_PIXELS", "2")))
+BURN_IN_SHIFT_TRANSITION_SECONDS = min(
+  BURN_IN_SHIFT_INTERVAL,
+  max(0.1, float(os.getenv("BURN_IN_SHIFT_TRANSITION_SECONDS", "1"))),
+)
+WHITE_LUMINANCE_CAP = min(1.0, max(0.0, float(os.getenv(
+  "WHITE_LUMINANCE_CAP", "1.0"
+))))
 SHOW_FPS = os.getenv("SHOW_FPS") == "1"
 SHOW_TOUCHES = os.getenv("SHOW_TOUCHES") == "1"
 STRICT_MODE = os.getenv("STRICT_MODE") == "1"
@@ -51,6 +63,10 @@ RECORD_BITRATE = os.getenv("RECORD_BITRATE", "")  # Target bitrate e.g. "2000k" 
 RECORD_SPEED = int(os.getenv("RECORD_SPEED", "1"))  # Speed multiplier
 OFFSCREEN = os.getenv("OFFSCREEN") == "1"  # Disable FPS limiting for fast offline rendering
 
+
+def _raylib_target_fps(fps: int) -> int:
+  return 0 if OFFSCREEN else fps
+
 GL_VERSION = """
 #version 300 es
 precision highp float;
@@ -61,6 +77,17 @@ if platform.system() == "Darwin":
   """
 
 BURN_IN_MODE = "BURN_IN" in os.environ
+BURN_IN_SHIFT_PATTERN = (
+  (0, 0),
+  (-1, 0),
+  (-1, -1),
+  (0, -1),
+  (1, -1),
+  (1, 0),
+  (1, 1),
+  (0, 1),
+  (-1, 1),
+)
 BURN_IN_VERTEX_SHADER = GL_VERSION + """
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
@@ -85,6 +112,29 @@ void main() {
   vec3 gradient = mix(start, middle, clamp(intensity * 2.0, 0.0, 1.0));
   gradient = mix(gradient, end, clamp((intensity - 0.5) * 2.0, 0.0, 1.0));
   fragColor = vec4(gradient, sampled.a);
+}
+"""
+WHITE_LUMINANCE_FRAGMENT_SHADER = GL_VERSION + """
+in vec2 fragTexCoord;
+uniform sampler2D texture0;
+uniform float whiteLuminanceCap;
+out vec4 fragColor;
+void main() {
+  vec4 sampled = texture(texture0, fragTexCoord);
+  float luminance = dot(sampled.rgb, vec3(0.2126, 0.7152, 0.0722));
+  float chroma = max(max(sampled.r, sampled.g), sampled.b) - min(min(sampled.r, sampled.g), sampled.b);
+
+  // Gently compress only near-white, low-saturation pixels. Saturated alert colors
+  // and the vast majority of camera pixels pass through unchanged.
+  float knee = max(0.0, whiteLuminanceCap - 0.05);
+  if (luminance > knee) {
+    float kneeRange = max(0.0001, 1.0 - knee);
+    float targetLuminance = knee + (whiteLuminanceCap - knee) * ((luminance - knee) / kneeRange);
+    float neutralAmount = 1.0 - smoothstep(0.08, 0.25, chroma);
+    sampled.rgb *= mix(1.0, targetLuminance / max(luminance, 0.0001), neutralAmount);
+  }
+
+  fragColor = sampled;
 }
 """
 
@@ -451,14 +501,23 @@ class GuiApplication:
 
     self._render_texture: rl.RenderTexture | None = None
     self._burn_in_shader: rl.Shader | None = None
+    self._white_luminance_shader: rl.Shader | None = None
     self._ffmpeg_proc: subprocess.Popen | None = None
     self._ffmpeg_queue: queue.Queue | None = None
     self._ffmpeg_thread: threading.Thread | None = None
     self._ffmpeg_stop_event: threading.Event | None = None
     self._progress_hook: Callable[[str], None] | None = None
     self._textures: dict[str, rl.Texture] = {}
+    self._cached_render_textures: dict[str, rl.RenderTexture] = {}
+    self._pending_render_textures: dict[str, tuple[int, int, Callable[[], None]]] = {}
     self._target_fps: int = _DEFAULT_FPS
+    self._full_target_fps: int = _DEFAULT_FPS
+    self._idle_target_fps: int = max(10, _DEFAULT_FPS // 4)
+    self._adaptive_rendering = False
+    self._full_rate_rendering = False
+    self._high_fps_until = 0.0
     self._last_fps_log_time: float = time.monotonic()
+    self._burn_in_start_time = time.monotonic()
     self._frame = 0
     self._window_close_requested = False
     self._nav_stack: list[object] = []
@@ -498,6 +557,50 @@ class GuiApplication:
   def target_fps(self):
     return self._target_fps
 
+  def _set_target_fps(self, fps: int) -> None:
+    fps = max(1, int(fps))
+    if fps == self._target_fps:
+      return
+    rl.set_target_fps(_raylib_target_fps(fps))
+    self._target_fps = fps
+
+  def configure_adaptive_rendering(self, enabled: bool, idle_fps: int | None = None) -> None:
+    """Enable low-rate rendering for static BIG-UI offroad screens.
+
+    The normal target remains unchanged unless a caller opts in. This keeps
+    MICI and all existing non-BIG layouts on their current scheduling path.
+    """
+    # Recording feeds raw frames to ffmpeg at the fixed full FPS, so changing
+    # the producer rate would make idle portions play back too quickly.
+    self._adaptive_rendering = bool(enabled and not OFFSCREEN and not RECORD)
+    if idle_fps is None or idle_fps <= 0:
+      idle_fps = UI_IDLE_FPS if UI_IDLE_FPS > 0 else max(10, self._full_target_fps // 4)
+    self._idle_target_fps = min(self._full_target_fps, max(1, int(idle_fps)))
+    self._full_rate_rendering = False
+    self._high_fps_until = time.monotonic() + UI_INTERACTION_FPS_DURATION if self._adaptive_rendering else 0.0
+    if self._adaptive_rendering:
+      self._apply_render_mode()
+    else:
+      self._set_target_fps(self._full_target_fps)
+
+  def request_high_fps(self, duration: float = UI_INTERACTION_FPS_DURATION) -> None:
+    if not self._adaptive_rendering:
+      return
+    self._high_fps_until = max(self._high_fps_until, time.monotonic() + max(0.0, duration))
+    self._apply_render_mode()
+
+  def set_render_mode(self, active: bool) -> None:
+    if not self._adaptive_rendering:
+      return
+    self._full_rate_rendering = active
+    self._apply_render_mode()
+
+  def _apply_render_mode(self) -> None:
+    if not self._adaptive_rendering:
+      return
+    high_rate = self._full_rate_rendering or time.monotonic() < self._high_fps_until
+    self._set_target_fps(self._full_target_fps if high_rate else self._idle_target_fps)
+
   def request_close(self):
     self._window_close_requested = True
 
@@ -521,7 +624,12 @@ class GuiApplication:
       self._render_texture_width = max(1, int(round(self._scaled_width * self._pixel_scale_x)))
       self._render_texture_height = max(1, int(round(self._scaled_height * self._pixel_scale_y)))
 
-      needs_render_texture = (self._scale != 1.0 and not PC) or BURN_IN_MODE or RECORD or MICI_FORCE_RENDER_TEXTURE
+      # Keep raybig burn-in movement in final-frame composition. Translating the live EGL
+      # camera/widget pass can corrupt the camera presentation instead of shifting the UI.
+      needs_render_texture = ((self._scale != 1.0 and not PC) or BURN_IN_MODE or RECORD or
+                              MICI_FORCE_RENDER_TEXTURE or
+                              (BURN_IN_PREVENTION and DEVICE_TYPE != "mici") or
+                              WHITE_LUMINANCE_CAP < 1.0)
       if PC and self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
       if PC:
@@ -563,9 +671,9 @@ class GuiApplication:
         self._ffmpeg_thread = threading.Thread(target=self._ffmpeg_writer_thread, daemon=True)
         self._ffmpeg_thread.start()
 
-      # OFFSCREEN disables FPS limiting for fast offline rendering (e.g. clips)
-      rl.set_target_fps(0 if OFFSCREEN else fps)
+      rl.set_target_fps(_raylib_target_fps(fps))
 
+      self._full_target_fps = fps
       self._target_fps = fps
       self._set_styles()
       self._load_fonts()
@@ -573,6 +681,12 @@ class GuiApplication:
       self._patch_scissor_mode()
       if BURN_IN_MODE and self._burn_in_shader is None:
         self._burn_in_shader = rl.load_shader_from_memory(BURN_IN_VERTEX_SHADER, BURN_IN_FRAGMENT_SHADER)
+      if WHITE_LUMINANCE_CAP < 1.0 and self._white_luminance_shader is None:
+        self._white_luminance_shader = rl.load_shader_from_memory(BURN_IN_VERTEX_SHADER, WHITE_LUMINANCE_FRAGMENT_SHADER)
+        cap_location = rl.get_shader_location(self._white_luminance_shader, "whiteLuminanceCap")
+        cap_value = rl.ffi.new("float[]", [WHITE_LUMINANCE_CAP])
+        rl.set_shader_value(self._white_luminance_shader, cap_location, cap_value,
+                            rl.ShaderUniformDataType.SHADER_UNIFORM_FLOAT)
 
       if not PC:
         self._mouse.start()
@@ -634,6 +748,7 @@ class GuiApplication:
       prev_widget.set_enabled(False)
 
     self._nav_stack.append(widget)
+    self.request_high_fps()
     widget.show_event()
     widget.set_enabled(True)
 
@@ -655,6 +770,7 @@ class GuiApplication:
 
     widget = self._nav_stack.pop(idx_to_pop)
     widget.hide_event()
+    self.request_high_fps()
 
   def pop_widgets_to(self, widget: object, callback: Callable[[], None] | None = None, instant: bool = False):
     # Pops middle widgets instantly without animation then dismisses top, animated out if NavWidget
@@ -701,8 +817,14 @@ class GuiApplication:
     if self._progress_hook is not None:
       self._progress_hook(phase)
 
+  def mark_progress(self, phase: str) -> None:
+    """Expose lightweight phase markers to complex widgets."""
+    self._mark_progress(phase)
+
   def set_should_render(self, should_render: bool):
     self._should_render = should_render
+    if should_render:
+      self.request_high_fps()
 
   def texture(self, asset_path: str, width: int | None = None, height: int | None = None,
               alpha_premultiply=False, keep_aspect_ratio=True, flip_x: bool = False) -> rl.Texture:
@@ -726,6 +848,62 @@ class GuiApplication:
 
     self._textures[cache_key] = texture_obj
     return texture_obj
+
+  def cached_render_texture(self, cache_key: str, width: int, height: int,
+                            render: Callable[[], None]) -> object | None:
+    """Return a cached texture, scheduling cache misses between frames.
+
+    Raylib render-texture modes are not nestable. Widgets call this while the
+    main framebuffer (often another render texture) is active, so cache misses
+    must be populated after the frame has been presented.
+    """
+    cached = self._cached_render_textures.get(cache_key)
+    if cached is not None:
+      return cached.texture
+
+    self._pending_render_textures.setdefault(
+      cache_key, (max(1, int(width)), max(1, int(height)), render)
+    )
+    return None
+
+  def _populate_render_texture_cache(self) -> None:
+    pending = self._pending_render_textures
+    self._pending_render_textures = {}
+    for cache_key, (width, height, render) in pending.items():
+      if cache_key in self._cached_render_textures:
+        continue
+
+      cached = rl.load_render_texture(max(1, int(width)), max(1, int(height)))
+      began_texture_mode = False
+      began_blend_mode = False
+      try:
+        rl.begin_texture_mode(cached)
+        began_texture_mode = True
+        rl.clear_background(rl.Color(0, 0, 0, 0))
+        # Preserve straight alpha while RGB is accumulated premultiplied. The
+        # resulting texture can then be composited with BLEND_ALPHA_PREMULTIPLY
+        # without squaring translucent vector alpha.
+        rl.rl_set_blend_factors_separate(
+          rl.RL_SRC_ALPHA, rl.RL_ONE_MINUS_SRC_ALPHA,
+          rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
+          rl.RL_FUNC_ADD, rl.RL_FUNC_ADD,
+        )
+        rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM_SEPARATE)
+        began_blend_mode = True
+        render()
+      except Exception:
+        if began_blend_mode:
+          rl.end_blend_mode()
+        if began_texture_mode:
+          rl.end_texture_mode()
+        rl.unload_render_texture(cached)
+        raise
+      else:
+        rl.end_blend_mode()
+        rl.end_texture_mode()
+      rl.set_texture_filter(cached.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+      rl.set_texture_wrap(cached.texture, rl.TextureWrap.TEXTURE_WRAP_CLAMP)
+      self._cached_render_textures[cache_key] = cached
 
   def _load_image_from_path(self, image_path: str, width: int | None = None, height: int | None = None,
                             alpha_premultiply: bool = False, keep_aspect_ratio: bool = True, flip_x: bool = False) -> rl.Image:
@@ -803,6 +981,11 @@ class GuiApplication:
       rl.unload_texture(texture)
     self._textures = {}
 
+    for render_texture in self._cached_render_textures.values():
+      rl.unload_render_texture(render_texture)
+    self._cached_render_textures = {}
+    self._pending_render_textures = {}
+
     for font in self._fonts.values():
       rl.unload_font(font)
     self._fonts = {}
@@ -814,6 +997,10 @@ class GuiApplication:
     if self._burn_in_shader:
       rl.unload_shader(self._burn_in_shader)
       self._burn_in_shader = None
+
+    if self._white_luminance_shader:
+      rl.unload_shader(self._white_luminance_shader)
+      self._white_luminance_shader = None
 
     self._mouse.stop()
 
@@ -839,6 +1026,7 @@ class GuiApplication:
 
       while not (self._window_close_requested or rl.window_should_close()):
         self._mark_progress("gui_app.loop_start")
+        self._apply_render_mode()
         if PC:
           # Thread is not used on PC, need to manually add mouse events.
           self._mouse._handle_mouse_event()
@@ -847,6 +1035,7 @@ class GuiApplication:
         self._mouse_events = self._mouse.get_events()
         if len(self._mouse_events) > 0:
           self._last_mouse_event = self._mouse_events[-1]
+          self.request_high_fps()
 
         # Skip rendering when screen is off
         if not self._should_render:
@@ -875,9 +1064,14 @@ class GuiApplication:
         render_scale_x = self._scale * (self._pixel_scale_x if self._render_texture else 1.0)
         render_scale_y = self._scale * (self._pixel_scale_y if self._render_texture else 1.0)
         needs_render_scale = render_scale_x != 1.0 or render_scale_y != 1.0
-        if needs_render_scale:
+        direct_burn_in_shift = self._burn_in_shift() if self._render_texture is None else (0, 0)
+        needs_render_transform = needs_render_scale or direct_burn_in_shift != (0, 0)
+        if needs_render_transform:
           rl.rl_push_matrix()
-          rl.rl_scalef(render_scale_x, render_scale_y, 1.0)
+          if needs_render_scale:
+            rl.rl_scalef(render_scale_x, render_scale_y, 1.0)
+          if direct_burn_in_shift != (0, 0):
+            rl.rl_translatef(direct_burn_in_shift[0], direct_burn_in_shift[1], 0.0)
 
         # Allow a Widget to still run a function regardless of the stack depth
         self._mark_progress("gui_app.before_nav_ticks")
@@ -894,7 +1088,7 @@ class GuiApplication:
         self._mark_progress("gui_app.frame_ready")
         yield True
 
-        if needs_render_scale:
+        if needs_render_transform:
           rl.rl_pop_matrix()
 
         if self._render_texture:
@@ -907,12 +1101,17 @@ class GuiApplication:
           rl.clear_background(rl.BLACK)
           self._mark_progress("gui_app.after_present_clear_background")
           src_rect = rl.Rectangle(0, 0, float(self._render_texture_width), -float(self._render_texture_height))
-          dst_rect = rl.Rectangle(0, 0, float(self._scaled_width), float(self._scaled_height))
+          shift_x, shift_y = self._burn_in_shift()
+          dst_rect = rl.Rectangle(shift_x, shift_y, float(self._scaled_width), float(self._scaled_height))
           texture = self._render_texture.texture
           if texture:
             self._mark_progress("gui_app.before_present_draw_texture")
             if BURN_IN_MODE and self._burn_in_shader:
               rl.begin_shader_mode(self._burn_in_shader)
+              rl.draw_texture_pro(texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
+              rl.end_shader_mode()
+            elif self._white_luminance_shader:
+              rl.begin_shader_mode(self._white_luminance_shader)
               rl.draw_texture_pro(texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
               rl.end_shader_mode()
             else:
@@ -931,6 +1130,7 @@ class GuiApplication:
         self._mark_progress("gui_app.before_end_drawing")
         rl.end_drawing()
         self._mark_progress("gui_app.after_end_drawing")
+        self._populate_render_texture_cache()
 
         if RECORD:
           image = rl.load_image_from_texture(self._render_texture.texture)
@@ -947,6 +1147,27 @@ class GuiApplication:
           self._output_render_profile()
     except KeyboardInterrupt:
       pass
+
+  def _burn_in_shift(self, now: float | None = None) -> tuple[float, float]:
+    if not BURN_IN_PREVENTION or BURN_IN_SHIFT_PIXELS == 0:
+      return 0.0, 0.0
+
+    elapsed = (time.monotonic() if now is None else now) - self._burn_in_start_time
+    elapsed = max(0.0, elapsed)
+    pattern_count = len(BURN_IN_SHIFT_PATTERN)
+    cycle_elapsed = elapsed % (BURN_IN_SHIFT_INTERVAL * pattern_count)
+    pattern_index = int(cycle_elapsed // BURN_IN_SHIFT_INTERVAL)
+    segment_elapsed = cycle_elapsed - pattern_index * BURN_IN_SHIFT_INTERVAL
+
+    # Blend into the next position at the end of each interval. This keeps the
+    # burn-in protection active without teleporting the entire UI by two pixels.
+    transition_start = BURN_IN_SHIFT_INTERVAL - BURN_IN_SHIFT_TRANSITION_SECONDS
+    transition = min(1.0, max(0.0, (segment_elapsed - transition_start) / BURN_IN_SHIFT_TRANSITION_SECONDS))
+    start_x, start_y = BURN_IN_SHIFT_PATTERN[pattern_index]
+    end_x, end_y = BURN_IN_SHIFT_PATTERN[(pattern_index + 1) % pattern_count]
+    x = start_x + (end_x - start_x) * transition
+    y = start_y + (end_y - start_y) * transition
+    return x * BURN_IN_SHIFT_PIXELS, y * BURN_IN_SHIFT_PIXELS
 
   def font(self, font_weight: FontWeight = FontWeight.NORMAL) -> rl.Font:
     return self._fonts[font_weight]
@@ -1117,6 +1338,9 @@ class GuiApplication:
     sys.exit(0)
 
   def _calculate_auto_scale(self) -> float:
+    if os.getenv("SP_HEADLESS_TEST") == "1":
+      return 1.0
+
      # Create temporary window to query monitor info
     rl.init_window(1, 1, "")
     w, h = rl.get_monitor_width(0), rl.get_monitor_height(0)

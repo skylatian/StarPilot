@@ -12,7 +12,7 @@ from opendbc.safety.tests.common import CANPackerSafety
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 
 TOYOTA_COMMON_TX_MSGS = [[0x2E4, 0], [0x191, 0], [0x412, 0], [0x343, 0], [0x1D2, 0], [0x1D3, 0]]  # LKAS + LTA + ACC & PCM cancel cmds
-TOYOTA_SECOC_TX_MSGS = [[0x131, 0], [0x183, 0]] + TOYOTA_COMMON_TX_MSGS
+TOYOTA_SECOC_TX_MSGS = [[0x131, 0], [0x183, 0], [0x344, 0]] + TOYOTA_COMMON_TX_MSGS
 TOYOTA_COMMON_LONG_TX_MSGS = [[0x283, 0], [0x2E6, 0], [0x2E7, 0], [0x33E, 0], [0x344, 0], [0x365, 0], [0x366, 0], [0x4CB, 0],  # DSU bus 0
                               [0x128, 1], [0x141, 1], [0x160, 1], [0x161, 1], [0x470, 1],  # DSU bus 1
                               [0x411, 0],  # PCS_HUD
@@ -154,6 +154,69 @@ class TestToyotaSafetyBase(common.CarSafetyTest, common.LongitudinalAccelSafetyT
     values = {"MAIN_ON": 1 if toggle_on else 0}
     return self.packer.make_can_msg_panda("PCM_CRUISE_2", 0, values)
 
+
+def test_toyota_aol_rx_check_variants():
+  packer = CANPackerSafety("toyota_nodsu_pt_generated")
+  safety = libsafety_py.libsafety
+
+  for addr, length in ((0x1D3, 8), (0x1D3, 5), (0x365, 7)):
+    safety.set_safety_hooks(CarParams.SafetyModel.toyota,
+                            TestToyotaSafetyBase.EPS_SCALE | ToyotaSafetyFlags.ALT_CRUISE)
+    safety.init_tests()
+
+    messages = (
+      packer.make_can_msg_safety("WHEEL_SPEEDS", 0, {f"WHEEL_SPEED_{wheel}": 0 for wheel in ("FR", "FL", "RR", "RL")}),
+      packer.make_can_msg_safety("STEER_TORQUE_SENSOR", 0, {"STEER_TORQUE_EPS": 0}),
+      packer.make_can_msg_safety("PCM_CRUISE", 0, {"CRUISE_ACTIVE": 0}),
+      packer.make_can_msg_safety("BRAKE_MODULE", 0, {"BRAKE_PRESSED": 0}),
+      libsafety_py.make_CANPacket(addr, 0, bytes(length)),
+    )
+    for msg in messages:
+      assert safety.safety_rx_hook(msg)
+    assert safety.safety_config_valid(), f"RX checks invalid for {addr=:#x}, {length=}"
+
+
+def test_toyota_dsu_cruise_main_bit():
+  safety = libsafety_py.libsafety
+  safety.set_safety_hooks(CarParams.SafetyModel.toyota,
+                          TestToyotaSafetyBase.EPS_SCALE | ToyotaSafetyFlags.ALT_CRUISE)
+  safety.init_tests()
+
+  safety.safety_rx_hook(libsafety_py.make_CANPacket(0x1D3, 0, bytes(5)))
+  assert not safety.get_acc_main_on()
+
+  safety.safety_rx_hook(libsafety_py.make_CANPacket(0x365, 0, b"\x01\x00\x00\x00\x00\x00\x00"))
+  assert safety.get_acc_main_on()
+
+  safety.safety_rx_hook(libsafety_py.make_CANPacket(0x1D3, 0, bytes(5)))
+  assert safety.get_acc_main_on()
+
+  safety.safety_rx_hook(libsafety_py.make_CANPacket(0x365, 0, bytes(7)))
+  assert not safety.get_acc_main_on()
+
+
+def test_toyota_standard_cruise_ignores_dsu_main():
+  packer = CANPackerSafety("toyota_nodsu_pt_generated")
+  safety = libsafety_py.libsafety
+  safety.set_safety_hooks(CarParams.SafetyModel.toyota, TestToyotaSafetyBase.EPS_SCALE)
+  safety.init_tests()
+
+  assert safety.safety_rx_hook(packer.make_can_msg_safety("PCM_CRUISE_2", 0, {"MAIN_ON": 1}))
+  assert safety.get_acc_main_on()
+  safety.safety_rx_hook(libsafety_py.make_CANPacket(0x365, 0, bytes(7)))
+  assert safety.get_acc_main_on()
+
+
+def test_toyota_starpilot_safety_flag_combinations():
+  safety = libsafety_py.libsafety
+  combinations = (
+    ToyotaSafetyFlags.LONG_FILTER,
+    ToyotaSafetyFlags.LTA | ToyotaSafetyFlags.GAS_INTERCEPTOR,
+    ToyotaSafetyFlags.ALT_CRUISE | ToyotaSafetyFlags.GAS_INTERCEPTOR,
+  )
+  for flags in combinations:
+    assert safety.set_safety_hooks(CarParams.SafetyModel.toyota, TestToyotaSafetyBase.EPS_SCALE | flags) == 0
+    safety.init_tests()
 
 class TestToyotaSafetyTorque(TestToyotaSafetyBase, common.MotorTorqueSteeringSafetyTest, common.SteerRequestCutSafetyTest):
 

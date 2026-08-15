@@ -98,7 +98,8 @@ class CarState(CarStateBase):
     cp_cam = can_parsers.get(Bus.cam)
 
     ret = structs.CarState()
-    cp_acc = cp_cam if (cp_cam is not None and self.CP.carFingerprint in (TSS2_CAR - RADAR_ACC_CAR)) else cp
+    dsu_bypass = bool(self.CP.flags & ToyotaFlags.DSU_BYPASS.value)
+    cp_acc = cp_cam if (cp_cam is not None and (self.CP.carFingerprint in (TSS2_CAR - RADAR_ACC_CAR) or dsu_bypass)) else cp
 
     if not self.CP.flags & ToyotaFlags.SECOC.value:
       self.gvc = cp.vl["VSC1S07"]["GVC"]
@@ -162,15 +163,17 @@ class CarState(CarStateBase):
     ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD
 
     # Check EPS LKA/LTA fault status
-    ret.steerFaultTemporary = cp.vl["EPS_STATUS"]["LKA_STATE"] in TEMP_STEER_FAULTS
+    # A missing EPS_STATUS frame reads as zero in the parser. Do not turn that
+    # invalid startup sample into a real steering fault.
+    ret.steerFaultTemporary = cp.can_valid and cp.vl["EPS_STATUS"]["LKA_STATE"] in TEMP_STEER_FAULTS
     # Retrofit (no camera): LKA_STATE=0 is expected — EPS activates on first steer request
     if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and cp.vl["EPS_STATUS"]["LKA_STATE"] == 0:
       ret.steerFaultTemporary = False
-    ret.steerFaultPermanent = cp.vl["EPS_STATUS"]["LKA_STATE"] in PERM_STEER_FAULTS
+    ret.steerFaultPermanent = cp.can_valid and cp.vl["EPS_STATUS"]["LKA_STATE"] in PERM_STEER_FAULTS
 
     if self.CP.steerControlType == SteerControlType.angle:
-      ret.steerFaultTemporary = ret.steerFaultTemporary or cp.vl["EPS_STATUS"]["LTA_STATE"] in TEMP_STEER_FAULTS
-      ret.steerFaultPermanent = ret.steerFaultPermanent or cp.vl["EPS_STATUS"]["LTA_STATE"] in PERM_STEER_FAULTS
+      ret.steerFaultTemporary = cp.can_valid and (ret.steerFaultTemporary or cp.vl["EPS_STATUS"]["LTA_STATE"] in TEMP_STEER_FAULTS)
+      ret.steerFaultPermanent = cp.can_valid and (ret.steerFaultPermanent or cp.vl["EPS_STATUS"]["LTA_STATE"] in PERM_STEER_FAULTS)
 
       # Lane Tracing Assist control is unavailable (EPS_STATUS->LTA_STATE=0) until
       # the more accurate angle sensor signal is initialized
@@ -194,7 +197,7 @@ class CarState(CarStateBase):
       conversion_factor = CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS
       ret.cruiseState.speedCluster = cluster_set_speed * conversion_factor
 
-    if self.CP.carFingerprint in TSS2_CAR and not self.CP.flags & ToyotaFlags.DISABLE_RADAR.value:
+    if dsu_bypass or (self.CP.carFingerprint in TSS2_CAR and not self.CP.flags & ToyotaFlags.DISABLE_RADAR.value):
       # smartDSU can intercept ACC_CONTROL, so don't require it when it's no
       # longer forwarded on the PT bus.
       if not self.has_SDSU:

@@ -4,11 +4,12 @@ import {
   formatMetersToHuman,
   formatSecondsToHuman,
   getCoordinatesFromSearch,
+  getMapboxSearchContext,
   getRoutes,
   removeRouteFromMap,
   getOrdinalSuffix,
   highlightRoute,
-} from "./navigation_utilities.js";
+} from "./navigation_utilities.js?v=nav-search-context-2";
 import { Modal } from "/assets/components/modal.js";
 
 function sha1hex(str) {
@@ -231,6 +232,7 @@ const state = reactive({
   fetched: false,
   initialized: false,
   isMetric: true,
+  language: "",
   lastPosition: undefined,
   loadingRoute: false,
   mapboxPublic: undefined,
@@ -248,6 +250,27 @@ const state = reactive({
 const searchFieldState = reactive({ value: "" });
 
 export function NavDestination() {
+
+  function getSearchContext(query) {
+    const browserLanguages = typeof navigator === "undefined"
+      ? []
+      : (navigator.languages || [navigator.language]);
+    const context = getMapboxSearchContext(query, state.lastPosition, [state.language, ...browserLanguages]);
+    if (state.lastPosition) {
+      context.proximity = `${state.lastPosition.longitude},${state.lastPosition.latitude}`;
+    }
+    return context;
+  }
+
+  function getMapboxSuggestParams(query) {
+    return new URLSearchParams({
+      access_token: state.mapboxPublic,
+      session_token: sessionToken,
+      q: query,
+      limit: 4,
+      ...getSearchContext(query),
+    });
+  }
 
   function areRoutesEqual(a, b) {
     return a?.routeHash && b?.routeHash && a.routeHash === b.routeHash;
@@ -368,6 +391,7 @@ export function NavDestination() {
     state.amap1Key = data.amap1Key?.trim() || "";
     state.amap2Key = data.amap2Key?.trim() || "";
     state.isMetric = data.isMetric ?? true;
+    state.language = data.language?.trim() || "";
     const hasMapbox = !!state.mapboxPublic && !!state.mapboxSecret;
     const hasAMap = !!state.amap1Key && !!state.amap2Key;
     state.missingKeys = !hasMapbox;
@@ -383,7 +407,19 @@ export function NavDestination() {
 
     try {
       const prev = JSON.parse(data.previousDestinations);
-      state.previousDestinations = prev.map(d => ({ name: d.place_name }));
+      state.previousDestinations = prev.map(d => {
+        const name = cleanSuggestionText(d?.place_name || d?.name || "");
+        if (!name) return null;
+
+        const latitude = Number(d?.latitude);
+        const longitude = Number(d?.longitude);
+        return {
+          ...d,
+          name,
+          place_name: name,
+          ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {})
+        };
+      }).filter(Boolean);
       state.suggestions = JSON.stringify(state.previousDestinations);
     } catch { }
     try {
@@ -422,15 +458,7 @@ export function NavDestination() {
       state.confirmedRoute = null;
       state.suggestions = "[]";
       if (state.searchProvider === "mapbox") {
-        const params = new URLSearchParams({
-          access_token: state.mapboxPublic,
-          session_token: sessionToken,
-          q: val,
-          limit: 4
-        });
-        if (state.lastPosition) {
-          params.set("proximity", `${state.lastPosition.longitude},${state.lastPosition.latitude}`);
-        }
+        const params = getMapboxSuggestParams(val);
         const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${params}`);
         const data = await res.json();
         state.suggestions = JSON.stringify(data.suggestions);
@@ -589,15 +617,7 @@ export function NavDestination() {
       state.confirmedRoute = null;
       state.suggestions = "[]";
       if (state.searchProvider === "mapbox") {
-        const params = new URLSearchParams({
-          access_token: state.mapboxPublic,
-          session_token: sessionToken,
-          q: val,
-          limit: 4
-        });
-        if (state.lastPosition) {
-          params.set("proximity", `${state.lastPosition.longitude},${state.lastPosition.latitude}`);
-        }
+        const params = getMapboxSuggestParams(val);
         const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${params}`);
         const data = await res.json();
         state.suggestions = JSON.stringify(data.suggestions);
@@ -615,12 +635,14 @@ export function NavDestination() {
   async function selectSuggestion(sugg) {
     const label = sugg.full_address || sugg.name || sugg.address || "Unnamed Location";
     let coords;
-    if (sugg.routeId) {
+    const savedLatitude = Number(sugg.latitude);
+    const savedLongitude = Number(sugg.longitude);
+    if (Number.isFinite(savedLatitude) && Number.isFinite(savedLongitude)) {
       initiateNavigation({
-        name: sugg.name,
-        longitude: sugg.longitude,
-        latitude: sugg.latitude,
-        routeId: sugg.routeId
+        name: sugg.name || label,
+        longitude: savedLongitude,
+        latitude: savedLatitude,
+        routeId: sugg.routeId || null
       });
       return;
     }
@@ -637,7 +659,7 @@ export function NavDestination() {
           const retJson = await ret.json();
           coords = retJson.features[0].geometry.coordinates;
         } else {
-          coords = await getCoordinatesFromSearch(label, state.mapboxPublic);
+          coords = await getCoordinatesFromSearch(label, state.mapboxPublic, getSearchContext(label));
         }
       } else {
         coords = [sugg.location.lng, sugg.location.lat];

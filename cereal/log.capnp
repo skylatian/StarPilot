@@ -2192,6 +2192,7 @@ struct DriverStateV2 {
     rightBlinkProb @8 :Float32;
     sunglassesProb @9 :Float32;
     phoneProb @13 :Float32;
+    sleepProb @14 :Float32;
     notReadyProbDEPRECATED @12 :List(Float32);
     occludedProbDEPRECATED @10 :Float32;
     readyProbDEPRECATED @11 :List(Float32);
@@ -2263,7 +2264,8 @@ struct DriverMonitoringStateDEPRECATED @0xb83cda094a1da284 {
 
 struct DriverMonitoringState {
   lockout @0 :Bool;
-  lockoutRecoveryPercent @11 :Int8;
+  lockoutCount @15 :Int8;
+  lockoutMinutesRemaining @11 :Int8;
   alert3Count @12 :Int8;
   noResponseCount @13 :Int8;
   noResponseForceDecel @14 :Bool;
@@ -2740,7 +2742,7 @@ struct Event {
     starpilotSelfdriveState @115 :Custom.StarPilotSelfdriveState;
     customReserved9 @116 :Custom.CustomReserved9;
     starpilotLateralManeuverPlanDEPRECATED @136 :Custom.StarPilotLateralManeuverPlanDEPRECATED;
-    customReserved11 @137 :Custom.CustomReserved11;
+    starpilotLateralState @137 :Custom.StarPilotLateralState;
     customReserved12 @138 :Custom.CustomReserved12;
     customReserved13 @139 :Custom.CustomReserved13;
     customReserved14 @140 :Custom.CustomReserved14;

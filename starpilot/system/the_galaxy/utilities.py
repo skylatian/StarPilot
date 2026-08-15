@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from urllib.parse import quote
 
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
+from openpilot.system.hardware import HARDWARE
 from openpilot.system.loggerd.config import get_available_bytes, get_used_bytes
 from openpilot.system.loggerd.deleter import PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE
 from openpilot.system.loggerd.uploader import listdir_by_creation
@@ -71,13 +73,14 @@ DASHBOARD_ROUTE_SEGMENT_SAMPLE_LIMIT = 2
 DASHBOARD_PERSISTED_ROUTE_LIMIT = 5000
 DASHBOARD_PERSIST_MIN_ROUTE_AGE_SECONDS = 120
 DASHBOARD_PERSISTENT_STATS_PARAM = "GalaxyDashboardStats"
-DASHBOARD_ROUTE_ANALYSIS_VERSION = 3
+DASHBOARD_ROUTE_ANALYSIS_VERSION = 4
 DASHBOARD_PARAMS_DIR = Path("/data/params/d")
 DASHBOARD_ANALYZER_LOG_PATH = "/tmp/galaxy_dashboard_analyzer.log"
 DASHBOARD_ANALYZER_STATUS_PATH = Path("/tmp/galaxy_dashboard_analyzer_status.json")
 DASHBOARD_ANALYZER_STATUS_MAX_AGE_SECONDS = 30 * 60
 DASHBOARD_TOP_MODEL_LIMIT = 3
 LAN_IP_CACHE_TTL_SECONDS = 10.0
+NETWORK_STATUS_CACHE_TTL_SECONDS = 10.0
 DASHBOARD_EVENT_DISTRACTED = "driverDistracted2"
 DASHBOARD_EVENT_UNRESPONSIVE = "driverUnresponsive3"
 DASHBOARD_TIME_SOURCE_LOG = "log"
@@ -85,6 +88,7 @@ DASHBOARD_TIME_SOURCE_FILESYSTEM = "filesystem"
 DASHBOARD_MIN_VALID_ROUTE_TIME = datetime(2026, 1, 1)
 DASHBOARD_ROUTE_FUTURE_GRACE_SECONDS = 6 * 60 * 60
 DASHBOARD_LOCAL_ROUTE_MAX_AGE_SECONDS = 45 * 24 * 60 * 60
+DASHBOARD_ROUTE_TIME_REPAIR_THRESHOLD_SECONDS = 5 * 60
 
 XOR_KEY = "s8#pL3*Xj!aZ@dWq"
 
@@ -108,6 +112,10 @@ _DASHBOARD_CACHE = {
   "value": None,
 }
 _LAN_IP_CACHE = {
+  "updated_at": 0.0,
+  "value": None,
+}
+_NETWORK_STATUS_CACHE = {
   "updated_at": 0.0,
   "value": None,
 }
@@ -204,6 +212,100 @@ def get_current_lan_ip():
   _LAN_IP_CACHE["updated_at"] = time.monotonic()
   _LAN_IP_CACHE["value"] = None
   return None
+
+
+def _clean_network_name(value):
+  text = "".join(character for character in str(value or "").strip().strip("\x00") if character.isprintable())
+  return text[:128]
+
+
+def _read_active_wifi_ssid():
+  commands = (
+    (["nmcli", "-t", "--escape", "no", "-f", "IN-USE,SSID", "device", "wifi", "list", "--rescan", "no"], "nmcli"),
+    (["iwgetid", "--raw"], "iwgetid"),
+    (["iw", "dev", "wlan0", "link"], "iw"),
+  )
+
+  for command, source in commands:
+    try:
+      result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=0.5)
+    except Exception:
+      continue
+    if result.returncode != 0:
+      continue
+
+    if source == "nmcli":
+      for line in result.stdout.splitlines():
+        in_use, separator, ssid = line.partition(":")
+        if separator and in_use.strip() == "*":
+          name = _clean_network_name(ssid)
+          if name:
+            return name
+    elif source == "iwgetid":
+      name = _clean_network_name(result.stdout)
+      if name:
+        return name
+    else:
+      for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("SSID:"):
+          name = _clean_network_name(stripped.partition(":")[2])
+          if name:
+            return name
+
+  return None
+
+
+def _network_type_name(network_type):
+  raw_value = getattr(network_type, "raw", network_type)
+  try:
+    raw_value = int(raw_value)
+  except (TypeError, ValueError):
+    text = str(network_type or "").strip().lower()
+    for name in ("none", "wifi", "cell2g", "cell3g", "cell4g", "cell5g", "ethernet"):
+      if text == name or text.endswith(f".{name}"):
+        return name
+    return "unknown"
+
+  return {
+    0: "none",
+    1: "wifi",
+    2: "cell2g",
+    3: "cell3g",
+    4: "cell4g",
+    5: "cell5g",
+    6: "ethernet",
+  }.get(raw_value, "unknown")
+
+
+def get_current_network_name():
+  now = time.monotonic()
+  if now - _NETWORK_STATUS_CACHE["updated_at"] < NETWORK_STATUS_CACHE_TTL_SECONDS:
+    return _NETWORK_STATUS_CACHE["value"]
+
+  try:
+    network_type = _network_type_name(HARDWARE.get_network_type())
+  except Exception:
+    network_type = "unknown"
+
+  if network_type == "wifi":
+    value = _read_active_wifi_ssid() or "Wi-Fi"
+  elif network_type == "cell2g":
+    value = "Cellular (2G)"
+  elif network_type == "cell3g":
+    value = "Cellular (3G)"
+  elif network_type == "cell4g":
+    value = "Cellular (LTE)"
+  elif network_type == "cell5g":
+    value = "Cellular (5G)"
+  elif network_type == "ethernet":
+    value = "Ethernet"
+  else:
+    value = _read_active_wifi_ssid() or "No wireless connectivity"
+
+  _NETWORK_STATUS_CACHE["updated_at"] = time.monotonic()
+  _NETWORK_STATUS_CACHE["value"] = value
+  return value
 
 
 def secure_filename(filename):
@@ -892,6 +994,19 @@ def _select_dashboard_segment_candidate(candidates):
   return next((candidate for candidate in candidates if _segment_has_dashboard_log(candidate)), candidates[0])
 
 
+def _estimate_route_started_at(segments):
+  estimates = []
+  for segment in segments:
+    segment_num = max(0, _safe_int(segment.get("num", 0), 0))
+    # Segment directory mtimes normally land at the end of their one-minute segment.
+    estimate = _segment_mtime(segment.get("path")) - (segment_num + 1) * 60
+    parsed = _timestamp_to_dashboard_time(estimate, require_recent=True)
+    if parsed is not None:
+      estimates.append(parsed.timestamp())
+  # Dashboard analysis can touch a segment directory later, but cannot make it older.
+  return datetime.fromtimestamp(min(estimates)) if estimates else None
+
+
 def _list_dashboard_routes(footage_paths, limit=DASHBOARD_ROUTE_SCAN_LIMIT):
   routes = {}
 
@@ -934,11 +1049,7 @@ def _list_dashboard_routes(footage_paths, limit=DASHBOARD_ROUTE_SCAN_LIMIT):
     if not segments:
       continue
 
-    first_segment = next((segment for segment in segments if segment["num"] == 0), segments[0])
-    try:
-      started_at = _timestamp_to_dashboard_time(first_segment["path"].stat().st_mtime, require_recent=True)
-    except OSError:
-      started_at = None
+    started_at = _estimate_route_started_at(segments)
 
     route_infos.append({
       "name": route["name"],
@@ -1318,31 +1429,21 @@ def _public_drive(drive, is_metric):
 def _route_time_range(route_info, duration_seconds):
   modified_at = _safe_float(route_info.get("modifiedAt", 0.0), 0.0)
   duration_seconds = max(0.0, _safe_float(duration_seconds, 0.0))
+  started_at = route_info.get("startedAt")
+  if _dashboard_time_is_valid(started_at, require_recent=True):
+    end_time = started_at + timedelta(seconds=duration_seconds) if duration_seconds > 0.0 else None
+    return _jsonable_time(started_at), _jsonable_time(end_time)
+
   modified_time = _timestamp_to_dashboard_time(modified_at, require_recent=True)
   if modified_time is not None and duration_seconds > 0.0:
     end_time = modified_time
     start_time = end_time - timedelta(seconds=duration_seconds)
     return _jsonable_time(start_time), _jsonable_time(end_time)
-  started_at = route_info.get("startedAt")
-  if _dashboard_time_is_valid(started_at, require_recent=True):
-    return _jsonable_time(started_at), _jsonable_time(modified_time) if modified_time is not None else ""
   return "", ""
 
 
 def _distance_from_meters(distance_m, is_metric):
   return distance_m * (METER_TO_KILOMETER if is_metric else METER_TO_MILE)
-
-
-def _current_model_name(params_obj, model_names):
-  for key in ("DrivingModelName", "DrivingModel", "Model"):
-    value = _params_get_text(params_obj, key, "")
-    model_key = canonical_model_key(value)
-    if model_key and model_key in model_names:
-      return model_names[model_key]["name"]
-    label = _clean_model_label(value)
-    if label:
-      return label
-  return ""
 
 
 def _route_shell_drive(route_info, params_obj, model_names, is_metric):
@@ -1361,7 +1462,7 @@ def _route_shell_drive(route_info, params_obj, model_names, is_metric):
     "avgSpeed": 0,
     "engagedPercent": 0,
     "engagedSeconds": 0.0,
-    "model": _current_model_name(params_obj, model_names) or "Unknown model",
+    "model": "Unknown model",
     "segmentCount": segment_count,
     "distractedMoments": 0,
     "unresponsiveMoments": 0,
@@ -1570,8 +1671,40 @@ def _invalidate_dashboard_cache():
   })
 
 
+def clear_dashboard_route_history(params_obj):
+  """Remove route-backed dashboard history while keeping durable records."""
+  stats = _load_dashboard_persistent_stats(params_obj)
+  route_count = len(stats.get("routes", {}))
+  stats["routes"] = {}
+  stats["ignoredRoutes"] = []
+  serialized = json.dumps(stats, separators=(",", ":"))
+
+  persisted_to_params = False
+  if params_obj is not None:
+    try:
+      params_obj.put(DASHBOARD_PERSISTENT_STATS_PARAM, serialized)
+      persisted_to_params = True
+    except Exception:
+      pass
+
+  fallback_path = _dashboard_param_file_path(DASHBOARD_PERSISTENT_STATS_PARAM)
+  if persisted_to_params:
+    try:
+      fallback_path.unlink()
+    except (FileNotFoundError, OSError):
+      pass
+  elif not _write_dashboard_param_file(DASHBOARD_PERSISTENT_STATS_PARAM, serialized):
+    raise RuntimeError("Unable to clear persisted dashboard route history.")
+
+  _invalidate_dashboard_cache()
+  return route_count
+
+
 def warm_dashboard_stats(footage_paths=None):
   params_obj = params
+  if params_obj.get_bool("IsOnroad"):
+    return
+
   route_infos = _list_dashboard_routes(footage_paths or [])
 
   if not route_infos:
@@ -1589,6 +1722,8 @@ def warm_dashboard_stats(footage_paths=None):
   persistent_stats = _load_dashboard_persistent_stats(params_obj)
   candidates = _analysis_candidates(route_infos, persistent_stats)[:DASHBOARD_BACKGROUND_ROUTE_ANALYSIS_LIMIT]
   for route_info in candidates:
+    if params_obj.get_bool("IsOnroad"):
+      break
     full_route_info = dict(route_info)
     full_route_info["analysisSegmentCount"] = max(0, _safe_int(route_info.get("segmentCount", 0), 0))
     messages = _iter_route_log_messages(full_route_info)
@@ -1671,6 +1806,39 @@ def _clear_dashboard_analyzer_status():
     pass
 
 
+def _dashboard_analyzer_pid_matches(pid):
+  try:
+    command = Path(f"/proc/{pid}/cmdline").read_bytes()
+  except OSError:
+    return False
+  return b"warm_dashboard_stats" in command
+
+
+def stop_dashboard_background_analysis():
+  global _DASHBOARD_ANALYZER_PROCESS
+
+  stopped = False
+  with _DASHBOARD_ANALYZER_LOCK:
+    process = _DASHBOARD_ANALYZER_PROCESS
+    if process is not None and process.poll() is None:
+      process.terminate()
+      stopped = True
+    else:
+      status = _read_dashboard_analyzer_status()
+      pid = _safe_int(status.get("pid", 0), 0)
+      if pid > 0 and _dashboard_analyzer_pid_matches(pid):
+        try:
+          os.kill(pid, signal.SIGTERM)
+          stopped = True
+        except (ProcessLookupError, PermissionError, OSError):
+          pass
+
+    _DASHBOARD_ANALYZER_PROCESS = None
+    _clear_dashboard_analyzer_status()
+
+  return stopped
+
+
 def _dashboard_analysis_status(candidates):
   pending_count = len(candidates or [])
   return {
@@ -1684,10 +1852,12 @@ def _start_dashboard_background_analysis(footage_paths, route_infos, persistent_
   global _DASHBOARD_ANALYZER_PROCESS
 
   candidates = candidates if candidates is not None else _analysis_candidates(route_infos, persistent_stats)
-  if not route_infos or not candidates:
+  if params.get_bool("IsOnroad") or not route_infos or not candidates:
     return False
 
   with _DASHBOARD_ANALYZER_LOCK:
+    if params.get_bool("IsOnroad"):
+      return False
     if _dashboard_analyzer_running():
       return True
     repo_root = Path(__file__).resolve().parents[3]
@@ -2070,7 +2240,7 @@ def _model_usage_key(model_name):
   clean_name = _clean_model_label(model_name)
   if not clean_name or clean_name == "Unknown model":
     return ""
-  return canonical_model_key(clean_name) or clean_name.lower()
+  return re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-")
 
 
 def _better_record(current, previous, metric_key):
@@ -2326,6 +2496,19 @@ def _drive_time_reliable_for_persistence(drive):
   return bool(date_text)
 
 
+def _filesystem_route_time_changed(existing_entry, next_entry):
+  if (
+    str(existing_entry.get("timeSource", "") or "") != DASHBOARD_TIME_SOURCE_FILESYSTEM
+    or str(next_entry.get("timeSource", "") or "") != DASHBOARD_TIME_SOURCE_FILESYSTEM
+  ):
+    return False
+  existing_date = _coerce_dashboard_time(existing_entry.get("date", ""))
+  next_date = _coerce_dashboard_time(next_entry.get("date", ""))
+  if existing_date is None or next_date is None:
+    return False
+  return abs((next_date - existing_date).total_seconds()) > DASHBOARD_ROUTE_TIME_REPAIR_THRESHOLD_SECONDS
+
+
 def _update_dashboard_persistent_stats(params_obj, drives, wall_now):
   stats = _load_dashboard_persistent_stats(params_obj)
   before = json.dumps(stats, sort_keys=True, separators=(",", ":"))
@@ -2365,10 +2548,15 @@ def _update_dashboard_persistent_stats(params_obj, drives, wall_now):
       next_entry["analysisVersion"] = DASHBOARD_ROUTE_ANALYSIS_VERSION
     existing_entry = routes.get(route_name)
     if isinstance(existing_entry, dict):
+      replace_filesystem_time = _filesystem_route_time_changed(existing_entry, next_entry)
       existing_distance = max(0.0, _safe_float(existing_entry.get("distanceMeters", 0.0), 0.0))
       next_distance = max(0.0, _safe_float(next_entry.get("distanceMeters", 0.0), 0.0))
       existing_current = _safe_float(existing_entry.get("modifiedAt", 0.0), 0.0) >= _safe_float(next_entry.get("modifiedAt", 0.0), 0.0)
       existing_attention_known = bool(existing_entry.get("attentionKnown", True))
+      existing_model = _clean_model_label(existing_entry.get("model", ""))
+      if not attention_known and existing_current and existing_model and existing_model != "Unknown model":
+        next_entry["model"] = existing_model
+        next_entry["modelKey"] = canonical_model_key(existing_entry.get("modelKey", "")) or _model_usage_key(existing_model)
       if not attention_known and existing_current and existing_attention_known:
         next_entry["clean"] = bool(existing_entry.get("clean", False))
         next_entry["undistracted"] = bool(existing_entry.get("undistracted", existing_entry.get("clean", False)))
@@ -2379,11 +2567,14 @@ def _update_dashboard_persistent_stats(params_obj, drives, wall_now):
         next_entry["distanceMeters"] = existing_distance
         existing_duration = _safe_int(existing_entry.get("duration", 0), 0)
         next_entry["duration"] = existing_duration if existing_attention_known else max(existing_duration, next_entry["duration"])
-        if existing_attention_known and str(existing_entry.get("date", "")).strip():
+        if existing_attention_known and str(existing_entry.get("date", "")).strip() and not replace_filesystem_time:
           next_entry["date"] = str(existing_entry.get("date", "")).strip()
           next_entry["timeSource"] = str(existing_entry.get("timeSource", "") or next_entry["timeSource"])
-        if str(existing_entry.get("endDate", "")).strip():
+        if str(existing_entry.get("endDate", "")).strip() and not replace_filesystem_time:
           next_entry["endDate"] = str(existing_entry.get("endDate", "")).strip()
+        elif replace_filesystem_time:
+          corrected_start = _coerce_dashboard_time(next_entry.get("date", ""))
+          next_entry["endDate"] = _jsonable_time(corrected_start + timedelta(seconds=next_entry["duration"])) if corrected_start else ""
         next_entry["engagedSeconds"] = max(0.0, _safe_float(existing_entry.get("engagedSeconds", 0.0), 0.0))
         next_entry["distractedMoments"] = max(0, _safe_int(existing_entry.get("distractedMoments", 0), 0))
         next_entry["unresponsiveMoments"] = max(0, _safe_int(existing_entry.get("unresponsiveMoments", 0), 0))
@@ -2508,12 +2699,14 @@ def _build_device_summary(params_obj):
   uptime_seconds = _read_uptime_seconds()
   cpu_temp_c = _read_cpu_temp_c()
   lan_ip = get_current_lan_ip()
+  network_name = get_current_network_name()
   return {
     "status": "Driving" if is_onroad else "Parked",
     "online": True,
     "uptimeSeconds": uptime_seconds,
     "cpuTempC": cpu_temp_c,
     "lanIp": lan_ip,
+    "networkName": network_name,
   }
 
 
@@ -2731,6 +2924,13 @@ def get_routes_names(footage_path):
   route_times = {segment.route_name.time_str for segment in segments}
   return sorted(route_times, reverse=True)
 
+def get_routes_with_segment_counts(footage_path):
+  route_counts = {}
+  for segment in get_all_segment_names(footage_path):
+    route_name = segment.route_name.time_str
+    route_counts[route_name] = route_counts.get(route_name, 0) + 1
+  return sorted(route_counts.items(), reverse=True)
+
 def get_segments_in_route(route_time_str, footage_path):
   return [
     f"{segment.time_str}--{segment.segment_num}"
@@ -2766,7 +2966,7 @@ def normalize_theme_name(name, for_path=False):
     return f"{normalized_parts[0]} ({' '.join(normalized_parts[1:])})".replace(" Week", "")
   return ' '.join(normalized_parts).replace(" Week", "")
 
-def process_route(footage_path, route_name):
+def process_route(footage_path, route_name, segment_count=0):
   segment_path = f"{footage_path}{route_name}--0"
   qcamera_path = f"{segment_path}/qcamera.ts"
 
@@ -2790,7 +2990,9 @@ def process_route(footage_path, route_name):
     "name": route_name,
     "png": f"/thumbnails/{route_name}--0/preview.png",
     "timestamp": route_timestamp_str,
-    "is_preserved": has_preserve_attr(segment_path)
+    "is_preserved": has_preserve_attr(segment_path),
+    "segmentCount": max(0, int(segment_count)),
+    "approxDurationSeconds": max(0, int(segment_count)) * 60,
   }
 
 def process_screen_recording(mp4):

@@ -3,11 +3,15 @@ from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCardRenderer
+from openpilot.selfdrive.ui.onroad.starpilot.compass import get_compass_text
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_text_cached
 from openpilot.system.ui.widgets import Widget
+from openpilot.selfdrive.ui.onroad.starpilot.widget_style import (
+  CONTROL_WIDTH, SET_SPEED_HEIGHT, WIDGET_ANCHOR_OFFSET, draw_control_card,
+)
 
 # Constants
 SET_SPEED_NA = 255
@@ -20,9 +24,9 @@ class UIConfig:
   header_height: int = 300
   border_size: int = 30
   button_size: int = 192
-  set_speed_width_metric: int = 200
-  set_speed_width_imperial: int = 172
-  set_speed_height: int = 204
+  set_speed_width_metric: int = CONTROL_WIDTH
+  set_speed_width_imperial: int = CONTROL_WIDTH
+  set_speed_height: int = SET_SPEED_HEIGHT
   wheel_icon_size: int = 144
 
 
@@ -74,6 +78,10 @@ class HudRenderer(Widget):
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
     self._navigation_card = NavigationCardRenderer()
 
+    self.draw_set_speed = True
+    self.draw_current_speed = True
+    self.draw_exp_button = True
+
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
@@ -121,17 +129,18 @@ class HudRenderer(Widget):
       COLORS.HEADER_GRADIENT_END,
     )
 
-    if self.is_cruise_available and not ui_state.starpilot_toggles.get("hide_max_speed", False):
+    if self.draw_set_speed and self.is_cruise_available and not ui_state.starpilot_toggles.get("hide_max_speed", False):
       self._draw_set_speed(rect)
 
-    if not ui_state.starpilot_toggles.get("hide_speed", False):
+    if self.draw_current_speed and not ui_state.starpilot_toggles.get("hide_speed", False):
       self._draw_current_speed(rect)
 
     self._navigation_card.render(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
-    self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
+    if self.draw_exp_button:
+      self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed or self._navigation_card.is_pressed
@@ -139,12 +148,11 @@ class HudRenderer(Widget):
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
-    x = rect.x + 60 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
+    x = rect.x + WIDGET_ANCHOR_OFFSET - set_speed_width / 2
     y = rect.y + 45
 
     set_speed_rect = rl.Rectangle(x, y, set_speed_width, UI_CONFIG.set_speed_height)
-    rl.draw_rectangle_rounded(set_speed_rect, 0.35, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_rectangle_rounded_lines_ex(set_speed_rect, 0.35, 10, 6, COLORS.BORDER_TRANSLUCENT)
+    draw_control_card(set_speed_rect)
 
     max_color = COLORS.GREY
     set_speed_color = COLORS.DARK_GREY
@@ -190,3 +198,10 @@ class HudRenderer(Widget):
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+
+    compass_text = get_compass_text()
+    if compass_text:
+      compass_font_size = 50
+      compass_size = measure_text_cached(self._font_bold, compass_text, compass_font_size)
+      compass_pos = rl.Vector2(rect.x + rect.width / 2 - compass_size.x / 2, 65 - compass_size.y / 2)
+      draw_text_with_shadow(self._font_bold, compass_text, compass_pos, compass_font_size, rl.Color(255, 255, 255, 180))

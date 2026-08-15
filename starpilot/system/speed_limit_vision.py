@@ -15,6 +15,8 @@ import numpy as np
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import set_core_affinity
+from openpilot.common.swaglog import cloudlog
+from openpilot.starpilot.common.cpu_throttle import device_cpu_throttle_factor
 from openpilot.system.hardware import PC
 
 RUNTIME_LOOP_HZ = 20
@@ -24,7 +26,7 @@ FOLLOWUP_WINDOW_SECONDS = 2.0
 TEMPORAL_TRACKING_ENABLED = False
 TRACK_CONFIRMED_PROPOSALS_ENABLED = False
 TRACK_CLASSIFICATION_INTERVAL = 0.12
-TRACK_BUSY_CLASSIFICATION_INTERVAL = 0.35
+TRACK_BUSY_CLASSIFICATION_INTERVAL = 0.50
 TRACK_DETECTOR_INTERVAL = 0.55
 TRACK_MAX_AGE_SECONDS = 2.0
 TRACK_MIN_PROPOSAL_CONFIDENCE = 0.10
@@ -34,7 +36,20 @@ TRACK_MIN_FEATURE_COUNT = 4
 TRACK_MAX_AREA_RATIO = 0.18
 TRACK_CROP_PADDING_RATIO = 0.06
 TRACK_REPEAT_CONFIDENCE_BONUS = 0.12
-BUSY_INFERENCE_INTERVAL = 1.0
+# Keep optional vision work responsive while giving realtime processes more headroom.
+BUSY_INFERENCE_INTERVAL = 1.5
+# Do not schedule another expensive inference before the previous one has given
+# the rest of the device enough time to run. This matters on Mici, where a
+# detector/classifier pass can take several hundred milliseconds.
+PROCESSING_THROTTLE_RATIO = 2.5
+MEMORY_PRESSURE_INFERENCE_INTERVAL = 2.0
+MEMORY_PRESSURE_CLASSIFICATION_INTERVAL = 0.75
+MEMORY_PRESSURE_AVAILABLE_KB = 512 * 1024
+MEMORY_CRITICAL_AVAILABLE_KB = 256 * 1024
+MEMORY_RECOVERY_AVAILABLE_KB = 768 * 1024
+MEMORY_PRESSURE_USAGE_PERCENT = 88
+MEMORY_CRITICAL_USAGE_PERCENT = 94
+MEMORY_RECOVERY_USAGE_PERCENT = 82
 LIVE_POSE_RECOVERY_THROTTLE_SECONDS = 2.0
 LIVE_POSE_RECOVERY_INFERENCE_INTERVAL = 1.0
 RUNTIME_TELEMETRY_INTERVAL_SECONDS = 2.0
@@ -157,8 +172,9 @@ SPEED_LIMIT_CLASSES = {
   13: 90,
 }
 
-VALID_SPEED_LIMITS_MPH = set(range(10, 125, 5))
-MIN_PUBLISHABLE_SPEED_LIMIT_MPH = 20
+VALID_SPEED_LIMITS_MPH = set(range(5, 125, 5))
+MIN_PUBLISHABLE_SPEED_LIMIT_MPH = 5
+MAX_IMPERIAL_PUBLISHABLE_SPEED_LIMIT_MPH = 80
 LEGACY_MODEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "vision_models" / "speed_limit_vision.onnx"
 US_DETECTOR_MODEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "vision_models" / "speed_limit_us_detector.onnx"
 US_CLASSIFIER_MODEL_PATH = Path(__file__).resolve().parents[1] / "assets" / "vision_models" / "speed_limit_us_value_classifier.onnx"
@@ -168,10 +184,12 @@ US_DETECTOR_CLASSES = {
   1: "advisory_speed_limit",
   2: "school_zone_speed_limit",
 }
-US_CLASSIFIER_SPEED_VALUES = (15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75)
+US_CLASSIFIER_SPEED_VALUES = (10, 100, 15, 20, 25, 30, 35, 40, 45, 5, 50, 55, 60, 65, 70, 75, 80, 90)
+EXTENDED_CLASSIFIER_SPEED_VALUES = frozenset((5, 10, 80, 90, 100))
 SCHOOL_ZONE_SPEED_VALUES = frozenset((15, 20, 25))
 US_DETECTOR_MIN_CONFIDENCE = 0.06
 US_CLASSIFIER_MIN_CONFIDENCE = 0.60
+EXTENDED_CLASSIFIER_MIN_CONFIDENCE = 0.90
 US_CLASSIFIER_REJECT_MIN_CONFIDENCE = 0.85
 SEPARATE_REJECT_CLASSIFIER_ENABLED = False
 US_REJECT_CLASSIFIER_MIN_CONFIDENCE = 0.85
@@ -234,6 +252,13 @@ DEBUG_RUNTIME_STATUS_PATH = DEBUG_BASE_DIR / "runtime_status.json"
 DEBUG_CAPTURE_DIRNAME = "captures"
 SNAPSHOT_JPEG_QUALITY = 85
 SPEED_LIMIT_VISION_AFFINITY_CORES = [0, 1, 2]
+SPEED_LIMIT_VISION_COEXISTENCE_AFFINITY_CORES = [0, 1]
+COEXISTENCE_PARAM_REFRESH_SECONDS = 2.0
+COEXISTENCE_TRACK_DETECTOR_INTERVAL = 0.80
+COEXISTENCE_DETECTOR_CLASSIFIER_EXPANSIONS = (
+  (0.00, 0.00, 0.00, 0.00, 1.10),
+  (0.10, 0.06, 0.10, 0.12, 1.00),
+)
 
 
 def device_cpu_usage_busy(cpu_usage):
@@ -244,6 +269,24 @@ def device_cpu_usage_busy(cpu_usage):
     sum(usage) / len(usage) >= DEVICE_BUSY_AVG_CPU_USAGE_PERCENT or
     sum(core_usage >= DEVICE_BUSY_MAX_CPU_USAGE_PERCENT for core_usage in usage) >= DEVICE_BUSY_HOT_CORE_COUNT
   )
+
+
+def memory_pressure_level(available_kb=None, usage_percent=None):
+  """Classify memory pressure without treating low free page cache as an emergency."""
+  critical = (
+    available_kb is not None and available_kb <= MEMORY_CRITICAL_AVAILABLE_KB
+  ) or (
+    usage_percent is not None and usage_percent >= MEMORY_CRITICAL_USAGE_PERCENT
+  )
+  if critical:
+    return "critical"
+
+  pressure = (
+    available_kb is not None and available_kb <= MEMORY_PRESSURE_AVAILABLE_KB
+  ) or (
+    usage_percent is not None and usage_percent >= MEMORY_PRESSURE_USAGE_PERCENT
+  )
+  return "pressure" if pressure else "normal"
 
 
 @dataclass
@@ -293,6 +336,7 @@ class SpeedLimitVisionDaemon:
     self.VisionIpcClient = None
     self.VisionStreamType = None
     self.sm = None
+    self.is_metric = False
 
     if self.use_runtime:
       from cereal import messaging
@@ -304,10 +348,11 @@ class SpeedLimitVisionDaemon:
       self.pm = messaging.PubMaster(["userBookmark"])
       self.params = Params(return_defaults=True)
       self.params_memory = Params(memory=True)
+      self.is_metric = self.params.get_bool("IsMetric")
       self.Ratekeeper = Ratekeeper
       self.VisionIpcClient = VisionIpcClient
       self.VisionStreamType = VisionStreamType
-      self.sm = messaging.SubMaster(["deviceState", "mapdOut", "userBookmark", "livePose"])
+      self.sm = messaging.SubMaster(["deviceState", "mapdOut", "procLog", "userBookmark", "livePose", "starpilotCarState"])
 
     self.client = None
     self.stream_name = ""
@@ -331,6 +376,7 @@ class SpeedLimitVisionDaemon:
     self.track_start_count = 0
     self.max_track_proposal_confidence = 0.0
     self.started_prev = False
+    self.parked_prev = False
 
     self.history: deque[HistoryEntry] = deque()
     self.published_speed_limit_mph = 0
@@ -360,6 +406,7 @@ class SpeedLimitVisionDaemon:
     self.debug_log_path = None
     self.debug_bookmark_count = 0
     self.debug_session_started_at = 0.0
+    self.debug_session_unavailable = False
     self.last_logged_status = ""
     self.last_logged_candidate = None
     self.last_runtime_telemetry_at = 0.0
@@ -375,6 +422,15 @@ class SpeedLimitVisionDaemon:
     self.last_inference_interval = INFERENCE_INTERVAL
     self.last_inference_interval_reason = "steady"
     self.last_cpu_busy = False
+    self.memory_pressure_state = "normal"
+    self.memory_skip_count = 0
+    self.last_memory_available_kb = None
+    self.last_memory_usage_percent = None
+    self.coexistence_mode = False
+    self.last_coexistence_param_refresh_at = -float("inf")
+    self.temporal_tracking_enabled = TEMPORAL_TRACKING_ENABLED
+    self.track_detector_interval = TRACK_DETECTOR_INTERVAL
+    self.detector_classifier_expansions = DETECTOR_CLASSIFIER_EXPANSIONS
     self.last_frame_process_duration_s = 0.0
     self.last_detector_forward_count = 0
     self.last_detector_forward_duration_s = 0.0
@@ -385,22 +441,31 @@ class SpeedLimitVisionDaemon:
     self.speed_value_templates = self._build_speed_value_templates()
     self._load_model()
 
-  def _start_debug_session(self):
-    if not self.use_runtime or self.params_memory is None or self.debug_session_id:
-      return
+  def _start_debug_session(self) -> bool:
+    if not self.use_runtime or self.params_memory is None or self.debug_session_id or self.debug_session_unavailable:
+      return False
 
     timestamp = datetime.now(UTC)
     session_id = timestamp.strftime("%Y%m%d_%H%M%S")
     debug_dir = DEBUG_BASE_DIR / session_id
-    suffix = 1
-    while debug_dir.exists():
-      suffix += 1
-      session_id = f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{suffix}"
-      debug_dir = DEBUG_BASE_DIR / session_id
+    try:
+      suffix = 1
+      while debug_dir.exists():
+        suffix += 1
+        session_id = f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{suffix}"
+        debug_dir = DEBUG_BASE_DIR / session_id
 
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    capture_dir = debug_dir / DEBUG_CAPTURE_DIRNAME
-    capture_dir.mkdir(parents=True, exist_ok=True)
+      debug_dir.mkdir(parents=True, exist_ok=True)
+      capture_dir = debug_dir / DEBUG_CAPTURE_DIRNAME
+      capture_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+      self.debug_session_unavailable = True
+      cloudlog.warning(f"Vision speed-limit debug storage unavailable: {exc}")
+      try:
+        self.params_memory.put("VisionSpeedLimitLastEvent", f"debug storage unavailable: {type(exc).__name__}"[:160])
+      except Exception:
+        pass
+      return False
 
     self.debug_session_id = session_id
     self.debug_dir = debug_dir
@@ -415,6 +480,7 @@ class SpeedLimitVisionDaemon:
     self.params_memory.put_int("VisionSpeedLimitBookmarkCount", self.debug_bookmark_count)
     self.params_memory.put("VisionSpeedLimitLastEvent", "")
     self._write_debug_event("session_start", reason="onroad")
+    return True
 
   def _close_debug_session(self):
     self.debug_session_id = ""
@@ -423,9 +489,24 @@ class SpeedLimitVisionDaemon:
     self.debug_log_path = None
     self.debug_bookmark_count = 0
     self.debug_session_started_at = 0.0
+    self.debug_session_unavailable = False
     self.last_logged_status = ""
     self.last_logged_candidate = None
     self.last_debug_heartbeat_at = 0.0
+
+  def _speed_value_unit(self):
+    return "km/h" if self.is_metric else "mph"
+
+  def _speed_value_to_ms(self, speed_value):
+    conversion = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+    return speed_value * conversion
+
+  def _speed_value_from_ms(self, speed_ms):
+    conversion = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
+    return int(round(speed_ms * conversion)) if speed_ms > 0.0 else 0
+
+  def _format_speed_value(self, speed_value):
+    return f"{speed_value} {self._speed_value_unit()}"
 
   def _read_next_map_speed_limit(self):
     if self.params_memory is None:
@@ -468,8 +549,9 @@ class SpeedLimitVisionDaemon:
         next_distance_m = filler_next_distance_m if filler_next_distance_m > 0.0 else next_distance_m
         source = "filler"
 
-    current_limit_mph = int(round(current_limit_ms * CV.MS_TO_MPH)) if current_limit_ms > 0.0 else 0
-    next_limit_mph = int(round(next_limit_ms * CV.MS_TO_MPH)) if next_limit_ms > 0.0 else 0
+    # Historical *_mph fields contain the numeric value printed on the sign.
+    current_limit_mph = self._speed_value_from_ms(current_limit_ms)
+    next_limit_mph = self._speed_value_from_ms(next_limit_ms)
     next_distance_m = round(next_distance_m, 1) if next_distance_m > 0.0 else 0.0
 
     return {
@@ -525,6 +607,7 @@ class SpeedLimitVisionDaemon:
       "mapNextSpeedLimitMph": next_limit_mph,
       "mapNextSpeedLimitDistanceM": next_distance_m,
       "mapExpectedSpeedLimitMph": expected_speed_limit_mph,
+      "mapSpeedLimitUnit": self._speed_value_unit(),
       "mapRelation": map_relation,
       "reviewBucket": review_bucket,
     }
@@ -556,6 +639,7 @@ class SpeedLimitVisionDaemon:
       "roadName": self.last_road_name,
       "stream": self.stream_name,
       "publishedSpeedLimitMph": self.published_speed_limit_mph,
+      "speedLimitUnit": self._speed_value_unit(),
       "publishedConfidence": round(self.published_confidence, 4),
       "bookmarkCount": self.debug_bookmark_count,
       "status": self.params_memory.get("VisionSpeedLimitStatus", encoding="utf-8") or "",
@@ -582,9 +666,9 @@ class SpeedLimitVisionDaemon:
 
     summary_parts = [event_type.replace("_", " ")]
     if "speedLimitMph" in fields:
-      summary_parts.append(f"{fields['speedLimitMph']} mph")
+      summary_parts.append(self._format_speed_value(fields["speedLimitMph"]))
     elif "candidateSpeedLimitMph" in fields:
-      summary_parts.append(f"{fields['candidateSpeedLimitMph']} mph")
+      summary_parts.append(self._format_speed_value(fields["candidateSpeedLimitMph"]))
     summary = " ".join(summary_parts)
     self.params_memory.put("VisionSpeedLimitLastEvent", summary[:160])
 
@@ -816,18 +900,112 @@ class SpeedLimitVisionDaemon:
       return False
     return device_cpu_usage_busy(self.sm["deviceState"].cpuUsagePercent)
 
+  def _update_memory_pressure(self):
+    available_kb = None
+    usage_percent = None
+    if self.sm is not None:
+      if self.sm.valid.get("procLog", False):
+        try:
+          available_kb = int(self.sm["procLog"].mem.available)
+        except (AttributeError, TypeError, ValueError):
+          available_kb = None
+      if self.sm.valid.get("deviceState", False):
+        try:
+          usage_percent = float(self.sm["deviceState"].memoryUsagePercent)
+        except (AttributeError, TypeError, ValueError):
+          usage_percent = None
+
+    self.last_memory_available_kb = available_kb
+    self.last_memory_usage_percent = usage_percent
+    requested = memory_pressure_level(available_kb, usage_percent)
+
+    # Hysteresis prevents reclaim fluctuations from repeatedly starting and stopping inference.
+    if self.memory_pressure_state == "critical":
+      if requested == "critical":
+        return self.memory_pressure_state
+      recovered = (
+        available_kb is not None and available_kb >= MEMORY_RECOVERY_AVAILABLE_KB and
+        (usage_percent is None or usage_percent <= MEMORY_RECOVERY_USAGE_PERCENT)
+      ) or (
+        available_kb is None and usage_percent is not None and usage_percent <= MEMORY_RECOVERY_USAGE_PERCENT
+      )
+      self.memory_pressure_state = "normal" if recovered else "pressure"
+    elif self.memory_pressure_state == "pressure":
+      if requested == "critical":
+        self.memory_pressure_state = "critical"
+      elif (
+        available_kb is not None and available_kb < MEMORY_RECOVERY_AVAILABLE_KB
+      ) or (
+        usage_percent is not None and usage_percent > MEMORY_RECOVERY_USAGE_PERCENT
+      ):
+        return self.memory_pressure_state
+      else:
+        self.memory_pressure_state = "normal"
+    else:
+      self.memory_pressure_state = requested
+    return self.memory_pressure_state
+
+  def _update_coexistence_mode(self, now):
+    if self.params is None or now - self.last_coexistence_param_refresh_at < COEXISTENCE_PARAM_REFRESH_SECONDS:
+      return
+    self.last_coexistence_param_refresh_at = now
+
+    coexistence_mode = self.params.get_bool("VASMEnabled")
+    if coexistence_mode == self.coexistence_mode:
+      return
+
+    self.coexistence_mode = coexistence_mode
+    self.latest_detector_proposal = None
+    self._clear_proposal_track()
+    if coexistence_mode:
+      self.temporal_tracking_enabled = True
+      self.track_detector_interval = COEXISTENCE_TRACK_DETECTOR_INTERVAL
+      self.detector_classifier_expansions = COEXISTENCE_DETECTOR_CLASSIFIER_EXPANSIONS
+      affinity_cores = SPEED_LIMIT_VISION_COEXISTENCE_AFFINITY_CORES
+    else:
+      self.temporal_tracking_enabled = TEMPORAL_TRACKING_ENABLED
+      self.track_detector_interval = TRACK_DETECTOR_INTERVAL
+      self.detector_classifier_expansions = DETECTOR_CLASSIFIER_EXPANSIONS
+      affinity_cores = SPEED_LIMIT_VISION_AFFINITY_CORES
+
+    if not PC:
+      set_core_affinity(affinity_cores)
+
   def _inference_interval(self, now):
     in_followup = now < self.followup_until
     interval = FOLLOWUP_INFERENCE_INTERVAL if in_followup else INFERENCE_INTERVAL
     reason = "followup" if in_followup else "steady"
     self.last_cpu_busy = False
+    memory_pressure = self._update_memory_pressure()
     if now - self.last_live_pose_inputs_not_ok_at < LIVE_POSE_RECOVERY_THROTTLE_SECONDS:
       interval = max(interval, LIVE_POSE_RECOVERY_INFERENCE_INTERVAL)
       reason = "live_pose_recovery"
-    elif self._device_cpu_busy():
-      self.last_cpu_busy = True
-      interval = max(interval, BUSY_INFERENCE_INTERVAL)
-      reason = "cpu_busy"
+    elif memory_pressure == "critical":
+      interval = max(interval, MEMORY_PRESSURE_INFERENCE_INTERVAL)
+      reason = "memory_critical"
+    elif memory_pressure == "pressure":
+      interval = max(interval, MEMORY_PRESSURE_INFERENCE_INTERVAL)
+      reason = "memory_pressure"
+    else:
+      processing_interval = min(
+        BUSY_INFERENCE_INTERVAL,
+        self.last_frame_process_duration_s * PROCESSING_THROTTLE_RATIO,
+      )
+      if processing_interval > interval:
+        interval = processing_interval
+        reason = "processing_cost"
+
+      if self.coexistence_mode:
+        cpu_usage = list(self.sm["deviceState"].cpuUsagePercent) if self.sm is not None and self.sm.valid.get("deviceState", False) else []
+        factor = device_cpu_throttle_factor(cpu_usage, name="SpeedLimit")
+        if factor > 1.05:
+          self.last_cpu_busy = True
+          interval *= factor
+          reason = f"cpu_{factor:.1f}x"
+      elif self._device_cpu_busy():
+        self.last_cpu_busy = True
+        interval = max(interval, BUSY_INFERENCE_INTERVAL)
+        reason = "cpu_busy"
     self.last_inference_interval = interval
     self.last_inference_interval_reason = reason
     return interval
@@ -994,9 +1172,7 @@ class SpeedLimitVisionDaemon:
       stream_name = "wide camera"
 
     if desired_stream is None:
-      self.client = None
-      self.stream_type = None
-      self.stream_name = ""
+      self._disconnect_camera()
       return False
 
     if self.client is None or self.stream_type != desired_stream:
@@ -1008,6 +1184,32 @@ class SpeedLimitVisionDaemon:
       self.client.connect(True)
 
     return self.client.is_connected()
+
+  def _disconnect_camera(self):
+    # Dropping the client closes its imported VisionIPC buffer FDs. Keeping the
+    # client alive offroad pins the previous camerad allocation between drives.
+    self.client = None
+    self.stream_type = None
+    self.stream_name = ""
+
+  def _receive_frame_bgr(self):
+    # Keep VisionBuf and its NumPy view inside this short-lived scope. A local
+    # in run() survives loop iterations and can otherwise retain the old
+    # VisionIpcClient, including all imported camera buffers, while offroad.
+    client = self.client
+    if client is None:
+      return None
+
+    buffer = client.recv()
+    if buffer is None:
+      return None
+
+    data = buffer.data
+    if not data.any():
+      return None
+
+    image = np.frombuffer(data, dtype=np.uint8).reshape((len(data) // client.stride, client.stride))
+    return cv2.cvtColor(image[:client.height * 3 // 2, :client.width], cv2.COLOR_YUV2BGR_NV12)
 
   @staticmethod
   def _letterbox(image, shape=(640, 640), color=(114, 114, 114)):
@@ -1099,7 +1301,7 @@ class SpeedLimitVisionDaemon:
 
   def _remember_detector_proposal(self, confidence, class_id, bbox, speed_limit_mph=0, preferred=False):
     min_confidence = TRACK_MIN_PROPOSAL_CONFIDENCE if speed_limit_mph else TRACK_UNREADABLE_MIN_PROPOSAL_CONFIDENCE
-    if not TEMPORAL_TRACKING_ENABLED or class_id == 1 or confidence < min_confidence:
+    if not getattr(self, "temporal_tracking_enabled", TEMPORAL_TRACKING_ENABLED) or class_id == 1 or confidence < min_confidence:
       return
     proposal = DetectorProposal(float(confidence), int(class_id), bbox, int(speed_limit_mph))
     latest_proposal = getattr(self, "latest_detector_proposal", None)
@@ -1110,7 +1312,7 @@ class SpeedLimitVisionDaemon:
     proposal = self.latest_detector_proposal
     self.latest_detector_proposal = None
     if (
-      not TEMPORAL_TRACKING_ENABLED or
+      not getattr(self, "temporal_tracking_enabled", TEMPORAL_TRACKING_ENABLED) or
       proposal is None or
       (proposal.speed_limit_mph and not TRACK_CONFIRMED_PROPOSALS_ENABLED)
     ):
@@ -1141,7 +1343,14 @@ class SpeedLimitVisionDaemon:
     interval = TRACK_CLASSIFICATION_INTERVAL
     if now - self.last_live_pose_inputs_not_ok_at < LIVE_POSE_RECOVERY_THROTTLE_SECONDS:
       return max(interval, LIVE_POSE_RECOVERY_INFERENCE_INTERVAL)
-    if self._device_cpu_busy():
+    memory_pressure = self._update_memory_pressure()
+    if memory_pressure in ("pressure", "critical"):
+      return max(interval, MEMORY_PRESSURE_CLASSIFICATION_INTERVAL)
+    if self.coexistence_mode:
+      cpu_usage = list(self.sm["deviceState"].cpuUsagePercent) if self.sm is not None and self.sm.valid.get("deviceState", False) else []
+      if device_cpu_throttle_factor(cpu_usage, name="SpeedLimit") > 1.05:
+        return max(interval, TRACK_BUSY_CLASSIFICATION_INTERVAL)
+    elif self._device_cpu_busy():
       return max(interval, TRACK_BUSY_CLASSIFICATION_INTERVAL)
     return interval
 
@@ -1153,6 +1362,13 @@ class SpeedLimitVisionDaemon:
       self._clear_proposal_track()
       return False
     return now - track.last_classified_at >= self._track_classification_interval(now)
+
+  def _detector_interval(self, inference_interval):
+    if self.coexistence_mode:
+      return max(inference_interval, self.track_detector_interval)
+    if self.proposal_track is not None:
+      return max(inference_interval, TRACK_DETECTOR_INTERVAL)
+    return inference_interval
 
   def _classify_proposal_track(self, frame_bgr, now):
     track = self.proposal_track
@@ -1261,6 +1477,8 @@ class SpeedLimitVisionDaemon:
     if detection is None:
       return None
     if detection.speed_limit_mph < MIN_PUBLISHABLE_SPEED_LIMIT_MPH:
+      return None
+    if not getattr(self, "is_metric", False) and detection.speed_limit_mph > MAX_IMPERIAL_PUBLISHABLE_SPEED_LIMIT_MPH:
       return None
     return detection
 
@@ -1590,12 +1808,16 @@ class SpeedLimitVisionDaemon:
     speed_probabilities = probabilities[:speed_class_count]
     class_index = int(np.argmax(speed_probabilities))
     confidence = float(speed_probabilities[class_index])
+    speed_limit = US_CLASSIFIER_SPEED_VALUES[class_index]
     if has_reject_class and float(probabilities[speed_class_count]) >= max(confidence, US_CLASSIFIER_REJECT_MIN_CONFIDENCE):
       return None
-    if confidence < US_CLASSIFIER_MIN_CONFIDENCE:
+    minimum_confidence = (
+      EXTENDED_CLASSIFIER_MIN_CONFIDENCE if speed_limit in EXTENDED_CLASSIFIER_SPEED_VALUES else US_CLASSIFIER_MIN_CONFIDENCE
+    )
+    if confidence < minimum_confidence:
       return None
 
-    return US_CLASSIFIER_SPEED_VALUES[class_index], confidence
+    return speed_limit, confidence
 
   def _detect_sign_from_detector_classifier(self, frame_bgr):
     frame_height, frame_width = frame_bgr.shape[:2]
@@ -1696,7 +1918,8 @@ class SpeedLimitVisionDaemon:
       speed_direct_model_support: dict[int, int] = {}
       speed_strong_model_support: dict[int, int] = {}
 
-      for expand_left, expand_top, expand_right, expand_bottom, expansion_weight in DETECTOR_CLASSIFIER_EXPANSIONS:
+      expansions = getattr(self, "detector_classifier_expansions", DETECTOR_CLASSIFIER_EXPANSIONS)
+      for expand_left, expand_top, expand_right, expand_bottom, expansion_weight in expansions:
         expanded_x1 = max(int(x1 - box_width * expand_left), 0)
         expanded_y1 = max(int(y1 - box_height * expand_top), 0)
         expanded_x2 = min(int(x2 + box_width * expand_right), frame_width)
@@ -2203,6 +2426,24 @@ class SpeedLimitVisionDaemon:
     if self.params_memory is not None:
       self.params_memory.remove("VisionSpeedLimit")
       self.params_memory.remove("VisionSpeedLimitConfidence")
+      self.params_memory.remove("VisionSpeedLimitSupportCount")
+      self.params_memory.remove("VisionSpeedLimitSupportSpeed")
+
+  def _enter_parked(self, now):
+    self.current_frame_bgr = None
+    self.latest_detector_proposal = None
+    self._clear_proposal_track()
+    self.pending_auto_bookmark = None
+    self.pending_training_capture = None
+    self.followup_until = 0.0
+    self._publish_status("Idle - parked", clear_speed=False)
+    self._publish_runtime_telemetry(now, "parked", force=True)
+
+  def _publish_detection_support(self, speed_limit_mph, support_count):
+    if self.params_memory is None:
+      return
+    self.params_memory.put_int("VisionSpeedLimitSupportCount", support_count)
+    self.params_memory.put_float("VisionSpeedLimitSupportSpeed", self._speed_value_to_ms(speed_limit_mph))
 
   def _publish_status(self, status, clear_speed=False):
     if clear_speed:
@@ -2294,8 +2535,12 @@ class SpeedLimitVisionDaemon:
         "lastClassifierForwardCount": self.last_classifier_forward_count,
         "lastClassifierForwardDurationS": round(self.last_classifier_forward_duration_s, 3),
         "cpuUsagePercent": cpu_usage,
+        "memoryAvailableMb": round(self.last_memory_available_kb / 1024, 1) if self.last_memory_available_kb is not None else None,
+        "memoryUsagePercent": round(self.last_memory_usage_percent, 1) if self.last_memory_usage_percent is not None else None,
+        "memoryPressure": self.memory_pressure_state,
         "livePoseInputsOK": live_pose_inputs_ok,
         "publishedSpeedLimitMph": self.published_speed_limit_mph,
+        "speedLimitUnit": self._speed_value_unit(),
         "publishedConfidence": round(self.published_confidence, 4),
         "lastCandidateSpeedLimitMph": self.last_candidate_speed_limit_mph,
         "lastCandidateConfidence": round(self.last_candidate_confidence, 4),
@@ -2351,14 +2596,14 @@ class SpeedLimitVisionDaemon:
         confidence=round(confidence, 4),
       )
       if self.params_memory is not None:
-        self.params_memory.put_float("VisionSpeedLimit", speed_limit_mph * CV.MPH_TO_MS)
+        self.params_memory.put_float("VisionSpeedLimit", self._speed_value_to_ms(speed_limit_mph))
         self.params_memory.put_float("VisionSpeedLimitConfidence", confidence)
       if published_changed:
         self.history.clear()
         self.history.append(HistoryEntry(speed_limit_mph, confidence, time.monotonic()))
         self._schedule_auto_bookmark(speed_limit_mph, confidence, self.last_publish_change_at)
 
-    status = f"{status_prefix} {speed_limit_mph} mph ({confidence * 100:.0f}%)"
+    status = f"{status_prefix} {self._format_speed_value(speed_limit_mph)} ({confidence * 100:.0f}%)"
     self._publish_status(status, clear_speed=False)
 
   def _should_hold_current_publish(self, speed_limit_mph, confidence, now):
@@ -2399,15 +2644,20 @@ class SpeedLimitVisionDaemon:
     confirmed = self._confirm_detection()
     if confirmed is not None:
       speed_limit_mph, confidence = confirmed
+      support_count = sum(entry.speed_limit_mph == speed_limit_mph for entry in self.history)
       if self._should_hold_current_publish(speed_limit_mph, confidence, now):
         self._publish_status(
-          f"Candidate {speed_limit_mph} mph ({confidence * 100:.0f}%)",
+          f"Candidate {self._format_speed_value(speed_limit_mph)} ({confidence * 100:.0f}%)",
           clear_speed=False,
         )
       else:
         self._publish_detection(speed_limit_mph, confidence, "Holding")
+        self._publish_detection_support(speed_limit_mph, support_count)
     else:
-      self._publish_status(f"Candidate {detection.speed_limit_mph} mph ({detection.confidence * 100:.0f}%)", clear_speed=False)
+      self._publish_status(
+        f"Candidate {self._format_speed_value(detection.speed_limit_mph)} ({detection.confidence * 100:.0f}%)",
+        clear_speed=False,
+      )
 
   def run(self):
     if not self.use_runtime or self.sm is None:
@@ -2419,6 +2669,7 @@ class SpeedLimitVisionDaemon:
       now = time.monotonic()
       self.loop_count += 1
       self.sm.update(0)
+      self._update_memory_pressure()
 
       if self.sm.updated["userBookmark"]:
         if self.ignore_next_user_bookmark:
@@ -2436,8 +2687,10 @@ class SpeedLimitVisionDaemon:
         if self.started_prev:
           self._write_debug_event("session_end", reason="offroad")
           self._close_debug_session()
+          self._disconnect_camera()
         self.last_road_name = ""
         self.started_prev = False
+        self.parked_prev = False
         self.current_frame_bgr = None
         self.pending_auto_bookmark = None
         self._publish_status("Idle - offroad", clear_speed=True)
@@ -2452,10 +2705,23 @@ class SpeedLimitVisionDaemon:
         self.started_prev = True
         self._start_debug_session()
         self._publish_runtime_telemetry(now, "onroad_start", force=True)
-      elif not self.debug_session_id:
-        self._start_debug_session()
+      elif not self.debug_session_id and self._start_debug_session():
         self._write_debug_event("session_recovered", reason="missing_debug_session_while_onroad")
         self._publish_runtime_telemetry(now, "session_recovered", force=True)
+
+      parked = self.sm["starpilotCarState"].isParked if self.sm.valid.get("starpilotCarState", False) else False
+      if parked:
+        if not self.parked_prev:
+          self._enter_parked(now)
+        else:
+          self._publish_runtime_telemetry(now, "parked")
+        self.parked_prev = True
+        ratekeeper.keep_time()
+        continue
+      if self.parked_prev:
+        self.parked_prev = False
+        self.last_inference_at = -float("inf")
+        self._publish_runtime_telemetry(now, "parked_exit", force=True)
 
       road_name = self.sm["mapdOut"].roadName
       if self.last_road_name and road_name and road_name != self.last_road_name:
@@ -2463,24 +2729,33 @@ class SpeedLimitVisionDaemon:
         self._clear_detection()
       self.last_road_name = road_name or self.last_road_name
 
+      if self.memory_pressure_state == "critical":
+        self.memory_skip_count += 1
+        self._disconnect_camera()
+        self._publish_status("Memory pressure - inference paused", clear_speed=True)
+        self._publish_runtime_telemetry(now, "memory_pressure")
+        ratekeeper.keep_time()
+        continue
+
       if not self._connect_camera():
         self.camera_unavailable_count += 1
         stale_cleared = self._clear_published_detection_if_stale(now, "camera_unavailable")
         status = "Waiting for camera stream"
         if self.published_speed_limit_mph > 0 and not stale_cleared:
-          status = f"{status}, holding {self.published_speed_limit_mph} mph"
+          status = f"{status}, holding {self._format_speed_value(self.published_speed_limit_mph)}"
         self._publish_status(status, clear_speed=False)
         self._publish_runtime_telemetry(now, "camera_unavailable")
         ratekeeper.keep_time()
         continue
 
+      self._update_coexistence_mode(now)
       inference_interval = self._inference_interval(now)
       track_due = self._track_classification_due(now)
-      detector_interval = max(inference_interval, TRACK_DETECTOR_INTERVAL) if self.proposal_track is not None else inference_interval
+      detector_interval = self._detector_interval(inference_interval)
       detector_due = now - self.last_inference_at >= detector_interval
       if not track_due and not detector_due:
         self.interval_skip_count += 1
-        if self.last_inference_interval_reason == "cpu_busy":
+        if self.last_cpu_busy:
           self.busy_skip_count += 1
         stale_cleared = self._clear_published_detection_if_stale(now, "inference_interval")
         if self.published_speed_limit_mph > 0 and not stale_cleared:
@@ -2491,7 +2766,7 @@ class SpeedLimitVisionDaemon:
         ratekeeper.keep_time()
         continue
 
-      buffer = self.client.recv() if self.client is not None else None
+      frame_bgr = self._receive_frame_bgr()
       self.inference_count += 1
       inference_started_at = time.monotonic()
       self.last_frame_process_duration_s = 0.0
@@ -2499,19 +2774,20 @@ class SpeedLimitVisionDaemon:
       self.last_detector_forward_duration_s = 0.0
       self.last_classifier_forward_count = 0
       self.last_classifier_forward_duration_s = 0.0
-      if buffer is None or not buffer.data.any():
+      if frame_bgr is None:
         self.empty_frame_count += 1
         stale_cleared = self._clear_published_detection_if_stale(now, "empty_frame")
         if self.published_speed_limit_mph > 0 and not stale_cleared:
-          self._publish_status(f"Waiting for {self.stream_name}, holding {self.published_speed_limit_mph} mph", clear_speed=False)
+          self._publish_status(
+            f"Waiting for {self.stream_name}, holding {self._format_speed_value(self.published_speed_limit_mph)}",
+            clear_speed=False,
+          )
         else:
           self._publish_status(f"Waiting for {self.stream_name}", clear_speed=False)
         self._publish_runtime_telemetry(now, "empty_frame")
         ratekeeper.keep_time()
         continue
 
-      image = np.frombuffer(buffer.data, dtype=np.uint8).reshape((len(buffer.data) // self.client.stride, self.client.stride))
-      frame_bgr = cv2.cvtColor(image[:self.client.height * 3 // 2, :self.client.width], cv2.COLOR_YUV2BGR_NV12)
       self.current_frame_bgr = frame_bgr
 
       if detector_due:

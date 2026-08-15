@@ -5,6 +5,7 @@ from collections.abc import Callable
 from enum import Enum
 import pyray as rl
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
+from openpilot.starpilot.common.vision_bsm import get_fresh_vasm_state
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.lib.starpilot_status import (
@@ -55,7 +56,8 @@ def _csc_state():
     return None
 
   plan = sm["starpilotPlan"]
-  if plan.speedLimitChanged or not ui_state.params.get_bool("ShowCSCStatus"):
+  params = ui_state.ui_params
+  if plan.speedLimitChanged or not params.get_bool("ShowCSCStatus"):
     return None
 
   car_state = sm["carState"]
@@ -175,11 +177,16 @@ def render_background_effects(rect: rl.Rectangle, border_width: float):
   # 1. Turn Signal and Blind Spot indicators
   car_state = sm["carState"] if sm.valid.get("carState", False) else None
   if car_state:
-    show_signal = ui_state.params.get_bool("SignalMetrics")
-    show_blindspot = ui_state.params.get_bool("BlindSpotMetrics")
+    params = ui_state.ui_params
+    show_signal = params.get_bool("SignalMetrics")
+    show_blindspot = params.get_bool("BlindSpotMetrics")
     if show_signal or show_blindspot:
       left_blindspot = car_state.leftBlindspot
       right_blindspot = car_state.rightBlindspot
+      if ui_state.starpilot_toggles.get("v_asm_enabled", False):
+        vasm_left, vasm_right = get_fresh_vasm_state(ui_state.params_memory)
+        left_blindspot = left_blindspot or vasm_left
+        right_blindspot = right_blindspot or vasm_right
       left_blinker = car_state.leftBlinker
       right_blinker = car_state.rightBlinker
 
@@ -216,7 +223,7 @@ def render_background_effects(rect: rl.Rectangle, border_width: float):
   # 2. Steering Torque Border
   car_control = sm["carControl"] if sm.valid.get("carControl", False) else None
   if car_control:
-    show_steering = ui_state.params.get_bool("ShowSteering")
+    show_steering = ui_state.ui_params.get_bool("ShowSteering")
     if show_steering:
       torque = -car_control.actuators.torque
       abs_torque = abs(torque)

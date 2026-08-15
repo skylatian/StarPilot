@@ -2,12 +2,24 @@ import importlib
 import sys
 import types
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 MODULE_NAME = "openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid"
 PANEL_MODULE_NAME = "openpilot.selfdrive.ui.layouts.settings.starpilot.panel"
 SECTIONED_PANEL_MODULE_NAME = "openpilot.selfdrive.ui.layouts.settings.starpilot.sectioned_panel"
+
+
+@pytest.fixture(autouse=True)
+def restore_ui_modules():
+  modules = {name: module for name, module in sys.modules.items() if name == "pyray" or name.startswith("openpilot.")}
+  yield
+  for name in tuple(sys.modules):
+    if (name == "pyray" or name.startswith("openpilot.")) and name not in modules:
+      sys.modules.pop(name, None)
+  sys.modules.update(modules)
 
 
 def _clear_modules(*module_names):
@@ -32,6 +44,7 @@ def _install_aethergrid_stubs():
     Texture2D=type("Texture2D", (), {}),
     Font=type("Font", (), {}),
     GuiTextAlignment=types.SimpleNamespace(TEXT_ALIGN_CENTER=0),
+    BlendMode=types.SimpleNamespace(BLEND_ALPHA_PREMULTIPLY=1),
     WHITE=types.SimpleNamespace(r=255, g=255, b=255, a=255),
     draw_rectangle_rounded=lambda *a, **k: None,
     draw_rectangle_rounded_lines_ex=lambda *a, **k: None,
@@ -44,6 +57,8 @@ def _install_aethergrid_stubs():
     draw_line_ex=lambda *a, **k: None,
     draw_triangle=lambda *a, **k: None,
     draw_texture_pro=lambda *a, **k: None,
+    begin_blend_mode=lambda *a, **k: None,
+    end_blend_mode=lambda *a, **k: None,
     draw_text_ex=lambda *a, **k: None,
     check_collision_point_rec=lambda p, r: (r.x <= p.x <= r.x + r.width) and (r.y <= p.y <= r.y + r.height),
     get_frame_time=lambda: 0.016,
@@ -153,10 +168,13 @@ def _install_panel_stubs(aethergrid):
   sectioned_mod = types.ModuleType(SECTIONED_PANEL_MODULE_NAME)
   sectioned_mod.SectionedTileLayout = type("SectionedTileLayout", (), {})
   sectioned_mod.TileSection = type("TileSection", (), {})
+  starpilot_variables_mod = types.ModuleType("openpilot.starpilot.common.starpilot_variables")
+  starpilot_variables_mod.update_starpilot_toggles = lambda: None
 
   _register_modules({
     SECTIONED_PANEL_MODULE_NAME: sectioned_mod,
     "openpilot.common.params": types.SimpleNamespace(Params=type("Params", (), {}), UnknownKeyName=Exception),
+    "openpilot.starpilot.common.starpilot_variables": starpilot_variables_mod,
     MODULE_NAME: aethergrid,
   })
 
@@ -245,48 +263,63 @@ class TestAethergridContracts(unittest.TestCase):
     self.assertGreater(hit.height, tile._rect.height)
 
 
-  def test_aether_tile_uses_single_planar_face_contract(self):
-    mod = _import_aethergrid()
-    tile = mod.AetherTile(surface_color="#3B82F6")
-    face = tile._surface_rect(mod.rl.Rectangle(0, 0, 320, 160))
-
-    self.assertLess(face.width, 320)
-    self.assertLess(face.height, 160)
-    self.assertGreaterEqual(face.x, 0)
-    self.assertGreaterEqual(face.y, 0)
-
-  def test_aether_tile_surface_rect_snaps_to_integer_pixels(self):
-    mod = _import_aethergrid()
-    tile = mod.AetherTile(surface_color="#3B82F6")
-    face = tile._surface_rect(mod.rl.Rectangle(0.5, 0.5, 320.25, 160.75))
-
-    self.assertEqual(face.x, round(face.x))
-    self.assertEqual(face.y, round(face.y))
-    self.assertEqual(face.width, round(face.width))
-    self.assertEqual(face.height, round(face.height))
-
-  def test_aether_tile_preserves_substrate_color_attribute_for_compatibility(self):
-    mod = _import_aethergrid()
-    substrate = mod.hex_to_color("#101820")
-    tile = mod.AetherTile(surface_color="#3B82F6", substrate_color=substrate)
-
-    self.assertIs(tile.substrate_color, substrate)
-
-
   def test_hub_tile_preserves_status_progress_api(self):
     mod = _import_aethergrid()
     tile = mod.HubTile("Driving Controls", "Desc", bg_color="#3B82F6", get_status=lambda: "Download 50%")
 
     self.assertEqual(tile.get_status(), "Download 50%")
 
-  def test_tile_stack_layout_keeps_full_content_block_inside_face(self):
+  def test_custom_icon_draws_directly_while_cache_fill_is_pending(self):
     mod = _import_aethergrid()
-    tile = mod.AetherTile(surface_color="#3B82F6")
-    face = mod.rl.Rectangle(0, 0, 320, 180)
-    layout = tile._measure_tile_stack(face, icon_height=60, title_lines=2, title_size=28, primary_size=30, desc_lines=2, desc_size=18)
+    scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    geometry = MagicMock()
+    cache = MagicMock(return_value=None)
 
-    self.assertGreaterEqual(layout["top"], 0)
-    self.assertLessEqual(layout["desc_bottom"], face.height)
+    color = mod.rl.Color(255, 255, 255, 255)
+    with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
+         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True):
+      scribble.draw_custom_icon("sound", 10, 20, 1.0, color)
+
+    cache.assert_called_once()
+    geometry.assert_called_once_with("sound", 10, 20, 1.0, color)
+
+  def test_custom_icon_uses_completed_cache_without_redrawing_geometry(self):
+    mod = _import_aethergrid()
+    scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    geometry = MagicMock()
+    cache = MagicMock(return_value=object())
+    draw_texture = MagicMock()
+
+    with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
+         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True), \
+         patch.object(scribble.rl, "draw_texture_pro", draw_texture):
+      scribble.draw_custom_icon("sound", 10, 20, 1.0, mod.rl.Color(255, 255, 255, 255))
+
+    geometry.assert_not_called()
+    draw_texture.assert_called_once()
+    destination = draw_texture.call_args.args[2]
+    self.assertLess(destination.x, 10)
+    self.assertLess(destination.y, 20)
+
+  def test_translucent_custom_icon_uses_premultiplied_blending(self):
+    mod = _import_aethergrid()
+    scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    geometry = MagicMock()
+    cache = MagicMock(return_value=object())
+    begin_blend = MagicMock()
+    end_blend = MagicMock()
+
+    color = mod.rl.Color(160, 170, 185, 80)
+    with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
+         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True), \
+         patch.object(scribble.rl, "begin_blend_mode", begin_blend), \
+         patch.object(scribble.rl, "end_blend_mode", end_blend):
+      scribble.draw_custom_icon("first_aid", 10, 20, 0.8, color)
+
+    cache.assert_called_once()
+    geometry.assert_not_called()
+    begin_blend.assert_called_once_with(mod.rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
+    end_blend.assert_called_once()
 
   def test_tile_grid_reflows_to_wider_tiles_when_width_is_tight(self):
     mod = _import_aethergrid()
@@ -452,13 +485,12 @@ class TestAethergridContracts(unittest.TestCase):
   def test_disabled_tiles_hud_mode_rendering(self):
     mod = _import_aethergrid()
     
-    # ToggleTile disabled, show_led=True
+    # ToggleTile disabled
     toggle = mod.ToggleTile(
       title="Test Loud",
       get_state=lambda: True,
       set_state=lambda s: None,
       is_enabled=lambda: False,
-      show_led=True
     )
     # Spy on _render_hud_background
     orig_hud_bg = toggle._render_hud_background

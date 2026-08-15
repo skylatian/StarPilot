@@ -3,9 +3,14 @@ import datetime
 import pytest
 
 from openpilot.common.constants import CV
+from openpilot.common.realtime import DT_MDL
+from openpilot.starpilot.common.starpilot_variables import PLANNER_TIME
+from openpilot.starpilot.controls.lib.curve_speed_controller import CSC_MAX_DECEL_RATE, CurveSpeedController
 from openpilot.starpilot.controls.lib.starpilot_vcruise import (
+  FORCE_STOP_TURN_VETO_STOP_SEEN_HOLD_TIME,
   StarPilotVCruise,
   get_active_slc_control_target,
+  get_lead_veto_distance,
   get_slc_lead_drop_relaxed_target,
 )
 from types import SimpleNamespace
@@ -14,6 +19,7 @@ from types import SimpleNamespace
 class FakeParams:
   def __init__(self, values=None):
     self.values = dict(values or {})
+    self.writes = []
 
   def get(self, *args, **kwargs):
     key = args[0] if args else None
@@ -22,8 +28,9 @@ class FakeParams:
   def get_float(self, *args, **kwargs):
     return 0.0
 
-  def put_nonblocking(self, *args, **kwargs):
-    pass
+  def put_nonblocking(self, key, value):
+    self.values[key] = value
+    self.writes.append((key, value))
 
 
 def make_vcruise(*, red_light=False, raw_model_stopped=False, forcing_stop=False, nav_state=None, road_curvature=0.0):
@@ -32,6 +39,7 @@ def make_vcruise(*, red_light=False, raw_model_stopped=False, forcing_stop=False
     params_memory=FakeParams({"NavInstructionState": nav_state or {}}),
     lead_one=SimpleNamespace(status=False, dRel=float("inf"), vLead=0.0),
     starpilot_cem=SimpleNamespace(stop_light_detected=red_light),
+    starpilot_following=SimpleNamespace(following_lead=False),
     tracking_lead=False,
     driving_in_curve=False,
     model_length=60.0,
@@ -52,6 +60,7 @@ def make_sm(*, standstill=True, min_steer_speed=0.0):
     "carState": SimpleNamespace(
       standstill=standstill,
       gasPressed=False,
+      brakePressed=False,
       vCruiseCluster=0.0,
       vEgoCluster=0.0,
       leftBlinker=False,
@@ -60,6 +69,7 @@ def make_sm(*, standstill=True, min_steer_speed=0.0):
     ),
     "carParams": SimpleNamespace(minSteerSpeed=min_steer_speed),
     "starpilotCarState": SimpleNamespace(accelPressed=False, dashboardStopSign=0, dashboardSpeedLimit=0),
+    "onroadEvents": [],
   }
 
 
@@ -80,6 +90,7 @@ def make_toggles():
     force_stops=True,
     force_standstill=False,
     curve_speed_controller=False,
+    csc_no_lead=False,
     nav_longitudinal_allowed=False,
     speed_limit_controller=False,
     show_speed_limits=False,
@@ -98,6 +109,11 @@ def test_active_slc_control_target_does_not_require_set_speed_limit():
   )
 
   assert target == pytest.approx((48.0 * CV.MPH_TO_MS) - 0.4)
+
+
+def test_elantra_gets_lead_veto_margin_before_force_stop():
+  assert get_lead_veto_distance(SimpleNamespace(carFingerprint="HYUNDAI_ELANTRA_2021")) == pytest.approx(90.0)
+  assert get_lead_veto_distance(SimpleNamespace(carFingerprint="OTHER_CAR")) == pytest.approx(75.0)
 
 
 def test_curve_speed_controller_holds_target_through_brief_detector_dropout():
@@ -148,6 +164,124 @@ def test_curve_speed_controller_releases_immediately_when_disabled():
   assert not vcruise.csc_controlling_speed
 
 
+def test_curve_speed_controller_can_be_limited_to_driving_without_a_lead():
+  planner, vcruise = make_vcruise()
+  sm = make_sm(standstill=False)
+  toggles = make_toggles()
+  toggles.curve_speed_controller = True
+  toggles.csc_no_lead = True
+
+  def set_curve_target(_v_ego):
+    vcruise.csc.target_set = True
+    vcruise.csc.target = 14.0
+
+  vcruise.csc.update_target = set_curve_target
+  planner.road_curvature_detected = True
+
+  result = update_vcruise(vcruise, sm, toggles, now=30.0, v_ego=20.0)
+  assert result == pytest.approx(14.0)
+  assert vcruise.csc_controlling_speed
+
+  planner.starpilot_following.following_lead = True
+  result = update_vcruise(vcruise, sm, toggles, now=30.1, v_ego=20.0)
+  assert result == pytest.approx(20.0)
+  assert not vcruise.csc_controlling_speed
+
+
+def test_curve_speed_controller_stays_enabled_with_a_lead_by_default():
+  planner, vcruise = make_vcruise()
+  sm = make_sm(standstill=False)
+  toggles = make_toggles()
+  toggles.curve_speed_controller = True
+  planner.starpilot_following.following_lead = True
+  planner.road_curvature_detected = True
+
+  def set_curve_target(_v_ego):
+    vcruise.csc.target_set = True
+    vcruise.csc.target = 14.0
+
+  vcruise.csc.update_target = set_curve_target
+  result = update_vcruise(vcruise, sm, toggles, now=40.0, v_ego=20.0)
+
+  assert result == pytest.approx(14.0)
+  assert vcruise.csc_controlling_speed
+
+
+@pytest.mark.parametrize(
+  ("long_active", "gas_pressed"),
+  [(False, False), (True, True)],
+)
+def test_curve_speed_controller_learns_when_speed_is_manually_controlled(long_active, gas_pressed):
+  planner, vcruise = make_vcruise(road_curvature=0.02)
+  sm = make_sm(standstill=False)
+  sm["carControl"].longActive = long_active
+  sm["carState"].gasPressed = gas_pressed
+  toggles = make_toggles()
+  toggles.curve_speed_controller = True
+  planner.driving_in_curve = True
+  planner.road_curvature_detected = True
+  planner.lateral_acceleration = 2.4
+  vcruise.csc.training_timer = PLANNER_TIME
+
+  update_vcruise(vcruise, sm, toggles, now=50.0, v_ego=20.0)
+
+  assert vcruise.csc.enable_training
+  assert vcruise.csc.curvature_data["0.02"]["count"] == 1
+  assert not vcruise.csc_controlling_speed
+
+
+def test_curve_speed_controller_persists_data_after_leaving_curve():
+  planner, vcruise = make_vcruise(road_curvature=0.02)
+  sm = make_sm(standstill=False)
+  sm["carControl"].longActive = False
+  planner.driving_in_curve = True
+  planner.lateral_acceleration = 2.4
+  vcruise.csc.training_timer = PLANNER_TIME
+
+  vcruise.csc.log_data(20.0, sm)
+  assert not any(key == "CurvatureData" for key, _ in planner.params.writes)
+
+  planner.driving_in_curve = False
+  vcruise.csc.log_data(20.0, sm)
+
+  assert any(key == "CurvatureData" for key, _ in planner.params.writes)
+
+
+def test_curve_speed_controller_ramps_toward_curve_speed_at_bounded_rate():
+  planner = SimpleNamespace(
+    params=FakeParams(),
+    road_curvature=0.004,
+    time_to_curve=2.0,
+    starpilot_weather=SimpleNamespace(weather_id=0, reduce_lateral_acceleration=0.0),
+  )
+  controller = CurveSpeedController(SimpleNamespace(starpilot_planner=planner))
+  controller.lateral_acceleration = 2.0
+  controller.target_set = True
+  controller.target = 30.0
+
+  controller.update_target(30.0)
+
+  assert controller.target == pytest.approx(30.0 - CSC_MAX_DECEL_RATE * DT_MDL)
+  assert controller.target > (controller.lateral_acceleration / planner.road_curvature) ** 0.5
+
+
+def test_curve_speed_controller_does_not_slow_for_curve_speed_above_ego():
+  planner = SimpleNamespace(
+    params=FakeParams(),
+    road_curvature=0.001,
+    time_to_curve=2.0,
+    starpilot_weather=SimpleNamespace(weather_id=0, reduce_lateral_acceleration=0.0),
+  )
+  controller = CurveSpeedController(SimpleNamespace(starpilot_planner=planner))
+  controller.lateral_acceleration = 2.0
+  controller.target_set = True
+  controller.target = 28.0
+
+  controller.update_target(30.0)
+
+  assert controller.target == pytest.approx(30.0)
+
+
 def test_active_slc_control_target_applies_offset_and_cluster_diff():
   target = get_active_slc_control_target(
     speed_limit_controller=True,
@@ -159,6 +293,20 @@ def test_active_slc_control_target_applies_offset_and_cluster_diff():
   )
 
   assert target == pytest.approx((48.0 * CV.MPH_TO_MS) - 0.4)
+
+
+def test_active_slc_control_target_allows_lower_redneck_override():
+  target = get_active_slc_control_target(
+    speed_limit_controller=True,
+    set_speed_limit=False,
+    slc_target=65.0 * CV.MPH_TO_MS,
+    slc_offset=0.0,
+    overridden_speed=35.0 * CV.MPH_TO_MS,
+    v_ego_diff=0.4,
+    allow_lower_override=True,
+  )
+
+  assert target == pytest.approx((35.0 * CV.MPH_TO_MS) - 0.4)
 
 
 def test_slc_lead_drop_relaxed_target_softens_map_stepdown_for_harmless_lead():
@@ -331,7 +479,7 @@ def test_force_stop_stays_committed_while_moving_even_if_scene_opens():
 
 
 def test_force_stop_turn_scene_veto_blocks_new_activation():
-  _, vcruise = make_vcruise(red_light=True, raw_model_stopped=False, forcing_stop=False)
+  _, vcruise = make_vcruise(red_light=False, raw_model_stopped=False, forcing_stop=False)
   sm = make_sm(standstill=False)
   sm["carState"].leftBlinker = True
   sm["carState"].steeringAngleDeg = 30.0
@@ -344,7 +492,7 @@ def test_force_stop_turn_scene_veto_blocks_new_activation():
 
 
 def test_force_stop_curve_veto_blocks_new_activation():
-  _, vcruise = make_vcruise(red_light=True, raw_model_stopped=False, forcing_stop=False, road_curvature=0.005)
+  _, vcruise = make_vcruise(red_light=False, raw_model_stopped=False, forcing_stop=False, road_curvature=0.005)
   sm = make_sm(standstill=False)
   toggles = make_toggles()
 
@@ -353,6 +501,56 @@ def test_force_stop_curve_veto_blocks_new_activation():
 
   assert result == pytest.approx(20.0)
   assert vcruise.force_stop_timer == pytest.approx(0.0)
+  assert not vcruise.forcing_stop
+
+
+def test_force_stop_turn_scene_veto_yields_to_stop_then_turn():
+  _, vcruise = make_vcruise(red_light=True, raw_model_stopped=True, forcing_stop=False)
+  sm = make_sm(standstill=False)
+  sm["carState"].leftBlinker = True
+  sm["carState"].steeringAngleDeg = 30.0
+  toggles = make_toggles()
+
+  for frame in range(12):
+    result = update_vcruise(vcruise, sm, toggles, now=frame * 0.05, v_ego=7.0)
+
+  assert 0.0 < result < 20.0
+  assert vcruise.force_stop_timer >= 0.5
+  assert vcruise.forcing_stop
+
+
+def test_force_stop_curve_veto_yields_to_stop_then_turn():
+  _, vcruise = make_vcruise(red_light=True, raw_model_stopped=True, forcing_stop=False, road_curvature=0.05)
+  sm = make_sm(standstill=False)
+  sm["carState"].rightBlinker = True
+  sm["carState"].steeringAngleDeg = -40.0
+  toggles = make_toggles()
+
+  for frame in range(12):
+    result = update_vcruise(vcruise, sm, toggles, now=frame * 0.05, v_ego=7.0)
+
+  assert 0.0 < result < 20.0
+  assert vcruise.force_stop_timer >= 0.5
+  assert vcruise.forcing_stop
+
+
+def test_stop_then_turn_override_releases_after_stop_seen_window_expires():
+  _, vcruise = make_vcruise(red_light=False, raw_model_stopped=False, forcing_stop=False)
+  planner = vcruise.starpilot_planner
+  sm = make_sm(standstill=False)
+  sm["carState"].leftBlinker = True
+  sm["carState"].steeringAngleDeg = 30.0
+  toggles = make_toggles()
+
+  planner.starpilot_cem.stop_light_detected = True
+  update_vcruise(vcruise, sm, toggles, now=0.0, v_ego=7.0)
+  planner.starpilot_cem.stop_light_detected = False
+
+  now = FORCE_STOP_TURN_VETO_STOP_SEEN_HOLD_TIME + 0.5
+  for frame in range(12):
+    result = update_vcruise(vcruise, sm, toggles, now=now + frame * 0.05, v_ego=7.0)
+
+  assert result == pytest.approx(20.0)
   assert not vcruise.forcing_stop
 
 
@@ -545,7 +743,8 @@ def test_approach_light_force_stop_expires_without_rearming_at_standstill():
 
 
 def test_stop_sign_hold_persists_until_resume():
-  _, vcruise = make_vcruise(red_light=True, raw_model_stopped=True, forcing_stop=False)
+  planner, vcruise = make_vcruise(red_light=True, raw_model_stopped=True, forcing_stop=False)
+  planner.model_length = 20.0
   sm = make_sm(standstill=True)
   sm["starpilotCarState"].dashboardStopSign = 1
   toggles = make_toggles()

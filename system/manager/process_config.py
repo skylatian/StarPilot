@@ -62,18 +62,34 @@ def only_onroad(started: bool, params: Params, CP: car.CarParams, starpilot_togg
 def only_offroad(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return not started
 
+def sentry_mode(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return not started and params.get_bool("SentryModeEnabled")
+
+def sensord_run(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return started or params.get_bool("SentryModeEnabled")
+
+def camera_run(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return driverview(started, params, CP, starpilot_toggles) or params.get_bool("SentryModeCapture")
+
+def livestream(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return params.get_bool("IsLiveStreaming")
+
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
 
 def and_(*fns):
   return lambda *args: operator.and_(*(fn(*args) for fn in fns))
 
+def not_(*fns):
+  return lambda *args: operator.not_(*(fn(*args) for fn in fns))
+
 # StarPilot variables
 def allow_logging(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return not starpilot_toggles.no_logging
 
 def allow_uploads(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
-  return params.get_bool("AlwaysAllowUploads") or not starpilot_toggles.no_uploads or starpilot_toggles.no_onroad_uploads
+  return (params.get_bool("AlwaysAllowUploads") or not starpilot_toggles.no_uploads or
+          (starpilot_toggles.no_onroad_uploads and not started))
 
 def run_speed_limit_filler(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return starpilot_toggles.speed_limit_filler
@@ -83,6 +99,10 @@ def run_speed_limit_vision(started: bool, params: Params, CP: car.CarParams, sta
 
 def run_navigationd(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return started and params.get("NavDestination") is not None
+
+
+def run_v_asm(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return started and getattr(starpilot_toggles, "v_asm_enabled", False)
 
 
 class BigDeviceUIProcess:
@@ -169,10 +189,10 @@ procs = [
 
   NativeProcess("loggerd", "system/loggerd", ["./loggerd"], and_(allow_logging, logging)),
   NativeProcess("encoderd", "system/loggerd", ["./encoderd"], and_(allow_logging, only_onroad)),
-  NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
+  NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], or_(and_(livestream, not_(iscar)), notcar)),
   PythonProcess("logmessaged", "system.logmessaged", always_run),
 
-  NativeProcess("camerad", "system/camerad", ["./camerad"], driverview, enabled=not WEBCAM),
+  NativeProcess("camerad", "system/camerad", ["./camerad"], or_(camera_run, livestream), enabled=not WEBCAM),
   PythonProcess("webcamerad", "tools.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "system.proclogd", and_(allow_logging, only_onroad), enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "system.journald", and_(allow_logging, only_onroad), platform.system() != "Darwin"),
@@ -182,7 +202,8 @@ procs = [
   PythonProcess("modeld", "selfdrive.modeld.modeld", only_onroad),
   PythonProcess("dmonitoringmodeld", "selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC)),
 
-  PythonProcess("sensord", "system.sensord.sensord", only_onroad, enabled=not PC),
+  PythonProcess("sensord", "system.sensord.sensord", sensord_run, enabled=not PC),
+  PythonProcess("sentryd", "system.sentryd.sentryd", sentry_mode, enabled=not PC),
   PythonProcess("soundd", "selfdrive.ui.soundd", driverview),
   PythonProcess("locationd", "selfdrive.locationd.locationd", only_onroad),
   NativeProcess("_pandad", "selfdrive/pandad", ["./pandad"], always_run, enabled=False),
@@ -207,21 +228,21 @@ procs = [
   PythonProcess("hardwared", "system.hardware.hardwared", always_run),
   PythonProcess("tombstoned", "system.tombstoned", always_run, enabled=not PC),
   PythonProcess("updated", "system.updated.updated", always_run, enabled=not PC),
-  PythonProcess("uploader", "system.loggerd.uploader", allow_uploads),
+  PythonProcess("uploader", "system.loggerd.uploader", allow_uploads, nice=19),
   PythonProcess("statsd", "system.statsd", always_run),
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
 
   # debug procs
   NativeProcess("bridge", "cereal/messaging", ["./bridge"], notcar),
-  PythonProcess("webrtcd", "system.webrtc.webrtcd", notcar),
+  PythonProcess("webrtcd", "system.webrtc.webrtcd", or_(and_(livestream, not_(iscar)), notcar)),
   PythonProcess("webjoystick", "tools.bodyteleop.web", notcar),
   PythonProcess("joystick", "tools.joystick.joystick_control", and_(joystick, iscar)),
 ]
 
 # StarPilot variables
 procs += [
-  PythonProcess("the_galaxy", "starpilot.system.the_galaxy.the_galaxy", always_run, nice=19),
-  PythonProcess("galaxy", "starpilot.system.galaxy.galaxy", always_run, nice=19),
+  PythonProcess("the_galaxy", "starpilot.system.the_galaxy.the_galaxy", always_run, nice=10),
+  PythonProcess("galaxy", "starpilot.system.galaxy.galaxy", always_run, nice=10),
 ]
 
 device_type = HARDWARE.get_device_type()
@@ -238,6 +259,7 @@ procs += [
   PythonProcess("navigationd", "starpilot.navigation.navigationd", run_navigationd, nice=19),
   PythonProcess("speed_limit_filler", "starpilot.system.speed_limit_filler", run_speed_limit_filler, nice=19),
   PythonProcess("speed_limit_vision", "starpilot.system.speed_limit_vision", run_speed_limit_vision, nice=19),
+  PythonProcess("adj_spot_monitor_vision", "starpilot.system.adj_spot_monitor_vision", run_v_asm, nice=19),
 ]
 
 managed_processes = {p.name: p for p in procs}

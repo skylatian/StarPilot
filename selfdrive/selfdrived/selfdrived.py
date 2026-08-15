@@ -12,6 +12,8 @@ from msgq.visionipc import VisionIpcClient, VisionStreamType
 
 from opendbc.car.chrysler.values import pacifica_hybrid_aol_stock_acc_mode
 from opendbc.car.gm.values import GMFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
+from opendbc.car.nissan.values import CAR as NISSAN_CAR
 
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
@@ -32,6 +34,7 @@ from openpilot.system.hardware import HARDWARE
 
 from openpilot.starpilot.common.starpilot_utilities import contains_event_type
 from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles
+from openpilot.starpilot.common.vision_bsm import get_fresh_vasm_state
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
@@ -55,13 +58,21 @@ StarPilotEventName = custom.StarPilotOnroadEvent.EventName
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
-def should_loud_blindspot_alert_without_lateral(CS, sm, starpilot_toggles) -> bool:
-  if not (getattr(starpilot_toggles, "loud_blindspot_alert", False) and
-          getattr(starpilot_toggles, "loud_blindspot_alert_when_disengaged", False)):
+def commanded_torque_at_max_for_saturation(CP, output: float) -> bool:
+  torque_controller = (CP.steerControlType == car.CarParams.SteerControlType.torque and
+                       CP.lateralTuning.which() == "torque")
+  has_controller_grace = CP.carFingerprint == HYUNDAI_CAR.GENESIS_GV70_ELECTRIFIED_1ST_GEN
+  return torque_controller and not has_controller_grace and abs(output) > 0.99
+
+
+def should_loud_blindspot_alert_without_lateral(CS, sm, starpilot_toggles, combined_left_bsm=None, combined_right_bsm=None) -> bool:
+  if not getattr(starpilot_toggles, "loud_blindspot_alert_when_disengaged", False):
     return False
 
-  left_signal_blocked = bool(CS.leftBlinker and CS.leftBlindspot)
-  right_signal_blocked = bool(CS.rightBlinker and CS.rightBlindspot)
+  combined_left_bsm = CS.leftBlindspot if combined_left_bsm is None else combined_left_bsm
+  combined_right_bsm = CS.rightBlindspot if combined_right_bsm is None else combined_right_bsm
+  left_signal_blocked = bool(CS.leftBlinker and combined_left_bsm)
+  right_signal_blocked = bool(CS.rightBlinker and combined_right_bsm)
   one_blinker = bool(CS.leftBlinker) != bool(CS.rightBlinker)
   if not (one_blinker and (left_signal_blocked or right_signal_blocked)):
     return False
@@ -85,6 +96,11 @@ def should_loud_blindspot_alert_without_lateral(CS, sm, starpilot_toggles) -> bo
 def get_starpilot_alert_filters(current_alert_types: list[str], clear_event_types: set[str], starpilot_events: Events) -> tuple[list[str], set[str]]:
   starpilot_alert_types = list(current_alert_types)
   starpilot_clear_event_types = set(clear_event_types)
+
+  if int(StarPilotEventName.lkasEnable) in starpilot_events.names:
+    if ET.WARNING not in starpilot_alert_types:
+      starpilot_alert_types.append(ET.WARNING)
+    starpilot_clear_event_types.discard(ET.WARNING)
 
   # This alert is explicitly allowed while lateral is paused/off. The state
   # machine only exposes WARNING while active/AOL, so let this warning through.
@@ -208,6 +224,10 @@ class SelfdriveD:
     self.logged_comm_issue = None
     self.not_running_prev = None
     self.experimental_mode = False
+    self.ecu_disable_failed = False
+    self.ecu_disable_failed_checked = not (
+      self.CP.openpilotLongitudinalControl and self.CP.carFingerprint == NISSAN_CAR.NISSAN_LEAF
+    )
     self.safe_mode = self.params.get_bool("SafeMode")
     self.personality = log.LongitudinalPersonality.relaxed if self.safe_mode else self.params.get("LongitudinalPersonality", return_default=True)
     self.recalibrating_seen = False
@@ -223,10 +243,10 @@ class SelfdriveD:
       self.startup_event = None
     if not car_recognized:
       self.startup_event = EventName.startupNoCar
-    elif car_recognized and self.CP.passive:
-      self.startup_event = EventName.startupNoControl
     elif self.CP.secOcRequired and not self.CP.secOcKeyAvailable:
       self.startup_event = EventName.startupNoSecOcKey
+    elif car_recognized and self.CP.passive:
+      self.startup_event = EventName.startupNoControl
 
     if not car_recognized:
       self.events.add(EventName.carUnrecognized, static=True)
@@ -261,6 +281,23 @@ class SelfdriveD:
 
     self.FPCP = messaging.log_from_bytes(self.params.get("StarPilotCarParams", block=True), custom.StarPilotCarParams)
 
+  def update_ecu_disable_failed(self):
+    if self.ecu_disable_failed_checked:
+      return
+    if self.CP.carFingerprint != NISSAN_CAR.NISSAN_LEAF:
+      self.ecu_disable_failed_checked = True
+      return
+
+    if self.params.get_bool("ControlsReady"):
+      self.ecu_disable_failed = self.params.get_bool("EcuDisableFailed")
+      self.ecu_disable_failed_checked = True
+      if self.ecu_disable_failed:
+        fallback_cp = messaging.log_from_bytes(self.params.get("CarParams"), car.CarParams)
+        fallback_fpcp = messaging.log_from_bytes(self.params.get("StarPilotCarParams"), custom.StarPilotCarParams)
+        self.CP.openpilotLongitudinalControl = fallback_cp.openpilotLongitudinalControl
+        self.CP.pcmCruise = fallback_cp.pcmCruise
+        self.FPCP = fallback_fpcp
+
   def clear_longitudinal_excessive_actuation_alert(self):
     alert = self.params.get("Offroad_ExcessiveActuation")
     if not alert:
@@ -290,6 +327,7 @@ class SelfdriveD:
   def update_events(self, CS):
     """Compute onroadEvents from carState"""
 
+    self.update_ecu_disable_failed()
     self.events.clear()
     self.starpilot_events.clear()
 
@@ -501,12 +539,17 @@ class SelfdriveD:
       self.events.add(EventName.excessiveActuation)
     # ******************************************************************************************
 
-    # Handle lane change
+    # Handle lane change - combine OEM BSM with fresh V-ASM state.
     blindspot_alert_added = False
+    vasm_left, vasm_right = (False, False)
+    if getattr(self.starpilot_toggles, "v_asm_enabled", False):
+      vasm_left, vasm_right = get_fresh_vasm_state(self.params_memory)
+    combined_left_bsm = CS.leftBlindspot or vasm_left
+    combined_right_bsm = CS.rightBlindspot or vasm_right
     if self.sm['modelV2'].meta.laneChangeState == LaneChangeState.preLaneChange:
       direction = self.sm['modelV2'].meta.laneChangeDirection
-      if (CS.leftBlindspot and direction == LaneChangeDirection.left) or \
-         (CS.rightBlindspot and direction == LaneChangeDirection.right):
+      if (combined_left_bsm and direction == LaneChangeDirection.left) or \
+         (combined_right_bsm and direction == LaneChangeDirection.right):
         blindspot_alert_added = True
         if self.starpilot_toggles.loud_blindspot_alert:
           self.starpilot_events.add(StarPilotEventName.laneChangeBlockedLoud)
@@ -528,7 +571,7 @@ class SelfdriveD:
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
 
-    if not blindspot_alert_added and should_loud_blindspot_alert_without_lateral(CS, self.sm, self.starpilot_toggles):
+    if not blindspot_alert_added and should_loud_blindspot_alert_without_lateral(CS, self.sm, self.starpilot_toggles, combined_left_bsm, combined_right_bsm):
       self.starpilot_events.add(StarPilotEventName.laneChangeBlockedLoud)
 
     for i, pandaState in enumerate(self.sm['pandaStates']):
@@ -648,7 +691,7 @@ class SelfdriveD:
       desired_lateral_accel = self.sm['modelV2'].action.desiredCurvature * (clipped_speed**2)
       undershooting = abs(desired_lateral_accel) / abs(1e-3 + actual_lateral_accel) > 1.2
       turning = abs(desired_lateral_accel) > 1.0
-      commanded_torque_at_max = abs(lac.output) > 0.99
+      commanded_torque_at_max = commanded_torque_at_max_for_saturation(self.CP, lac.output)
       # TODO: lac.saturated includes speed and other checks, should be pulled out
       if undershooting and turning and (lac.saturated or commanded_torque_at_max):
         now = time.monotonic()

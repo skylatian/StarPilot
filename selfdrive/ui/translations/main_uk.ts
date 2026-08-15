@@ -1651,10 +1651,6 @@
         <translation>Профіль вповільн.</translation>
     </message>
     <message>
-        <source>Human-Like Acceleration</source>
-        <translation>Людьське приск.</translation>
-    </message>
-    <message>
         <source>"Taco Bell Run" Turn Speed Hack</source>
         <translation>«Taco Bell Run» — хак поворотів</translation>
     </message>
@@ -4084,10 +4080,6 @@ Developer - Highly customizable settings for seasoned enthusiasts</source>
     <message>
         <source>Automatically Lock/Unlock Doors</source>
         <translation>Автоматичне блокування/розблокування дверей</translation>
-    </message>
-    <message>
-        <source>FrogsGoMoo's Personal Tweaks</source>
-        <translation>Особисті налаштування FrogsGoMoo</translation>
     </message>
     <message>
         <source>Lock Doors On Ignition Off After</source>

@@ -8,16 +8,19 @@ import pyray as rl
 from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
 from openpilot.system.ui.lib.application import FontWeight, MouseEvent, MousePos, gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
-from openpilot.system.ui.widgets import DialogResult, Widget
+from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
+from openpilot.system.ui.widgets.label import gui_label
 from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 
 from openpilot.selfdrive.ui.layouts.settings.starpilot.panel import _SettingsPage
 
 from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
+  AetherListColors,
   COMPACT_PANEL_METRICS,
+  AdjustorTogglesPanelView,
   AetherAdjustorRow,
   AetherSegmentedControl,
   AetherSliderDialog,
@@ -27,12 +30,14 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   SettingRow,
   SettingSection,
   AetherSettingsView,
+  CardHubManagerView,
   TileGrid,
   HubTile,
   TOGGLE_MIN_HEIGHT,
   TOGGLE_ROW_HEIGHT,
   RowToggleTile,
   ToggleTile,
+  SPACING,
   draw_section_header,
   draw_list_group_shell,
   SECTION_GAP,
@@ -83,175 +88,90 @@ SLC_OVERRIDE_OPTIONS = [
 # AdaptiveSpeedView — nested panel with two adaptive speed tiles
 # ═══════════════════════════════════════════════════════════════
 
-class AdaptiveSpeedView(Widget):
+class AdaptiveSpeedView(CardHubManagerView):
   def __init__(self, controller):
-    super().__init__()
-    self._header_title = tr_noop("Adaptive Speed Controls")
-    self._controller = controller
-    self._grid = TileGrid(columns=2, padding=12)
-    self._child(self._grid)
+    super().__init__(controller, [], columns=2,
+                     header_title=tr_noop("Adaptive Speed Controls"))
 
-    self._grid.add_tile(HubTile(
-      title=tr("Conditional Drive Mode"),
-      desc=tr("Configure automated switching between Experimental and Chill Modes based on set conditions."),
-      icon_key="steering",
-      on_click=lambda: controller._navigate_to("ce"),
-      bg_color="#8B5CF6",
-    ))
-
-    self._grid.add_tile(HubTile(
-      title=tr("Curve Speed Controller"),
-      desc=tr("Configure speed control on curves and reset collected calibration data."),
-      icon_key="navigate",
-      on_click=lambda: controller._navigate_to("csc"),
-      bg_color="#8B5CF6",
-    ))
-
-  def _render(self, rect: rl.Rectangle):
-    margin_x = 10.0
-    margin_y = 10.0
-    grid_x = rect.x + margin_x
-    grid_y = rect.y + margin_y
-    grid_w = rect.width - margin_x * 2
-    grid_h = rect.y + rect.height - grid_y - margin_y
-    self._grid.render(rl.Rectangle(grid_x, grid_y, grid_w, grid_h))
+  def _build_cards(self):
+    return [
+      {
+        "title": tr("Conditional Drive Mode"),
+        "desc": tr("Configure automated switching between Experimental and Chill Modes based on set conditions."),
+        "icon": "steering",
+        "on_click": lambda: self._controller._navigate_to("ce"),
+      },
+      {
+        "title": tr("Curve Speed Controller"),
+        "desc": tr("Configure speed control on curves and reset collected calibration data."),
+        "icon": "navigate",
+        "on_click": lambda: self._controller._navigate_to("csc"),
+      },
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════
-# LongitudinalManagerView — main category grid
+# LongitudinalManagerView — 6-card category hub
 # ═══════════════════════════════════════════════════════════════
 
-class LongitudinalManagerView(AetherSettingsView):
-  @property
-  def vertical_scrolling_disabled(self) -> bool:
-    return True
-
+class LongitudinalManagerView(CardHubManagerView):
   def __init__(self, controller, sections, **kwargs):
     super().__init__(controller, sections, **kwargs)
-    self._main_grid = TileGrid(columns=3, padding=12)
-    self._main_grid.set_touch_valid_callback(lambda: self._scroll_panel.is_touch_valid())
-    self._child(self._main_grid)
 
-    self._init_toggles()
-
-  def _init_toggles(self):
-    hero_data = [
+  def _build_cards(self):
+    return [
       {
         "title": tr("Longitudinal Tuning"),
-        "desc": tr("Configure acceleration profiles, smooth following, lane changes, and route speed control."),
+        "desc": tr("Configure acceleration profiles, lane changes, and route speed control."),
         "icon": "steering",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("tune")
+        "on_click": lambda: self._controller._navigate_to("tune"),
       },
       {
         "title": tr("Advanced Actuators"),
         "desc": tr("Adjust actuator delay, EV/Truck tuning, and launch/stop speeds/rates."),
         "icon": "vehicle",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("advanced")
+        "on_click": lambda: self._controller._navigate_to("advanced"),
       },
       {
         "title": tr("Speed Limit Controller"),
         "desc": tr("Manage auto speed matching, confirmation, offsets, and source priority."),
         "icon": "navigate",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("slc")
+        "on_click": lambda: self._controller._navigate_to("slc"),
       },
-    ]
-
-    standard_data = [
       {
         "title": tr("Adaptive Speed Controls"),
         "desc": tr("Configure Curve Speed Controller and Conditional Experimental Mode triggers."),
         "icon": "display",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("adaptive_speed")
+        "on_click": lambda: self._controller._navigate_to("adaptive_speed"),
       },
       {
         "title": tr("Driving Personalities"),
         "desc": tr("Customize follow distance and jerk/response metrics for each personality profile."),
         "icon": "system",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("personality")
+        "on_click": lambda: self._controller._navigate_to("personality"),
       },
       {
         "title": tr("Quality of Life"),
         "desc": tr("Configure cruise intervals, standstill behaviors, gear mapping, and weather presets."),
         "icon": "sound",
-        "color": "#8B5CF6",
-        "on_click": lambda: self._controller._navigate_to("daily")
+        "on_click": lambda: self._controller._navigate_to("daily"),
       },
     ]
 
-    all_data = hero_data + standard_data
-    self._main_grid.clear()
-    for d in all_data:
-      self._main_grid.add_tile(
-        HubTile(
-          title=d["title"],
-          desc=d["desc"],
-          icon_key=d["icon"],
-          on_click=d["on_click"],
-          bg_color=d["color"],
-        )
-      )
 
-  def _render(self, rect: rl.Rectangle):
-    self.set_rect(rect)
-    self._interactive_rects.clear()
-
-    margin_x = 10.0
-    margin_y = 10.0
-
-    grid_x = rect.x + margin_x
-    grid_y = rect.y + margin_y
-    grid_w = rect.width - margin_x * 2
-    grid_h = rect.y + rect.height - grid_y - margin_y
-
-    self._scroll_rect = rl.Rectangle(grid_x, grid_y, grid_w, grid_h)
-    self._content_height = grid_h
-
-    self._scroll_panel.set_enabled(self.is_visible)
-    self._scroll_offset = self._scroll_panel.update(
-      self._scroll_rect, self._scroll_rect.height
-    )
-
-    if self.vertical_scrolling_disabled:
-      self._scroll_offset = 0.0
-
-    self._draw_scroll_content(self._scroll_rect, self._scroll_rect.width)
-
-  def _draw_scroll_content(self, rect: rl.Rectangle, width: float):
-    y = rect.y + self._scroll_offset
-    self._main_grid.set_parent_rect(self._scroll_rect)
-    self._main_grid.render(rl.Rectangle(rect.x, y, width, rect.height))
-
-
-class ConditionalDriveModeView(PanelManagerView):
+class ConditionalDriveModeView(AdjustorTogglesPanelView):
   METRICS = COMPACT_PANEL_METRICS
   TAB_HEIGHT = 98
   TAB_BOTTOM_GAP = 26
-
-  @property
-  def vertical_scrolling_disabled(self) -> bool:
-    return True
 
   def __init__(self, controller: StarPilotLongitudinalLayout):
     super().__init__()
     self._header_title = tr("Conditional Drive Mode")
     self._controller = controller
-    self._pressed_target: str | None = None
-    self._adjustor_rows: dict[str, AetherAdjustorRow] = {}
-    self._can_click = True
-    self._active_adjustor_key = None
 
     self._init_segmented_control()
     self._init_adjustors()
     self._init_toggles()
-    self._forward_touch_valid()
-
-  def _forward_touch_valid(self):
-    pass
 
   def _init_segmented_control(self):
     self._drive_mode_control = self._child(
@@ -343,29 +263,19 @@ class ConditionalDriveModeView(PanelManagerView):
       
     return cls(**kwargs)
 
-  def _set_active_adjustor(self, key: str, active: bool):
-    if active:
-      if self._active_adjustor_key and self._active_adjustor_key != key:
-        old = self._adjustor_rows.get(self._active_adjustor_key)
-        if old:
-          old.reset_interaction()
-      self._active_adjustor_key = key
-    elif self._active_adjustor_key == key:
-      self._active_adjustor_key = None
-
   def _init_adjustors(self):
     speed_unit = self._controller._speed_unit()
     is_metric = self._controller._is_metric()
     max_speed = 150.0 if is_metric else 100.0
 
     specs = {
-      "CESpeed": {"title": tr("Below Speed"), "subtitle": tr("Switch to Experimental Mode below this speed."), "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {}, "get": lambda: float(self._controller._params.get_int("CESpeed"))},
-      "CESpeedLead": {"title": tr("Speed w/ Lead"), "subtitle": tr("Switch below this speed when following a lead."), "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {}, "get": lambda: float(self._controller._params.get_int("CESpeedLead"))},
-      "CESignalSpeed": {"title": tr("Turn Signal Below"), "subtitle": tr("Switch when turn signal is on below this speed."), "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {0.0: tr("Off")}, "get": lambda: float(self._controller._params.get_int("CESignalSpeed"))},
-      "CEModelStopTime": {"title": tr("Predicted Stop In"), "subtitle": tr("Switch when openpilot predicts a stop within time."), "min": 0, "max": 10.0, "step": 1.0, "unit": "s", "presets": [0, 3, 5, 7, 10], "labels": {0.0: tr("Off")}, "get": lambda: float(self._controller._params.get_int("CEModelStopTime"))},
-      "CCMSpeed": {"title": tr("Above Speed"), "subtitle": tr("Switch to Chill Mode on open roads above this speed."), "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 35, 55, 65, 80], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSpeed"))},
-      "CCMSpeedLead": {"title": tr("Speed w/ Lead"), "subtitle": tr("Switch when following a stable lead above this speed."), "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 35, 55, 65, 80], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSpeedLead"))},
-      "CCMSetSpeedMargin": {"title": tr("Set Speed Margin"), "subtitle": tr("How far below set speed before Chill engages."), "min": 0, "max": 30.0 if is_metric else 15.0, "step": 1.0, "unit": speed_unit, "presets": [0, 5, 10, 15], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSetSpeedMargin"))},
+      "CESpeed": {"title": tr("Below Speed"), "subtitle": "", "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {}, "get": lambda: float(self._controller._params.get_int("CESpeed"))},
+      "CESpeedLead": {"title": tr("Speed w/ Lead"), "subtitle": "", "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {}, "get": lambda: float(self._controller._params.get_int("CESpeedLead"))},
+      "CESignalSpeed": {"title": tr("Turn Signal Below"), "subtitle": "", "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 20, 35, 55, 75], "labels": {0.0: tr("Off")}, "get": lambda: float(self._controller._params.get_int("CESignalSpeed"))},
+      "CEModelStopTime": {"title": tr("Predicted Stop In"), "subtitle": "", "min": 0, "max": 10.0, "step": 0.1, "unit": "s", "presets": [0, 3, 5, 7.7, 10], "labels": {0.0: tr("Off")}, "get": lambda: float(self._controller._params.get_float("CEModelStopTime"))},
+      "CCMSpeed": {"title": tr("Above Speed"), "subtitle": "", "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 35, 55, 65, 80], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSpeed"))},
+      "CCMSpeedLead": {"title": tr("Speed w/ Lead"), "subtitle": "", "min": 0, "max": max_speed, "step": 1.0, "unit": speed_unit, "presets": [0, 35, 55, 65, 80], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSpeedLead"))},
+      "CCMSetSpeedMargin": {"title": tr("Set Speed Margin"), "subtitle": "", "min": 0, "max": 30.0 if is_metric else 15.0, "step": 1.0, "unit": speed_unit, "presets": [0, 5, 10, 15], "labels": {}, "get": lambda: float(self._controller._params.get_int("CCMSetSpeedMargin"))},
     }
 
     self._cem_keys = ["CESpeed", "CESpeedLead", "CESignalSpeed", "CEModelStopTime"]
@@ -396,36 +306,30 @@ class ConditionalDriveModeView(PanelManagerView):
       "CESpeed": {"title": tr("Below Speed"), "min": 0, "max": max_speed, "unit": speed_unit, "labels": {}, "presets": [0, 20, 35, 55, 75]},
       "CESpeedLead": {"title": tr("Speed w/ Lead"), "min": 0, "max": max_speed, "unit": speed_unit, "labels": {}, "presets": [0, 20, 35, 55, 75]},
       "CESignalSpeed": {"title": tr("Turn Signal Below"), "min": 0, "max": max_speed, "unit": speed_unit, "labels": {0.0: tr("Off")}, "presets": [0, 20, 35, 55, 75]},
-      "CEModelStopTime": {"title": tr("Predicted Stop In"), "min": 0, "max": 10.0, "unit": "s", "labels": {0.0: tr("Off")}, "presets": [0, 3, 5, 7, 10]},
+      "CEModelStopTime": {"title": tr("Predicted Stop In"), "min": 0, "max": 10.0, "unit": "s", "labels": {0.0: tr("Off")}, "presets": [0, 3, 5, 7.7, 10]},
       "CCMSpeed": {"title": tr("Above Speed"), "min": 0, "max": max_speed, "unit": speed_unit, "labels": {}, "presets": [0, 35, 55, 65, 80]},
       "CCMSpeedLead": {"title": tr("Speed w/ Lead"), "min": 0, "max": max_speed, "unit": speed_unit, "labels": {}, "presets": [0, 35, 55, 65, 80]},
       "CCMSetSpeedMargin": {"title": tr("Set Speed Margin"), "min": 0, "max": 30.0 if is_metric else 15.0, "unit": speed_unit, "labels": {}, "presets": [0, 5, 10, 15]},
     }
     
     spec = specs[key]
-    original_val = float(self._controller._params.get_int(key))
+    is_float = key == "CEModelStopTime"
+    original_val = float(self._controller._params.get_float(key) if is_float else self._controller._params.get_int(key))
 
     def on_close(res, val):
       if res == DialogResult.CONFIRM:
-        self._controller._params.put_int(key, int(val))
+        if is_float:
+          self._controller._params.put_float(key, float(val))
+        else:
+          self._controller._params.put_int(key, int(val))
 
     gui_app.push_widget(AetherSliderDialog(
       title=spec["title"],
-      min_val=float(spec["min"]), max_val=float(spec["max"]), step=1.0,
+      min_val=float(spec["min"]), max_val=float(spec["max"]), step=0.1 if is_float else 1.0,
       current_val=original_val,
       on_close=on_close, presets=[float(p) for p in spec["presets"]],
       unit=spec["unit"], labels=spec["labels"], color=PANEL_STYLE.accent
     ))
-
-  def show_event(self):
-    super().show_event()
-    self._pressed_target = None
-    self._can_click = True
-
-  def hide_event(self):
-    super().hide_event()
-    self._pressed_target = None
-    self._can_click = True
 
   def _draw_header(self, rect: rl.Rectangle):
     pass
@@ -459,9 +363,10 @@ class ConditionalDriveModeView(PanelManagerView):
 
     right_h = tiles_h
 
+    banner_overhead = 52.0
     if self._uses_two_columns(content_width):
       max_natural_h = max(left_h, right_h)
-      section_overhead = SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
+      section_overhead = banner_overhead + SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
       
       if self._scroll_rect:
         available_h = self._scroll_rect.height - section_overhead - self.TAB_HEIGHT - self.TAB_BOTTOM_GAP - 6.0
@@ -481,7 +386,7 @@ class ConditionalDriveModeView(PanelManagerView):
     else:
       self._left_container_h = left_h
       self._tiles_container_h = right_h
-      total = left_h + SECTION_GAP + right_h + SECTION_HEADER_HEIGHT * 2 + SECTION_HEADER_GAP * 2
+      total = banner_overhead + left_h + SECTION_GAP + right_h + SECTION_HEADER_HEIGHT * 2 + SECTION_HEADER_GAP * 2
       return total + self.TAB_HEIGHT + self.TAB_BOTTOM_GAP
 
   def _draw_scroll_content(self, rect: rl.Rectangle, content_width: float):
@@ -497,14 +402,19 @@ class ConditionalDriveModeView(PanelManagerView):
     if mode == 0:
       return
 
+    banner_text = tr("Switch to Experimental Mode") if mode == 1 else tr("Switch to Chill Mode")
+    banner_rect = rl.Rectangle(rect.x, y, content_width, 40)
+    gui_label(banner_rect, banner_text, 40, AetherListColors.HEADER, FontWeight.BOLD, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+    y += 40 + 12
+
     keys = self._cem_keys if mode == 1 else self._ccm_keys
     grid = self._toggle_grid
     
     col_width = (content_width - SECTION_GAP) / 2 if self._uses_two_columns(content_width) else content_width
 
-    draw_section_header(rl.Rectangle(rect.x, y, col_width, SECTION_HEADER_HEIGHT), tr("Values"), style=PANEL_STYLE)
+    draw_section_header(rl.Rectangle(rect.x, y, col_width, SECTION_HEADER_HEIGHT), tr("When"), style=PANEL_STYLE, title_size=38, align_center=True)
     if self._uses_two_columns(content_width):
-      draw_section_header(rl.Rectangle(rect.x + col_width + SECTION_GAP, y, col_width, SECTION_HEADER_HEIGHT), tr("Triggers"), style=PANEL_STYLE)
+      draw_section_header(rl.Rectangle(rect.x + col_width + SECTION_GAP, y, col_width, SECTION_HEADER_HEIGHT), tr("For"), style=PANEL_STYLE, title_size=38, align_center=True)
     
     y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
     
@@ -518,7 +428,7 @@ class ConditionalDriveModeView(PanelManagerView):
         columns=tg_columns)
     else:
       y += self._left_container_h + SECTION_GAP
-      draw_section_header(rl.Rectangle(rect.x, y, col_width, SECTION_HEADER_HEIGHT), tr("Triggers"), style=PANEL_STYLE)
+      draw_section_header(rl.Rectangle(rect.x, y, col_width, SECTION_HEADER_HEIGHT), tr("For"), style=PANEL_STYLE, title_size=38, align_center=True)
       y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
       self._draw_two_column_tile_grid(
         grid, rect.x, y, col_width,
@@ -539,30 +449,13 @@ class ConditionalDriveModeView(PanelManagerView):
 
   def _get_active_elements(self):
     mode = self._get_drive_mode_index()
+    elems = [self._drive_mode_control]
     if mode == 1:
-      return [self._adjustor_rows[k] for k in self._cem_keys] + [self._toggle_grid]
+      elems += [self._adjustor_rows[k] for k in self._cem_keys]
     elif mode == 2:
-      return [self._adjustor_rows[k] for k in self._ccm_keys] + [self._toggle_grid]
-    return []
-
-  def _handle_mouse_press(self, mouse_pos: MousePos):
-    super()._handle_mouse_press(mouse_pos)
-    for el in self._get_active_elements():
-      el._handle_mouse_press(mouse_pos)
-    self._drive_mode_control._handle_mouse_press(mouse_pos)
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    for el in self._get_active_elements():
-      el._handle_mouse_release(mouse_pos)
-    self._drive_mode_control._handle_mouse_release(mouse_pos)
-    super()._handle_mouse_release(mouse_pos)
-
-  def _handle_mouse_event(self, mouse_event: MouseEvent):
-    super()._handle_mouse_event(mouse_event)
-    for el in self._get_active_elements():
-      el._handle_mouse_event(mouse_event)
-    self._drive_mode_control._handle_mouse_event(mouse_event)
-
+      elems += [self._adjustor_rows[k] for k in self._ccm_keys]
+    elems.append(self._toggle_grid)
+    return elems
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -585,11 +478,8 @@ class StarPilotLongitudinalLayout(_SettingsPage):
   def _advanced_enabled(self) -> bool:
     return self._params.get_bool("AdvancedLongitudinalTune")
 
-  def _using_human_acceleration(self) -> bool:
-    return self._params.get_bool("LongitudinalTune") and self._params.get_bool("HumanAcceleration")
-
   def _show_stop_tuning_values(self) -> bool:
-    return self._advanced_enabled() and not (starpilot_state.car_state.isToyota and self._params.get_bool("FrogsGoMoosTweak"))
+    return self._advanced_enabled()
 
   def _make_parent(self, key: str, label: str, subtitle: str = "") -> ParentToggle:
     return ParentToggle(
@@ -618,11 +508,6 @@ class StarPilotLongitudinalLayout(_SettingsPage):
                  subtitle=tr_noop("Choose how firmly openpilot slows the car down."),
                  get_value=self._get_deceleration_profile_label,
                  on_click=self._show_deceleration_profile_selector,
-                 visible=self._longitudinal_enabled),
-      SettingRow("PrioritizeSmoothFollowing", "toggle", tr_noop("Prioritize Smooth Following"),
-                 subtitle=tr_noop("Disables the newer far-lead follow logic on cars that show lead-follow stutter. Tradeoff: it may react later in some edge-case lead approaches."),
-                 get_state=lambda: self._params.get_bool("PrioritizeSmoothFollowing"),
-                 set_state=lambda s: self._params.put_bool("PrioritizeSmoothFollowing", s),
                  visible=self._longitudinal_enabled),
       SettingRow("HumanLaneChanges", "toggle", tr_noop("Human-Like Lane Changes"),
                  subtitle=tr_noop("Radar-informed behavior during lane changes."),
@@ -677,7 +562,7 @@ class StarPilotLongitudinalLayout(_SettingsPage):
                  subtitle=tr_noop("Extra acceleration when moving away from a stop."),
                  get_value=lambda: f"{self._params.get_float('StartAccel'):.2f}m/s",
                  on_click=lambda: self._show_slider("StartAccel", 0.0, 4.0, step=0.01, unit="m/s", value_type="float"),
-                 visible=lambda: adv() and not self._using_human_acceleration()),
+                 visible=adv),
       SettingRow("StopAccel", "value", tr_noop("Stop Acceleration"),
                  subtitle=tr_noop("Brake force to hold the vehicle at a complete stop."),
                  get_value=lambda: f"{self._params.get_float('StopAccel'):.2f}m/s",
@@ -958,7 +843,7 @@ class StarPilotLongitudinalLayout(_SettingsPage):
       self,
       [SettingSection(title="", rows=self._tune_rows)],
       header_title=tr_noop("Longitudinal Tuning"),
-      header_subtitle=tr_noop("Configure acceleration profiles, smooth following, lane changes, and route speed control."),
+      header_subtitle=tr_noop("Configure acceleration profiles, lane changes, and route speed control."),
       parent_toggle=pt_tune,
       panel_style=PANEL_STYLE,
     )
@@ -1233,7 +1118,7 @@ class StarPilotLongitudinalLayout(_SettingsPage):
     self._navigate_to(panel_name)
 
   def _build_personality_profile_rows(self, profile: str) -> list[SettingRow]:
-    follow_min = 1.0 if profile == "Traffic" else 0.5
+    follow_min = 0.5
     follow_max = 2.5 if profile == "Traffic" else 3.0
     p = profile
     rows = [

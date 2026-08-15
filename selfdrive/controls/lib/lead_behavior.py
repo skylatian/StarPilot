@@ -12,6 +12,11 @@ VISION_LEAD_TRACK_CLOSING_CAP = 2.50
 VISION_LEAD_TRACK_EXIT_TIME_GAP = 2.30
 VISION_LEAD_TRACK_EXIT_MAX_LATERAL_OFFSET = 1.6
 VISION_LEAD_TRACK_EXIT_MIN_MODEL_PROB = 0.70
+VISION_LEAD_TRACK_CONTINUITY_MIN_MODEL_PROB = 0.95
+VISION_LEAD_TRACK_CONTINUITY_MAX_LATERAL_OFFSET = 1.1
+VISION_LEAD_TRACK_CONTINUITY_TIME_GAP_GAIN = 0.55
+VISION_LEAD_TRACK_CONTINUITY_FULL_SPEED = 20.0
+VISION_LEAD_TRACK_CONTINUITY_FADE_SPEED = 25.0
 TRACKED_LEAD_CATCHUP_BIAS_MIN_HEADWAY_MARGIN = 0.40
 TRACKED_LEAD_CATCHUP_BIAS_FULL_HEADWAY_MARGIN = 0.70
 TRACKED_LEAD_CATCHUP_BIAS_MIN_FADE_START_MARGIN = 0.75
@@ -29,6 +34,7 @@ RADARLESS_MATCHED_FOLLOW_HEADWAY_BELOW_TARGET = 0.35
 RADARLESS_MATCHED_FOLLOW_HEADWAY_ABOVE_TARGET = 0.90
 RADARLESS_MATCHED_FOLLOW_MAX_LEAD_BRAKE = 0.35
 RADARLESS_MATCHED_FOLLOW_MIN_MODEL_PROB = 0.70
+FAR_LEAD_COAST_MIN_GAP = 3.5
 
 
 def _smoothstep(value: float, start: float, end: float) -> float:
@@ -65,7 +71,23 @@ def should_hold_tracked_vision_lead(lead_status: bool, lead_distance: float, mod
   model_limit = float(model_length) + tracking_buffer
   vision_exit_limit = max(VISION_LEAD_TRACK_MIN_DISTANCE,
                           float(v_ego) * VISION_LEAD_TRACK_EXIT_TIME_GAP + tracking_buffer)
-  return float(lead_distance) < min(model_limit, vision_exit_limit)
+  if float(lead_distance) < min(model_limit, vision_exit_limit):
+    return True
+
+  path_relative_offset = abs(float(y_rel) + float(path_y))
+  if (float(model_prob) < VISION_LEAD_TRACK_CONTINUITY_MIN_MODEL_PROB or
+      path_relative_offset > VISION_LEAD_TRACK_CONTINUITY_MAX_LATERAL_OFFSET):
+    return False
+
+  speed_factor = 1.0 - _smoothstep(
+    v_ego,
+    VISION_LEAD_TRACK_CONTINUITY_FULL_SPEED,
+    VISION_LEAD_TRACK_CONTINUITY_FADE_SPEED,
+  )
+  continuity_time_gap = VISION_LEAD_TRACK_EXIT_TIME_GAP + VISION_LEAD_TRACK_CONTINUITY_TIME_GAP_GAIN * speed_factor
+  continuity_exit_limit = max(VISION_LEAD_TRACK_MIN_DISTANCE,
+                              float(v_ego) * continuity_time_gap + tracking_buffer)
+  return float(lead_distance) < continuity_exit_limit
 
 
 def is_radarless_matched_follow_window(v_ego: float, lead_distance: float, v_lead: float, t_follow: float, *,
@@ -152,4 +174,5 @@ def should_disable_far_lead_throttle(v_ego: float, lead_distance: float, desired
   gentle_closing = 0.35 < closing_speed < max(1.35, 0.05 * v_ego)
   ttc = lead_distance / max(closing_speed, 1e-3) if closing_speed > 0.1 else 1e6
 
-  return coast_window_open and coast_window_far and gentle_closing and ttc > 7.5 and lead_distance > desired_gap + 7.0
+  return (coast_window_open and coast_window_far and gentle_closing and ttc > 7.5 and
+          lead_distance > desired_gap + FAR_LEAD_COAST_MIN_GAP)
