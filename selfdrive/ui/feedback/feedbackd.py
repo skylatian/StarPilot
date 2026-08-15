@@ -13,7 +13,13 @@ def main():
   params = Params()
   params_memory = Params(memory=True)
   pm = messaging.PubMaster(['userBookmark', 'audioFeedback'])
-  sm = messaging.SubMaster(['rawAudioData', 'bookmarkButton', 'carState'])
+  # NB: carState intentionally NOT subscribed. Its only use below is dead code
+  # (`if False and ...`, upstream TODO #36015), and carState already sits at msgq's
+  # 15-reader cap on the C3 — a 16th subscriber (e.g. lateral_maneuversd on arm)
+  # trips evict-all-and-thrash (msgq.cc:191) and freezes the UI's speed/steering.
+  # Dropping this unused reader keeps the cap free. Re-add carState here if the
+  # button-bookmark block below is ever re-enabled.
+  sm = messaging.SubMaster(['rawAudioData', 'bookmarkButton'])
   should_record_audio = False
   block_num = 0
   waiting_for_release = False
