@@ -6,13 +6,14 @@
 #include <atomic>
 
 #define DEFAULT_SEGMENT_SIZE (1 * 1024 * 1024)
-// Raised from upstream's 15. carState sits at exactly 15 subscribers on the C3, so
-// starting a 16th (lateral_maneuversd on arm, or longitudinal_maneuversd) tripped
-// msgq's evict-all-and-thrash (msgq.cc:191) and starved the UI's carState reader to
-// zero — the "speed/steering freeze on arm" bug. This sizes the per-queue reader
-// arrays, so every C++ and Python (msgq_pyx) client MUST be rebuilt consistently and
-// /dev/shm recreated (reboot). Do a full rebuild with prebuilt binaries OFF.
-#define NUM_READERS 20
+// DO NOT change this. It sizes the shared-memory header, and it is NOT the single
+// source of truth: mapd is a Go binary using pfeiferj/gomsgq (its own hardcoded 15),
+// and modeld/dmonitoringmodeld ship as prebuilt binaries — none rebuild from this
+// tree. Bumping it here makes source-built processes disagree with those on the same
+// /dev/shm segments (size asserts + gomsgq "index out of range [15]" panic). The
+// carState 16th-reader starvation is fixed by keeping subscribers <=15 instead
+// (lateral_maneuversd no longer subscribes to carState). See 2026-08-13 ui-perf work.
+#define NUM_READERS 15
 #define ALIGN(n) ((n + (8 - 1)) & -8)
 
 #define UNUSED(x) (void)x
