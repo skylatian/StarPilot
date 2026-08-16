@@ -107,64 +107,6 @@ StarPilotRetrofitPanel::StarPilotRetrofitPanel(StarPilotSettingsWindow *parent, 
     }
   });
 
-  // --- Full rebuild button ---
-
-  ButtonControl *fullRebuildButton = new ButtonControl(
-      tr("Full Rebuild"),
-      tr("BUILD"),
-      tr("<b>Clean and rebuild all compiled code, then reboot.</b> "
-         "Required after param or panda safety changes when \"Use Prebuilt Binaries\" is off. "
-         "Takes ~20 minutes on Comma 3."));
-  QObject::connect(fullRebuildButton, &ButtonControl::clicked, [fullRebuildButton, this, parent]() {
-    if (ConfirmationDialog::confirm(tr("This will clean all build artifacts, rebuild from source, and reboot. Continue?"), tr("Rebuild"), this)) {
-      parent->keepScreenOn = true;
-      fullRebuildButton->setEnabled(false);
-      fullRebuildButton->setValue(tr("Cleaning..."));
-
-      QProcess *proc = new QProcess(this);
-      proc->setWorkingDirectory("/data/openpilot");
-      proc->setProcessChannelMode(QProcess::MergedChannels);
-
-      QObject::connect(proc, &QProcess::readyReadStandardOutput, [proc, fullRebuildButton]() {
-        QByteArray data = proc->readAllStandardOutput();
-        QList<QByteArray> lines = data.split('\n');
-        for (int i = lines.size() - 1; i >= 0; i--) {
-          QString line = QString::fromUtf8(lines[i]).trimmed();
-          if (!line.isEmpty()) {
-            QString display = line;
-            if (display.length() > 40) {
-              display = "..." + display.right(37);
-            }
-            fullRebuildButton->setValue(display);
-            break;
-          }
-        }
-      });
-
-      QObject::connect(proc, static_cast<void(QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),
-          [proc, fullRebuildButton, parent](int exitCode, QProcess::ExitStatus) {
-        proc->deleteLater();
-        if (exitCode == 0) {
-          fullRebuildButton->setValue(tr("Build complete! Rebooting..."));
-          QTimer::singleShot(2500, []() { Hardware::reboot(); });
-        } else {
-          fullRebuildButton->setValue(tr("Build failed (exit %1)").arg(exitCode));
-          fullRebuildButton->setEnabled(true);
-          parent->keepScreenOn = false;
-        }
-      });
-
-      QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-      env.insert("SCONS_PROGRESS", "1");
-      proc->setProcessEnvironment(env);
-      proc->start("bash", QStringList() << "-c" << "rm -f .sconsign.dblite && scons -j4 2>&1");
-    }
-  });
-  if (forceOpenDescriptions) {
-    fullRebuildButton->showDescription();
-  }
-  retrofitList->addItem(fullRebuildButton);
-
   // --- Pedal tuning subpanel ---
 
   const float defaultPedalOffsetStandstill = -0.1f;
