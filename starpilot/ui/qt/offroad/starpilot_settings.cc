@@ -489,6 +489,17 @@ void StarPilotSettingsWindow::updateVariables() {
 
   vehiclePanelButtons->setVisibleButton(1, showAllToggles || tuningLevel >= starpilotToggleLevels.value("WheelControls").toDouble());
 
+  // launch_env.sh force-sets FINGERPRINT for the retrofit, and that env var is reliably present even
+  // when CarParamsPersistent hasn't been written yet (e.g. the first boot after a rebuild, before the
+  // build's first route completes). isRetrofit above is derived only from CarParamsPersistent and is
+  // recomputed only on construction / offroad transition / tuning-level change (not on settings open),
+  // so a missing/late CarParamsPersistent would otherwise latch the Retrofit page hidden. Honor the env
+  // var too, matching Raylib's _check_retrofit() which checks it first.
+  const char *fingerprintEnv = std::getenv("FINGERPRINT");
+  if (fingerprintEnv != nullptr && std::string(fingerprintEnv) == "TOYOTA_COROLLA_RETROFIT") {
+    isRetrofit = true;
+  }
+
   retrofitPanelButtons->setVisible(showAllToggles || isRetrofit);
 
   update();
