@@ -2227,15 +2227,17 @@ SECTION_RULE_RIGHT_INSET = 24
 SECTION_RULE_COLOR = rl.Color(255, 255, 255, 34)
 
 
-def draw_section_label(rect: rl.Rectangle, title: str, style: PanelStyle):
-  """Section label, bottom-aligned in rect, with a rule running from the label to the right edge."""
+def draw_section_label(rect: rl.Rectangle, title: str, style: PanelStyle, trailing_width: float = 0.0):
+  """Section label, bottom-aligned in rect, with a rule running from the label to the right edge
+  (or to `trailing_width` + a gap short of it, leaving room for a trailing button)."""
   x = rect.x + SECTION_LABEL_INDENT
   text_h = SECTION_LABEL_SIZE * FONT_SCALE
   y = rect.y + rect.height - text_h - SECTION_LABEL_BASELINE_GAP
   font = gui_app.font(FontWeight.SEMI_BOLD)
   rl.draw_text_ex(font, title, rl.Vector2(x, round(y)), SECTION_LABEL_SIZE, 0, style.title_color)
   rule_x = x + measure_text_cached(font, title, SECTION_LABEL_SIZE).x + SECTION_RULE_GAP
-  rule_w = max(0.0, rect.x + rect.width - rule_x - SECTION_RULE_RIGHT_INSET)
+  rule_right = rect.x + rect.width - SECTION_RULE_RIGHT_INSET - (trailing_width + SECTION_RULE_GAP if trailing_width > 0 else 0.0)
+  rule_w = max(0.0, rule_right - rule_x)
   rl.draw_rectangle_rec(rl.Rectangle(rule_x, round(y + text_h / 2), rule_w, 2), SECTION_RULE_COLOR)
 
 
@@ -2738,6 +2740,12 @@ class AetherInlineRangeControl(Widget):
 
 
 
+# Level bars are deliberately chunkier than list rows (tall bar, large title) so they read at a glance.
+ADJUSTOR_BAR_RADIUS = 18.0   # same corner radius as the toggles
+ADJUSTOR_BAR_INSET = 5.0     # fill inset inside the bar, like the toggle knob inset
+AUTO_MODE_COLOR = rl.Color(56, 170, 178, 255)   # teal: "Auto" is a mode, not a level
+
+
 class AetherAdjustorRow(Widget):
   def __init__(
     self,
@@ -2883,6 +2891,54 @@ class AetherAdjustorRow(Widget):
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     pass
 
+  def _level_fraction(self) -> float | None:
+    """Fill fraction for the level bar, or None when the value is the "Auto" mode (e.g. volume Auto, stored
+    as max+1). Auto is not a level, so it gets its own fill instead of reading as 100%."""
+    value = self._current_value()
+    auto = tr("Auto")
+    if any(abs(value - k) < 1e-4 and label == auto for k, label in self._labels.items()):
+      return None
+    return self._scrubber._value_fraction(value)
+
+  def _render_value_row(self, rect: rl.Rectangle):
+    # Level bar: dark rounded track with the accent fill inset inside it (like the toggle fill), title on the
+    # left and value + chevron on the right, since tapping opens the slider dialog.
+    value_str = self.formatted_value()
+    frac = self._level_fraction()
+    pressed = self._pressed_zone == "header"
+
+    bar_h = max(74, min(94, int(rect.height * 0.87)))
+    title_size = max(38, int(bar_h * 0.53))
+    value_size = max(28, int(bar_h * 0.38))
+    bar = snap_rect(rl.Rectangle(rect.x + 24, rect.y + (rect.height - bar_h) / 2, rect.width - 48, bar_h))
+    self._header_rect = bar
+    self._progress_bar_rect = bar
+    radius = min(ADJUSTOR_BAR_RADIUS, bar_h / 2)
+    draw_rounded_fill(bar, rl.Color(255, 255, 255, 36 if pressed else 16), radius_px=radius * 2, max_roundness=1.0)
+    draw_rounded_stroke(bar, rl.Color(255, 255, 255, 30), radius_px=radius * 2, max_roundness=1.0)
+
+    inset = ADJUSTOR_BAR_INSET
+    inner_radius_px = (radius - inset) * 2
+    if frac is None:
+      inner = snap_rect(rl.Rectangle(bar.x + inset, bar.y + inset, bar.width - 2 * inset, bar_h - 2 * inset))
+      draw_rounded_fill(inner, with_alpha(AUTO_MODE_COLOR, 110), radius_px=inner_radius_px, max_roundness=1.0)
+    elif frac > 0:
+      fill_w = max(2 * (radius - inset), (bar.width - 2 * inset) * frac)
+      fill = snap_rect(rl.Rectangle(bar.x + inset, bar.y + inset, fill_w, bar_h - 2 * inset))
+      draw_rounded_fill(fill, with_alpha(self._color, 150), radius_px=inner_radius_px, max_roundness=1.0)
+
+    chevron_w = 30
+    chevron = rl.Rectangle(bar.x + bar.width - 16 - chevron_w, bar.y + (bar_h - chevron_w) / 2, chevron_w, chevron_w)
+    draw_chevron_icon(chevron, self._style.title_color)
+    value_w = measure_text_cached(self._font_value, value_str, value_size).x
+    value_x = chevron.x - 16 - value_w
+    rl.draw_text_ex(self._font_value, value_str, rl.Vector2(round(value_x), round(centered_text_y(bar.y, bar_h, value_size))),
+                    value_size, 0, self._style.title_color)
+    text_left = bar.x + 20
+    draw_text_fit_common(self._font_title, self._title,
+                         rl.Vector2(text_left, centered_text_y(bar.y, bar_h, title_size)),
+                         max(1.0, value_x - 16 - text_left), title_size, color=self._style.title_color)
+
   def _render_preset_chip(self, rect: rl.Rectangle, text: str, *, current: bool, pressed: bool):
     fill = rl.Color(255, 255, 255, 5)
     border = rl.Color(255, 255, 255, 14)
@@ -2934,47 +2990,12 @@ class AetherAdjustorRow(Widget):
       current_border=current_border,
     )
 
-    bar_h = max(74, min(94, int(rect.height * 0.87)))
-    title_fs = max(38, int(bar_h * 0.53))
-    value_fs = max(28, int(bar_h * 0.38))
-
-    content_left = rect.x + 24
-    bar_width = max(120.0, rect.width - 48)
-    bar_y = rect.y + (rect.height - bar_h) / 2
-    bar_rect = snap_rect(rl.Rectangle(content_left, bar_y, bar_width, bar_h))
-    self._progress_bar_rect = bar_rect
-    self._header_rect = bar_rect
-
-    draw_rounded_fill(bar_rect, rl.Color(255, 255, 255, 8), radius_px=bar_h // 2)
-    draw_rounded_stroke(bar_rect, rl.Color(255, 255, 255, 14), radius_px=bar_h // 2)
-
-    fill_frac = self._scrubber._value_fraction(self._current_value())
-    if fill_frac > 0:
-      fill_rect = snap_rect(rl.Rectangle(bar_rect.x, bar_rect.y, max(1.0, bar_rect.width * fill_frac), bar_h))
-      fill_alpha = 200 if self._pressed_zone == "header" else (180 if active else 140)
-      draw_rounded_fill(fill_rect, with_alpha(self._color, fill_alpha), radius_px=bar_h // 2)
-
-    inset = 18
-    title_y = centered_text_y(bar_rect.y, bar_h, title_fs)
-    rl.draw_text_ex(self._font_title, self._title,
-                    rl.Vector2(bar_rect.x + inset, title_y),
-                    title_fs, 0, self._style.title_color)
-
-    value_str = self.formatted_value()
-    value_w = measure_text_cached(self._font_value, value_str, value_fs).x
-    rl.draw_text_ex(self._font_value, value_str,
-                    rl.Vector2(bar_rect.x + bar_rect.width - inset - value_w,
-                               centered_text_y(bar_rect.y, bar_h, value_fs)),
-                    value_fs, 0, self._style.title_color)
-
-    if self._subtitle:
-      sub_fs = 26
-      sub_y = bar_rect.y - sub_fs - 4
-      gui_label(rl.Rectangle(content_left, sub_y, bar_width, sub_fs),
-                self._subtitle, sub_fs, self._style.subtitle_color, FontWeight.NORMAL)
+    self._render_value_row(rect)
 
     if not active:
       return
+
+    content_left = rect.x + 24
 
     tray_alpha = max(0, min(255, int(255 * self._focus_progress)))
     tray_top = self._progress_bar_rect.y + self._progress_bar_rect.height + 10

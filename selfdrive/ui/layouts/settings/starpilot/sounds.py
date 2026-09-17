@@ -7,7 +7,7 @@ import pyray as rl
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH
-from openpilot.system.ui.lib.application import gui_app, FontWeight, MouseEvent, MousePos
+from openpilot.system.ui.lib.application import gui_app, FontWeight, MouseEvent, MousePos, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.label import gui_label
@@ -37,7 +37,19 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   GROUP_HEADER_TOTAL_HEIGHT,
   GROUP_TOP_INSET,
   draw_group_header,
+  draw_action_pill,
+  draw_section_label,
+  SECTION_HEADER_HEIGHT,
+  SECTION_LABEL_BASELINE_GAP,
+  SECTION_LABEL_SIZE,
+  measure_text_cached,
 )
+RESET_PILL_H = 56.0
+RESET_PILL_PAD_X = 28.0
+RESET_TEXT_SIZE = 30
+RESET_FILL = rl.Color(255, 255, 255, 18)
+RESET_FILL_PRESSED = rl.Color(255, 255, 255, 36)
+RESET_BORDER = rl.Color(255, 255, 255, 40)
 
 PANEL_STYLE = DEFAULT_PANEL_STYLE
 SOUNDS_PANEL_METRICS = replace(
@@ -194,7 +206,7 @@ class SoundsManagerView(AdjustorTogglesPanelView):
       self._adjustor_rows[key].custom_row_height = None
     self._adjustor_rows[self._controller.COOLDOWN_KEY].custom_row_height = None
 
-    vol_overhead = GROUP_TOP_INSET + 28  # top pad + "Reset All" label
+    vol_overhead = GROUP_TOP_INSET + SECTION_HEADER_HEIGHT + GROUP_HEADER_GAP
 
     available_h = max(72.0, (self._scroll_rect.height if self._scroll_rect else 0.0) - 6.0)
     rows_available = max(72.0 * (len(self._controller.VOLUME_KEYS) + 1), available_h - vol_overhead)
@@ -204,7 +216,8 @@ class SoundsManagerView(AdjustorTogglesPanelView):
     self._adjustor_rows[self._controller.COOLDOWN_KEY].custom_row_height = ROW_HEIGHT
 
     left_content_h = (len(self._controller.VOLUME_KEYS) + 1) * ROW_HEIGHT + vol_overhead
-    tiles_needed_h = self.measure_page_grid_height(self._toggle_grid, col_width - 24) + 24 + GROUP_TOP_INSET + GROUP_HEADER_TOTAL_HEIGHT
+    tiles_header_h = SECTION_HEADER_HEIGHT + GROUP_HEADER_GAP
+    tiles_needed_h = self.measure_page_grid_height(self._toggle_grid, col_width - 24) + 24 + GROUP_TOP_INSET + tiles_header_h
     max_content_h = max(left_content_h, tiles_needed_h)
 
     self._left_container_h = max_content_h
@@ -232,12 +245,14 @@ class SoundsManagerView(AdjustorTogglesPanelView):
 
     current_y = y + GROUP_TOP_INSET
 
-    label_rect = rl.Rectangle(x + 24, current_y, width - 48, 28)
-    gui_label(label_rect, tr("Reset All"), 28, AetherListColors.SUBTEXT, FontWeight.MEDIUM,
-              alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
-    self._reset_rect = rl.Rectangle(label_rect.x + label_rect.width - 140, label_rect.y, 140, 24)
-    self._interactive_rects["action:restore_defaults"] = self._reset_rect
-    current_y += 28
+    font = gui_app.font(FontWeight.SEMI_BOLD)
+    pill_w = measure_text_cached(font, tr("Reset All"), RESET_TEXT_SIZE).x + RESET_PILL_PAD_X * 2
+    header = rl.Rectangle(x, current_y, width, SECTION_HEADER_HEIGHT)
+    draw_section_label(header, tr("Volume"), PANEL_STYLE, trailing_width=pill_w)
+    label_mid = header.y + header.height - SECTION_LABEL_BASELINE_GAP - SECTION_LABEL_SIZE * FONT_SCALE / 2
+    pill = rl.Rectangle(x + width - 24 - pill_w, label_mid - RESET_PILL_H / 2, pill_w, RESET_PILL_H)
+    current_y += SECTION_HEADER_HEIGHT + GROUP_HEADER_GAP
+    self._draw_reset_pill(pill)
     for index, key in enumerate(all_keys):
       adjustor = self._adjustor_rows[key]
       row_h = adjustor.measure_height(width)
@@ -247,9 +262,17 @@ class SoundsManagerView(AdjustorTogglesPanelView):
       adjustor.render(row_rect)
       current_y += row_h
 
+  def _draw_reset_pill(self, pill: rl.Rectangle):
+    self._reset_rect = pill
+    self._interactive_rects["action:restore_defaults"] = pill
+    pressed = self._pressed_target == "action:restore_defaults"
+    draw_action_pill(pill, tr("Reset All"), RESET_FILL_PRESSED if pressed else RESET_FILL, RESET_BORDER,
+                     AetherListColors.HEADER, font_size=RESET_TEXT_SIZE)
+
   def _draw_utility_column(self, y: float, x: float, width: float):
     draw_list_group_shell(rl.Rectangle(x, y, width, self._tiles_container_h), style=PANEL_STYLE)
-    header_y = draw_group_header(x + 24, y + GROUP_TOP_INSET, width - 48, tr("Alerts"))
+    draw_section_label(rl.Rectangle(x, y + GROUP_TOP_INSET, width, SECTION_HEADER_HEIGHT), tr("Alerts"), PANEL_STYLE)
+    header_y = y + GROUP_TOP_INSET + SECTION_HEADER_HEIGHT + GROUP_HEADER_GAP
     avail_h = self._tiles_container_h - (header_y - y)
     self._render_page_grid(self._toggle_grid, rl.Rectangle(x + 12, header_y, width - 24, max(0.0, avail_h - 12)))
 
