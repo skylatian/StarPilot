@@ -7,7 +7,7 @@ import time
 import pyray as rl
 
 from openpilot.system.hardware import HARDWARE
-from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.application import gui_app, FontWeight, settle
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult, Widget
@@ -584,8 +584,8 @@ class ButtonActionComboDialog(Widget):
         )
 
     dt = rl.get_frame_time()
-    self._ok_offset += (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / 0.060))
-    self._cancel_offset += (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / 0.060))
+    self._ok_offset = settle(self._ok_offset + (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / 0.060)), self._ok_target, 0.01)
+    self._cancel_offset = settle(self._cancel_offset + (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / 0.060)), self._cancel_target, 0.01)
 
     c_y = self._cancel_rect.y + min(1.0, 10 * self._cancel_offset * 0.1)
     c_face = snap_rect(rl.Rectangle(self._cancel_rect.x, c_y, 600, 160))

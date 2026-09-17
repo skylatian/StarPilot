@@ -50,6 +50,7 @@ class GuiScrollPanel:
 
       # Decay velocity when idle
       if abs(self._velocity_filter_y.x) > MIN_VELOCITY:
+        gui_app.animating()  # fling outlives the touch-driven high-FPS window
         # Faster decay if bouncing back from out of bounds
         friction = math.exp(-BOUNCE_RETURN_RATE * 1 / gui_app.target_fps)
         self._velocity_filter_y.x *= friction ** 2 if (above_bounds or below_bounds) else friction
@@ -57,6 +58,7 @@ class GuiScrollPanel:
         self._velocity_filter_y.x = 0.0
 
       if above_bounds or below_bounds:
+        gui_app.animating()
         if above_bounds:
           self._offset_filter_y.update(0)
         else:

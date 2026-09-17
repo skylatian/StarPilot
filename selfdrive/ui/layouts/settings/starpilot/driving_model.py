@@ -26,7 +26,7 @@ from openpilot.starpilot.assets.model_manager import (
   set_model_profile,
 )
 from openpilot.starpilot.common.starpilot_variables import MODELS_PATH, update_starpilot_toggles
-from openpilot.system.ui.lib.application import FontWeight, MouseEvent, MousePos, gui_app
+from openpilot.system.ui.lib.application import FontWeight, MouseEvent, MousePos, gui_app, settle
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel2 import GuiScrollPanel2
 from openpilot.system.ui.widgets import DialogResult, Widget
@@ -111,7 +111,7 @@ def _clean_model_name(name: str) -> str:
 
 def _ease(current: float, target: float, tau: float = 0.085) -> float:
   dt = max(rl.get_frame_time(), 1 / max(gui_app.target_fps, 1))
-  return current + (target - current) * (1 - math.exp(-dt / tau))
+  return settle(current + (target - current) * (1 - math.exp(-dt / tau)), target)
 
 
 class DrivingModelManagerView(AetherInteractiveMixin, Widget):

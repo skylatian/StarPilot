@@ -71,7 +71,9 @@ def _install_aethergrid_stubs():
   app_mod.MousePos = type("MousePos", (), {})
   app_mod.MouseEvent = type("MouseEvent", (), {})
   app_mod.FONT_SCALE = 1.0
+  app_mod.settle = lambda value, target, eps=1e-3: target if abs(target - value) <= eps else value
   app_mod.gui_app = types.SimpleNamespace(
+    animating=lambda: None,
     width=1920,
     height=1080,
     last_mouse_event=types.SimpleNamespace(pos=types.SimpleNamespace(x=0, y=0)),

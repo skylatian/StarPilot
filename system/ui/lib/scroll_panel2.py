@@ -117,6 +117,7 @@ class GuiScrollPanel2:
           self._state = ScrollState.AUTO_SCROLL
 
     elif self._state == ScrollState.AUTO_SCROLL:
+      gui_app.animating()  # fling / snap / bounce-back outlives the touch-driven high-FPS window
       if self.snap_interval is not None and self._snap_target is not None:
         target = self._snap_target
         dt = rl.get_frame_time() or 1e-6

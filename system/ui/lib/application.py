@@ -32,6 +32,9 @@ DESKTOP_MOUSE_THREAD_RATE = int(os.getenv("DESKTOP_MOUSE_RATE", "500"))
 DESKTOP_CLICK_DEBOUNCE = float(os.getenv("DESKTOP_CLICK_DEBOUNCE", "0.2"))
 UI_IDLE_FPS = int(os.getenv("UI_IDLE_FPS", "0"))
 UI_INTERACTION_FPS_DURATION = 1.25
+# How long an animation keeps the full frame rate after its last converging frame. Animations call
+# gui_app.animating() every frame they are still moving, so this only needs to bridge one frame.
+UI_ANIMATION_FPS_HOLD = float(os.getenv("UI_ANIMATION_FPS_HOLD", "0.3"))
 MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
 
@@ -594,6 +597,15 @@ class GuiApplication:
       return
     self._high_fps_until = max(self._high_fps_until, time.monotonic() + max(0.0, duration))
     self._apply_render_mode()
+
+  def animating(self) -> None:
+    """Call every frame an animation is still converging (scroll momentum, eased widgets).
+
+    Interaction alone only holds the full rate for UI_INTERACTION_FPS_DURATION after the last
+    touch, so anything still moving after that (a fling, a settling dialog) would otherwise be
+    rendered at the idle rate. Cheap: one monotonic() read; a no-op without adaptive rendering.
+    """
+    self.request_high_fps(UI_ANIMATION_FPS_HOLD)
 
   def set_render_mode(self, active: bool) -> None:
     if not self._adaptive_rendering:
@@ -1372,3 +1384,16 @@ class GuiApplication:
 
 
 gui_app = GuiApplication()
+
+
+def settle(value: float, target: float, eps: float = 1e-3) -> float:
+  """Finish an eased value: snap onto ``target`` once within ``eps``, otherwise keep the UI at
+  full frame rate for another hold window so the remaining motion is not drawn at the idle rate.
+
+  Exponential easing never reaches its target exactly, so every per-frame lerp should pass
+  through here — that is what lets the idle rate kick in once the screen is truly still.
+  """
+  if abs(target - value) <= eps:
+    return target
+  gui_app.animating()
+  return value

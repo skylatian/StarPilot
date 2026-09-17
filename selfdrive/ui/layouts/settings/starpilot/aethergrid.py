@@ -5,7 +5,7 @@ import random
 import time
 import pyray as rl
 from collections.abc import Callable
-from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, MouseEvent, FONT_SCALE
+from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, MouseEvent, FONT_SCALE, settle
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel2 import GuiScrollPanel2
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -864,6 +864,7 @@ class PanelManagerView(AetherInteractiveMixin, Widget):
       grid.render(grid_rect)
     else:
       # animation
+      gui_app.animating()
       elapsed = time.monotonic() - self._page_anim_start
       duration = self.PAGE_ANIM_DURATION if self._page_anim_committed else self.PAGE_SNAP_DURATION
       if elapsed >= duration:
@@ -2169,9 +2170,7 @@ def draw_settings_list_row(
     target = 1.0 if toggle_value else 0.0
     current_progress = _KNOB_ANIMATION_STATES.get(title, target)
     dt = rl.get_frame_time()
-    current_progress += (target - current_progress) * 12.0 * dt
-    if abs(current_progress - target) < 0.001:
-      current_progress = target
+    current_progress = settle(current_progress + (target - current_progress) * 12.0 * dt, target)
     _KNOB_ANIMATION_STATES[title] = current_progress
 
     draw_toggle_switch(
@@ -2565,9 +2564,9 @@ class AetherInlineRangeControl(Widget):
     rect = snap_rect(rect)
     self.set_rect(rect)
     dt = rl.get_frame_time()
-    self._smooth_value += (self.current_val - self._smooth_value) * (1 - math.exp(-dt / 0.075))
+    self._smooth_value = settle(self._smooth_value + (self.current_val - self._smooth_value) * (1 - math.exp(-dt / 0.075)), self.current_val)
     thumb_target = 1.0 if self._is_dragging or self._pending_drag else 0.0
-    self._thumb_focus += (thumb_target - self._thumb_focus) * (1 - math.exp(-dt / 0.070))
+    self._thumb_focus = settle(self._thumb_focus + (thumb_target - self._thumb_focus) * (1 - math.exp(-dt / 0.070)), thumb_target)
 
     button_size = min(rect.height, 64)
     button_y = rect.y + (rect.height - button_size) / 2
@@ -2807,7 +2806,7 @@ class AetherAdjustorRow(Widget):
 
     dt = rl.get_frame_time()
     focus_target = 1.0 if active else 0.0
-    self._focus_progress += (focus_target - self._focus_progress) * (1 - math.exp(-dt / 0.09))
+    self._focus_progress = settle(self._focus_progress + (focus_target - self._focus_progress) * (1 - math.exp(-dt / 0.09)), focus_target)
 
     hovered = point_hits(gui_app.last_mouse_event.pos, rect, self._parent_rect, pad_x=6, pad_y=0)
     current_bg = with_alpha(mix_colors(rl.Color(18, 22, 28, 255), self._color, 0.16), int(18 + self._focus_progress * 14))
@@ -3682,7 +3681,7 @@ class AetherCategoryDrawer(AetherSettingsView):
 
     # Drawer slide-in animation (exponential smoothing)
     dt = rl.get_frame_time()
-    self._slide_progress += (1.0 - self._slide_progress) * (1.0 - math.exp(-dt / 0.12))
+    self._slide_progress = settle(self._slide_progress + (1.0 - self._slide_progress) * (1.0 - math.exp(-dt / 0.12)), 1.0)
 
     drawer_w = 850
     if self._is_rhd:
@@ -3846,12 +3845,12 @@ class AetherTile(Widget):
   def _animate_plate(self, dt: float):
     if self._plate_offset == self._plate_target:
       return
-    self._plate_offset += (self._plate_target - self._plate_offset) * (1 - math.exp(-dt / PLATE_TAU))
+    self._plate_offset = settle(self._plate_offset + (self._plate_target - self._plate_offset) * (1 - math.exp(-dt / PLATE_TAU)), self._plate_target, 0.01)
 
   def _update_squish(self):
     dt = rl.get_frame_time()
     if self._squish < 1.0:
-      self._squish += (1.0 - self._squish) * 15.0 * dt
+      self._squish = settle(self._squish + (1.0 - self._squish) * 15.0 * dt, 1.0)
 
   def _update_state(self):
     self._update_squish()
@@ -4071,7 +4070,7 @@ class ToggleTile(AetherTile):
     super()._update_state()
     dt = rl.get_frame_time()
     target = 1.0 if self.get_state() and self.enabled else 0.0
-    self._glow += (target - self._glow) * 10.0 * dt
+    self._glow = settle(self._glow + (target - self._glow) * 10.0 * dt, target)
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     if self._is_pressed:
@@ -4364,7 +4363,7 @@ class SliderTile(AetherTile):
         current_val = self.get_value()
         dt = rl.get_frame_time()
 
-        self._smooth_value += (current_val - self._smooth_value) * (1 - math.exp(-dt / 0.1))
+        self._smooth_value = settle(self._smooth_value + (current_val - self._smooth_value) * (1 - math.exp(-dt / 0.1)), current_val)
         self._animate_plate(dt)
 
         if not enabled:
@@ -4800,8 +4799,8 @@ class AetherSliderDialog(Widget):
 
   def _render(self, rect: rl.Rectangle):
     dt = rl.get_frame_time()
-    self._ok_offset += (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / PLATE_TAU))
-    self._cancel_offset += (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / PLATE_TAU))
+    self._ok_offset = settle(self._ok_offset + (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / PLATE_TAU)), self._ok_target, 0.01)
+    self._cancel_offset = settle(self._cancel_offset + (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / PLATE_TAU)), self._cancel_target, 0.01)
     rl.draw_rectangle(0, 0, gui_app.width, gui_app.height, rl.Color(0, 0, 0, 160))
 
     has_presets = len(self._presets) > 0
@@ -5086,8 +5085,8 @@ class AetherMultiSelectDialog(Widget):
 
   def _render(self, rect: rl.Rectangle):
     dt = rl.get_frame_time()
-    self._ok_offset += (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / PLATE_TAU))
-    self._cancel_offset += (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / PLATE_TAU))
+    self._ok_offset = settle(self._ok_offset + (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / PLATE_TAU)), self._ok_target, 0.01)
+    self._cancel_offset = settle(self._cancel_offset + (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / PLATE_TAU)), self._cancel_target, 0.01)
     rl.draw_rectangle(0, 0, gui_app.width, gui_app.height, rl.Color(0, 0, 0, 160))
 
     dialog_w = 1600

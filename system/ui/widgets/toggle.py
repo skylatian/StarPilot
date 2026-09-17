@@ -1,6 +1,6 @@
 import pyray as rl
 from collections.abc import Callable
-from openpilot.system.ui.lib.application import MousePos
+from openpilot.system.ui.lib.application import MousePos, gui_app
 from openpilot.system.ui.widgets import Widget
 
 ON_COLOR = rl.Color(51, 171, 76, 255)
@@ -49,6 +49,7 @@ class Toggle(Widget):
 
   def update(self):
     if abs(self._progress - self._target) > 0.01:
+      gui_app.animating()
       delta = rl.get_frame_time() * ANIMATION_SPEED
       self._progress += delta if self._progress < self._target else -delta
       self._progress = max(0.0, min(1.0, self._progress))
