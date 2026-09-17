@@ -111,7 +111,9 @@ class DeveloperLayout(Widget):
       initial_state=self._params.get_bool("ShowDebugInfo"),
       callback=self._on_enable_ui_debug,
     )
-    self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
+    # Only apply the param when it is set, so SHOW_FPS=1 / the debug env flags survive construction.
+    if self._params.get_bool("ShowDebugInfo"):
+      self._on_enable_ui_debug(True)
 
     self._scroller = Scroller([
       self._adb_toggle,

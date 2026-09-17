@@ -34,7 +34,7 @@ UI_IDLE_FPS = int(os.getenv("UI_IDLE_FPS", "0"))
 UI_INTERACTION_FPS_DURATION = 1.25
 # How long an animation keeps the full frame rate after its last converging frame. Animations call
 # gui_app.animating() every frame they are still moving, so this only needs to bridge one frame.
-UI_ANIMATION_FPS_HOLD = float(os.getenv("UI_ANIMATION_FPS_HOLD", "0.3"))
+UI_ANIMATION_FPS_HOLD = float(os.getenv("UI_ANIMATION_FPS_HOLD", "0.5"))
 MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
 
