@@ -226,6 +226,9 @@ if [[ -d /opt/homebrew/bin ]]; then
   export PATH="/opt/homebrew/bin:${PATH}"
 fi
 
+# Keep the venv ahead of Homebrew: scons runs the MPC codegen as a bare `python3`.
+export PATH="${ROOT_DIR}/.venv/bin:${PATH}"
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
   # Keep desktop host builds on Apple toolchain even if shell exports Homebrew llvm.
   export CC="/usr/bin/clang"
