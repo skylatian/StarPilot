@@ -52,6 +52,9 @@ class UIState(IntEnum):
   FORGETTING = 4
 
 
+NAV_BUTTON_INSET = 40  # same side inset as the Bluetooth panel header (HEADER_PADDING)
+
+
 class NavButton(Widget):
   def __init__(self, text: str):
     super().__init__()
@@ -90,11 +93,11 @@ class NetworkUI(Widget):
                                 self._rect.width, self._rect.height - self._nav_button.rect.height - 40)
     if self._current_panel == PanelType.WIFI:
       self._nav_button.text = tr("Advanced")
-      self._nav_button.set_position(self._rect.x + self._rect.width - self._nav_button.rect.width, self._rect.y + 20)
+      self._nav_button.set_position(self._rect.x + self._rect.width - self._nav_button.rect.width - NAV_BUTTON_INSET, self._rect.y + 20)
       self._wifi_panel.render(content_rect)
     else:
       self._nav_button.text = tr("Back")
-      self._nav_button.set_position(self._rect.x, self._rect.y + 20)
+      self._nav_button.set_position(self._rect.x + NAV_BUTTON_INSET, self._rect.y + 20)
       self._advanced_panel.render(content_rect)
 
     self._nav_button.render()
