@@ -56,9 +56,13 @@ def main():
     gui_app.set_progress_hook(stall_monitor.progress)
     kick_watchdog()
     stall_monitor.progress("ui.before_layout_init")
+    screenshot_tour = None
     if BIG_UI:
       from openpilot.selfdrive.ui.layouts.main import MainLayout
-      MainLayout()
+      main_layout = MainLayout()
+      if os.getenv("UI_SCREENSHOT_DIR"):
+        from openpilot.selfdrive.ui.screenshot_tour import ScreenshotTour
+        screenshot_tour = ScreenshotTour(main_layout, os.environ["UI_SCREENSHOT_DIR"])
     else:
       from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
       MiciMainLayout()
@@ -73,6 +77,11 @@ def main():
       kick_watchdog()
       stall_monitor.progress("ui.after_watchdog")
       ui_state.update(progress_hook=stall_monitor.progress)
+      if screenshot_tour is not None:
+        screenshot_tour.update()
+        if screenshot_tour.done and not gui_app.screenshot_pending():
+          print(f"screenshot tour: saved {len(screenshot_tour.saved)} pages to {os.environ['UI_SCREENSHOT_DIR']}")
+          gui_app.request_close()
       stall_monitor.progress("ui.after_state_update")
       now = time.monotonic()
       if now - context_update_time >= 1.0:

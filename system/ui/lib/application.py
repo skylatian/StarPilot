@@ -65,6 +65,7 @@ RECORD_QUALITY = int(os.getenv("RECORD_QUALITY", "23"))  # Dynamic bitrate quali
 RECORD_BITRATE = os.getenv("RECORD_BITRATE", "")  # Target bitrate e.g. "2000k" (overrides RECORD_QUALITY when set)
 RECORD_SPEED = int(os.getenv("RECORD_SPEED", "1"))  # Speed multiplier
 OFFSCREEN = os.getenv("OFFSCREEN") == "1"  # Disable FPS limiting for fast offline rendering
+UI_SCREENSHOT_DIR = os.getenv("UI_SCREENSHOT_DIR", "")  # Screenshot tour output dir (selfdrive/ui/screenshot_tour.py)
 
 
 def _raylib_target_fps(fps: int) -> int:
@@ -529,6 +530,7 @@ class GuiApplication:
     self._burn_in_start_time = time.monotonic()
     self._frame = 0
     self._window_close_requested = False
+    self._pending_screenshot: str | None = None
     self._nav_stack: list[object] = []
     self._nav_stack_ticks: list[Callable[[], None]] = []
     self._nav_stack_widgets_to_render = 1 if self.big_ui() else 2
@@ -581,7 +583,7 @@ class GuiApplication:
     """
     # Recording feeds raw frames to ffmpeg at the fixed full FPS, so changing
     # the producer rate would make idle portions play back too quickly.
-    self._adaptive_rendering = bool(enabled and not OFFSCREEN and not RECORD)
+    self._adaptive_rendering = bool(enabled and not OFFSCREEN and not RECORD and not UI_SCREENSHOT_DIR)
     if idle_fps is None or idle_fps <= 0:
       idle_fps = UI_IDLE_FPS if UI_IDLE_FPS > 0 else max(10, self._full_target_fps // 4)
     self._idle_target_fps = min(self._full_target_fps, max(1, int(idle_fps)))
@@ -619,6 +621,27 @@ class GuiApplication:
     high_rate = self._full_rate_rendering or time.monotonic() < self._high_fps_until
     self._set_target_fps(self._full_target_fps if high_rate else self._idle_target_fps)
 
+  def request_screenshot(self, path: str) -> None:
+    """Save the next fully drawn frame as a PNG. Needs a render texture (UI_SCREENSHOT_DIR forces one)."""
+    self._pending_screenshot = path
+
+  def screenshot_pending(self) -> bool:
+    return self._pending_screenshot is not None
+
+  def _save_screenshot(self, path: str) -> None:
+    if self._render_texture is None:
+      cloudlog.warning(f"screenshot skipped, no render texture: {path}")
+      return
+    image = rl.load_image_from_texture(self._render_texture.texture)
+    try:
+      rl.image_flip_vertical(image)
+      # Retina hosts render at 2x; save at the device's logical resolution.
+      if image.width != self._width or image.height != self._height:
+        rl.image_resize(image, self._width, self._height)
+      rl.export_image(image, path)
+    finally:
+      rl.unload_image(image)
+
   def request_close(self):
     self._window_close_requested = True
 
@@ -644,7 +667,7 @@ class GuiApplication:
 
       # Keep big-UI burn-in movement in final-frame composition. Translating the live EGL
       # camera/widget pass can corrupt the camera presentation instead of shifting the UI.
-      needs_render_texture = ((self._scale != 1.0 and not PC) or BURN_IN_MODE or RECORD or
+      needs_render_texture = ((self._scale != 1.0 and not PC) or BURN_IN_MODE or RECORD or bool(UI_SCREENSHOT_DIR) or
                               MICI_FORCE_RENDER_TEXTURE or
                               (BURN_IN_PREVENTION and DEVICE_TYPE != "mici") or
                               WHITE_LUMINANCE_CAP < 1.0)
@@ -1149,6 +1172,10 @@ class GuiApplication:
         rl.end_drawing()
         self._mark_progress("gui_app.after_end_drawing")
         self._populate_render_texture_cache()
+
+        if self._pending_screenshot is not None:
+          self._save_screenshot(self._pending_screenshot)
+          self._pending_screenshot = None
 
         if RECORD:
           image = rl.load_image_from_texture(self._render_texture.texture)
