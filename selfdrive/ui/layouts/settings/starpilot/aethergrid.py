@@ -519,14 +519,14 @@ def init_list_panel(rect: rl.Rectangle, style: PanelStyle | None = None, metrics
 
 
 def draw_hud_background(rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, radius_px: float = 100, bg_color: rl.Color | None = None,
-                        max_roundness: float = 0.5) -> tuple[rl.Rectangle, rl.Color]:
+                        max_roundness: float = 0.5, bloom: bool = True) -> tuple[rl.Rectangle, rl.Color]:
   snapped = snap_rect(rect)
   rx, ry, rw, rh = int(snapped.x), int(snapped.y), int(snapped.width), int(snapped.height)
   face = rl.Rectangle(rx, ry, rw, rh)
 
   off_border = _HUD_BORDER_OFF
 
-  for i in range(4, 0, -1):
+  for i in range(4, 0, -1) if bloom else ():
     if glow < 0.1 and i == 4:
       off = 6.0
       a = 6
@@ -1799,6 +1799,7 @@ def draw_toggle_switch(
   knob_offset: float | None = None,
   seed_id: str = "",
   bg_color: rl.Color | None = None,
+  bloom: bool = True,
 ):
   # Snap first: draw_hud_background snaps the track, so the knob and fill must use the same pixels.
   toggle_rect = snap_rect(rl.Rectangle(rect.x + rect.width - width - right_inset, rect.y + (rect.height - height) / 2, width, height))
@@ -1823,7 +1824,7 @@ def draw_toggle_switch(
 
   # Delegate to draw_hud_background — same layered bloom, fill, and lerped border as tiles
   draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress,
-                      radius_px=track_radius_px, bg_color=bg_color, max_roundness=1.0)
+                      radius_px=track_radius_px, bg_color=bg_color, max_roundness=1.0, bloom=bloom)
 
   # Accent fill from the left edge to the knob so ON reads from color, not only knob position.
   # Same inset as the knob, so the fill's edges line up with the knob's.
@@ -3490,11 +3491,12 @@ class AetherSettingsView(PanelManagerView):
     if self._parent_toggle:
       toggle = self._parent_toggle
       tw, th, ri = AETHER_LIST_METRICS.toggle_width, AETHER_LIST_METRICS.toggle_height, AETHER_LIST_METRICS.toggle_right_inset
-      ty = y + (title_h - th) / 2
+      ty = band.y + (band.height - th) / 2  # centered in the band, not on the title line
       self._interactive_rects[f"parent_toggle:{toggle.label}"] = rl.Rectangle(rect.x + rect.width - tw - ri, ty, tw, th)
       toggle_value = toggle.get_state()
       draw_toggle_switch(rl.Rectangle(rect.x, ty, rect.width, th), toggle_value, knob_progress=1.0 if toggle_value else 0.0,
-                         track_color=self._panel_style.accent, seed_id=f"parent_toggle:{toggle.label}", bg_color=rl.Color(12, 10, 18, 255))
+                         track_color=self._panel_style.accent, seed_id=f"parent_toggle:{toggle.label}", bg_color=rl.Color(12, 10, 18, 255),
+                         bloom=False)  # the accent bloom smears against the tinted band
 
   def _active_sections(self) -> list[SettingSection]:
     if self._tab_defs and self._active_tab_key:
