@@ -29,6 +29,8 @@ BACK_TEXT_SIZE = 50
 BACK_ARROW_W = 38
 BACK_ARROW_GAP = 18
 NAV_BTN_HEIGHT = 110
+NAV_TOP = 300  # top of the first nav label's slot
+NAV_BOTTOM_PAD_RATIO = 0.7  # bottom margin under the last label, as a share of the Back button's top margin
 PANEL_MARGIN = 10
 
 # Colors
@@ -240,10 +242,19 @@ class SettingsLayout(Widget):
       # Store back button rect for click detection
       self._back_btn_rect = back_btn_rect
 
-      # Navigation buttons
-      y = rect.y + 300
-      for panel_type, panel_info in self._panels.items():
-        button_rect = rl.Rectangle(rect.x + 50, y, rect.width - 150, NAV_BTN_HEIGHT)
+      # Navigation buttons: the first label stays put, the last label's box sits NAV_BOTTOM_PAD_RATIO of the
+      # Back button's top margin above the screen bottom, and the rest spread evenly between, so the column
+      # stays balanced however many panels are listed.
+      panels = list(self._panels.items())
+      label_h = measure_text_cached(self._font_medium, "Ag", 65).y
+      bottom_pad = round((back_btn_rect.y - rect.y) * NAV_BOTTOM_PAD_RATIO)
+      last_bottom = rect.y + rect.height - bottom_pad
+      first_top = rect.y + NAV_TOP + (NAV_BTN_HEIGHT - label_h) / 2
+      pitch = (last_bottom - label_h - first_top) / max(1, len(panels) - 1)
+      for i, (panel_type, panel_info) in enumerate(panels):
+        label_top = first_top + i * pitch
+        y = label_top + label_h / 2 - pitch / 2
+        button_rect = rl.Rectangle(rect.x + 50, y, rect.width - 150, pitch)
 
         # Button styling
         is_selected = panel_type == self._current_panel
@@ -256,8 +267,6 @@ class SettingsLayout(Widget):
 
         # Store button rect for click detection
         panel_info.button_rect = button_rect
-
-        y += NAV_BTN_HEIGHT
 
   def _draw_current_panel(self, rect: rl.Rectangle):
     rl.draw_rectangle_rounded(rl.Rectangle(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20), 0.04, 30, PANEL_COLOR)
