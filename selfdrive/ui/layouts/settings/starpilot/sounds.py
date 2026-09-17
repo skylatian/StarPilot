@@ -257,7 +257,7 @@ class SoundsManagerView(AdjustorTogglesPanelView):
     current_y = y + GROUP_TOP_INSET
 
     font = gui_app.font(FontWeight.SEMI_BOLD)
-    pill_w = measure_text_cached(font, tr("Reset All"), RESET_TEXT_SIZE).x + RESET_PILL_PAD_X * 2
+    pill_w = measure_text_cached(font, tr("Default Volumes"), RESET_TEXT_SIZE).x + RESET_PILL_PAD_X * 2
     header = rl.Rectangle(x, current_y, width, SECTION_HEADER_HEIGHT)
     draw_section_label(header, tr("Volume"), PANEL_STYLE, trailing_width=pill_w)
     label_mid = header.y + header.height - SECTION_LABEL_BASELINE_GAP - SECTION_LABEL_SIZE * FONT_SCALE / 2
@@ -277,7 +277,7 @@ class SoundsManagerView(AdjustorTogglesPanelView):
     self._reset_rect = pill
     self._interactive_rects["action:restore_defaults"] = pill
     pressed = self._pressed_target == "action:restore_defaults"
-    draw_action_pill(pill, tr("Reset All"), RESET_FILL_PRESSED if pressed else RESET_FILL, RESET_BORDER,
+    draw_action_pill(pill, tr("Default Volumes"), RESET_FILL_PRESSED if pressed else RESET_FILL, RESET_BORDER,
                      AetherListColors.HEADER, font_size=RESET_TEXT_SIZE)
 
   def _draw_utility_column(self, y: float, x: float, width: float):
@@ -365,11 +365,9 @@ class StarPilotSoundsLayout(_SettingsPage):
     self._manager_view = SoundsManagerView(self)
 
   def _restore_defaults(self):
+    # Volumes only: the button sits on the Volume label, so it leaves the cooldown and the alert toggles alone.
     for key in self.VOLUME_KEYS:
       self._params.put_int(key, 101)
-    self._params.put_int(self.COOLDOWN_KEY, 0)
-    for key in self.CUSTOM_ALERTS_KEYS:
-      self._params.put_bool(key, False)
 
   @classmethod
   def _init_sound_player(cls):
