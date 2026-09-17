@@ -162,10 +162,12 @@ def _local_route_identifiers(route: str, data_dir: str) -> list[str]:
       if candidate.exists():
         identifiers.append(str(candidate))
 
-  for filename in filenames:
-    explorer_candidate = data_root / f"{route_name}--{segment}--{filename}"
-    if explorer_candidate.exists():
-      identifiers.append(str(explorer_candidate))
+  # flat comma-explorer files are named <dongle>_<route>--<seg>--rlog.zst, not <dongle>|<route>
+  for prefix in (route_name, route_name.replace("|", "_")):
+    for filename in filenames:
+      explorer_candidate = data_root / f"{prefix}--{segment}--{filename}"
+      if explorer_candidate.exists():
+        identifiers.append(str(explorer_candidate))
 
   return identifiers
 
