@@ -5,10 +5,12 @@ Enabled by UI_SCREENSHOT_DIR (see system/ui/lib/application.py), driven from ui.
   UI_SCREENSHOT_DIR=/tmp/shots FINGERPRINT=TOYOTA_COROLLA_RETROFIT ./c3
 
 Pages are reached by calling the layouts' own navigation methods, not by clicking, so a page
-shows exactly what a user would land on (top of the page, no scroll). After the pages, one sample
+shows exactly what a user would land on (top of the page, no scroll). Each PNG gets a sibling
+NNN_<name>.text.json with every text draw of that exact frame (see scripts/ui_text_lint.py). After the pages, one sample
 of each dialog type is opened over a representative page (never confirmed).
 Optional UI_SCREENSHOT_FILTER=substr keeps only pages whose name contains substr.
 """
+import json
 import os
 import re
 import time
@@ -180,6 +182,7 @@ class ScreenshotTour:
     self._index = 0
     self._shot_at = 0.0
     self._path: str | None = None
+    self._logging = False
     self.done = False
     self.saved: list[str] = []
     os.makedirs(out_dir, exist_ok=True)
@@ -211,8 +214,17 @@ class ScreenshotTour:
     if self._path is None:
       self._advance()
       return
-    if time.monotonic() >= self._shot_at:
-      gui_app.request_screenshot(self._path)
-      self.saved.append(self._path)
-      print(f"screenshot tour: {self._path}")
-      self._path = None
+    if time.monotonic() < self._shot_at:
+      return
+    if not self._logging:
+      # Record text draws of the next frame; that same frame is the one captured below.
+      gui_app.start_text_log()
+      self._logging = True
+      return
+    self._logging = False
+    with open(self._path.removesuffix(".png") + ".text.json", "w") as f:
+      json.dump(gui_app.take_text_log(), f, indent=0, ensure_ascii=False)
+    gui_app.request_screenshot(self._path)
+    self.saved.append(self._path)
+    print(f"screenshot tour: {self._path}")
+    self._path = None

@@ -531,6 +531,9 @@ class GuiApplication:
     self._frame = 0
     self._window_close_requested = False
     self._pending_screenshot: str | None = None
+    self._text_log: list[dict] | None = None
+    self._text_log_recording = False
+    self._text_log_clip: tuple[float, float, float, float] | None = None
     self._nav_stack: list[object] = []
     self._nav_stack_ticks: list[Callable[[], None]] = []
     self._nav_stack_widgets_to_render = 1 if self.big_ui() else 2
@@ -624,6 +627,30 @@ class GuiApplication:
   def request_screenshot(self, path: str) -> None:
     """Save the next fully drawn frame as a PNG. Needs a render texture (UI_SCREENSHOT_DIR forces one)."""
     self._pending_screenshot = path
+
+  def start_text_log(self) -> None:
+    """Record every text draw of the next rendered frame (see take_text_log)."""
+    self._text_log = []
+
+  def take_text_log(self) -> list[dict]:
+    log, self._text_log = self._text_log or [], None
+    return log
+
+  def _log_text(self, font, text, position, font_size, spacing, tint) -> None:
+    try:
+      x, y = (position.x, position.y) if hasattr(position, "x") else (position[0], position[1])
+      size = rl.measure_text_ex(font, text, font_size, spacing)
+      fallback = rl.get_glyph_index(font, ord("?"))
+      missing = sorted({c for c in text if c not in "?\n" and rl.get_glyph_index(font, ord(c)) == fallback})
+      alpha = tint.a if hasattr(tint, "a") else tint[3]
+      self._text_log.append({
+        "text": text, "x": round(float(x), 1), "y": round(float(y), 1),
+        "w": round(float(size.x), 1), "h": round(float(size.y), 1),
+        "size": round(float(font_size), 1), "spacing": round(float(spacing), 2), "alpha": int(alpha),
+        "clip": list(self._text_log_clip) if self._text_log_clip else None, "missing_glyphs": missing,
+      })
+    except Exception:
+      cloudlog.exception("text log entry failed")
 
   def screenshot_pending(self) -> bool:
     return self._pending_screenshot is not None
@@ -1122,8 +1149,10 @@ class GuiApplication:
 
         # Only render top widgets
         self._mark_progress("gui_app.before_widget_render")
+        self._text_log_recording = self._text_log is not None
         for widget in self._nav_stack[-self._nav_stack_widgets_to_render:]:
           widget.render(rl.Rectangle(0, 0, self.width, self.height))
+        self._text_log_recording = False
         self._mark_progress("gui_app.after_widget_render")
 
         self._mark_progress("gui_app.frame_ready")
@@ -1250,6 +1279,8 @@ class GuiApplication:
 
     def _draw_text_ex_scaled(font, text, position, font_size, spacing, tint):
       font = font_fallback(font)
+      if self._text_log_recording:
+        self._log_text(font, text, position, font_size * FONT_SCALE, spacing, tint)
       return rl._orig_draw_text_ex(font, text, position, font_size * FONT_SCALE, spacing, tint)
 
     rl.draw_text_ex = _draw_text_ex_scaled
@@ -1258,18 +1289,27 @@ class GuiApplication:
     if not hasattr(rl, "_orig_begin_scissor_mode"):
       rl._orig_begin_scissor_mode = rl.begin_scissor_mode
 
+    if not hasattr(rl, "_orig_end_scissor_mode"):
+      rl._orig_end_scissor_mode = rl.end_scissor_mode
+
     scale_x = self._scale * (self._pixel_scale_x if self._render_texture else 1.0)
     scale_y = self._scale * (self._pixel_scale_y if self._render_texture else 1.0)
-    if scale_x == 1.0 and scale_y == 1.0:
-      rl.begin_scissor_mode = rl._orig_begin_scissor_mode
-      return
 
+    # Also tracks the active clip rect (logical coords) for the text log.
     def _begin_scissor_mode_scaled(x, y, width, height):
+      self._text_log_clip = (float(x), float(y), float(width), float(height))
+      if scale_x == 1.0 and scale_y == 1.0:
+        return rl._orig_begin_scissor_mode(x, y, width, height)
       return rl._orig_begin_scissor_mode(
         int(x * scale_x), int(y * scale_y),
         int(math.ceil(width * scale_x)), int(math.ceil(height * scale_y)))
 
+    def _end_scissor_mode():
+      self._text_log_clip = None
+      return rl._orig_end_scissor_mode()
+
     rl.begin_scissor_mode = _begin_scissor_mode_scaled
+    rl.end_scissor_mode = _end_scissor_mode
 
   def _set_log_callback(self):
     ffi_libc = cffi.FFI()
