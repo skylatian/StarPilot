@@ -26,6 +26,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   TileGrid,
   TOGGLE_MIN_HEIGHT,
   TOGGLE_ROW_HEIGHT,
+  centered_text_y,
   GROUP_HEADER_GAP,
   GROUP_HEADER_HEIGHT,
   GROUP_HEADER_LINE_GAP,
@@ -564,7 +565,7 @@ class ButtonActionComboDialog(Widget):
         rl.draw_line(int(row_rect.x + 24), sep_y, int(row_rect.x + row_rect.width - 24), sep_y, rl.Color(255, 255, 255, 16))
 
       title_x = int(row_rect.x + 24)
-      title_y = int(row_rect.y + (row_rect.height - title_fs) / 2)
+      title_y = int(centered_text_y(row_rect.y, row_rect.height, title_fs))
       rl.draw_text_ex(self._font_title, self._labels[i], rl.Vector2(title_x, title_y), title_fs, 0, rl.WHITE)
 
       action_name = self._controller._get_action_name(self._keys[i])
@@ -574,12 +575,12 @@ class ButtonActionComboDialog(Widget):
       text_w = measure_text_cached(font_label, action_name, value_fs).x
       if text_w <= available_w:
         val_x = value_right - text_w
-        val_y = int(row_rect.y + (row_rect.height - value_fs) / 2)
+        val_y = int(centered_text_y(row_rect.y, row_rect.height, value_fs))
         rl.draw_text_ex(font_value, action_name, rl.Vector2(val_x, val_y), value_fs, 0, rl.WHITE)
       else:
         draw_text_fit_common(
           font_value, action_name,
-          rl.Vector2(value_left, int(row_rect.y + (row_rect.height - value_fs) / 2)),
+          rl.Vector2(value_left, int(centered_text_y(row_rect.y, row_rect.height, value_fs))),
           available_w, value_fs, color=rl.WHITE,
         )
 

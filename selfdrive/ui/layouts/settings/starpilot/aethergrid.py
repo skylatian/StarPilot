@@ -175,6 +175,15 @@ def _segments_for(rect: rl.Rectangle, radius_px: float = TILE_RADIUS_PX) -> int:
   return max(12, min(28, int(round(effective_radius * 1.25))))
 
 
+def centered_text_y(top: float, height: float, font_size: float) -> float:
+  """Top y that vertically centers one line of text in [top, top + height].
+
+  draw_text_ex renders at font_size * FONT_SCALE, so centering with the nominal size leaves text
+  (FONT_SCALE - 1) / 2 of its size too low (~6 px for a 46 px title on the big UI).
+  """
+  return top + (height - font_size * FONT_SCALE) / 2
+
+
 def draw_text_fit_common(
   font: rl.Font,
   text: str,
@@ -214,7 +223,7 @@ def draw_text_fit_common(
     render_width = measure_text_cached(font, text, actual_font_size, spacing=spacing).x
   else:
     render_width = size.x
-  nudge_y = (font_size - actual_font_size) / 2
+  nudge_y = (font_size - actual_font_size) * FONT_SCALE / 2  # keep shrunk text centered on the requested line
   draw_x = pos.x
   if align_center:
     draw_x = pos.x + (max_width - render_width) / 2
@@ -1823,7 +1832,7 @@ def draw_action_pill(
   draw_text_fit_common(
     gui_app.font(FontWeight.SEMI_BOLD),
     text,
-    rl.Vector2(rect.x + 12, rect.y + (rect.height - font_size) / 2),
+    rl.Vector2(rect.x + 12, centered_text_y(rect.y, rect.height, font_size)),
     max(1.0, rect.width - 24),
     font_size,
     align_center=True,
@@ -1957,7 +1966,7 @@ def draw_tab_card(
     draw_text_fit_common(
       gui_app.font(FontWeight.MEDIUM),
       title,
-      rl.Vector2(rect.x + 12, rect.y + (rect.height - title_size) / 2),
+      rl.Vector2(rect.x + 12, centered_text_y(rect.y, rect.height, title_size)),
       max(1.0, rect.width - 24),
       title_size,
       align_center=True,
@@ -2198,7 +2207,7 @@ def draw_settings_list_row(
       )
     else:
       eff_title_size = min(36, title_size)
-      title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+      title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
       draw_text_fit_common(
         gui_app.font(FontWeight.SEMI_BOLD), title,
         rl.Vector2(text_left, title_y),
@@ -2258,7 +2267,7 @@ def draw_settings_list_row(
         v_right = chevron_rect.x - 16 if show_chevron else draw_rect.x + draw_rect.width - 24
 
       eff_value_size = min(28, value_size) if is_narrow else min(32, value_size)
-      value_y = draw_rect.y + (draw_rect.height - eff_value_size) / 2
+      value_y = centered_text_y(draw_rect.y, draw_rect.height, eff_value_size)
 
       if subtitle:
         eff_title_size = min(34, title_size)
@@ -2280,7 +2289,7 @@ def draw_settings_list_row(
         )
       else:
         eff_title_size = min(36, title_size) if is_narrow else title_size
-        title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+        title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
 
         draw_text_fit_common(
           gui_app.font(FontWeight.SEMI_BOLD), title,
@@ -2323,7 +2332,7 @@ def draw_settings_list_row(
     )
   else:
     eff_title_size = min(36, title_size)
-    title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+    title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
     draw_text_fit_common(
       gui_app.font(FontWeight.SEMI_BOLD), title,
       rl.Vector2(text_left, title_y),
@@ -2361,7 +2370,7 @@ def draw_selectable_chip(rect: rl.Rectangle, text: str, *,
   draw_text_fit_common(
     resolved_font,
     text,
-    rl.Vector2(rect.x + padding_x, rect.y + (rect.height - font_size) / 2),
+    rl.Vector2(rect.x + padding_x, centered_text_y(rect.y, rect.height, font_size)),
     max(1.0, rect.width - padding_x * 2),
     font_size,
     align_center=True,
@@ -2884,7 +2893,7 @@ class AetherAdjustorRow(Widget):
       draw_rounded_fill(fill_rect, with_alpha(self._color, fill_alpha), radius_px=bar_h // 2)
 
     inset = 18
-    title_y = bar_rect.y + (bar_h - title_fs) / 2
+    title_y = centered_text_y(bar_rect.y, bar_h, title_fs)
     rl.draw_text_ex(self._font_title, self._title,
                     rl.Vector2(bar_rect.x + inset, title_y),
                     title_fs, 0, self._style.title_color)
@@ -2893,7 +2902,7 @@ class AetherAdjustorRow(Widget):
     value_w = measure_text_cached(self._font_value, value_str, value_fs).x
     rl.draw_text_ex(self._font_value, value_str,
                     rl.Vector2(bar_rect.x + bar_rect.width - inset - value_w,
-                               bar_rect.y + (bar_h - value_fs) / 2),
+                               centered_text_y(bar_rect.y, bar_h, value_fs)),
                     value_fs, 0, self._style.title_color)
 
     if self._subtitle:
@@ -2992,7 +3001,7 @@ def draw_selection_list_row(
     title_y = info_rect.y + (info_rect.height - text_height) / 2
     subtitle_y = title_y + title_size + 8
   else:
-    title_y = info_rect.y + (info_rect.height - title_size) / 2
+    title_y = centered_text_y(info_rect.y, info_rect.height, title_size)
     subtitle_y = title_y
 
   draw_text_fit_common(
@@ -3150,7 +3159,7 @@ class AetherButton(Widget):
     draw_text_fit_common(
       gui_app.font(FontWeight.MEDIUM),
       self.text,
-      rl.Vector2(rect.x + 18, rect.y + (rect.height - self._font_size) / 2),
+      rl.Vector2(rect.x + 18, centered_text_y(rect.y, rect.height, self._font_size)),
       max(1.0, rect.width - 36),
       self._font_size,
       align_center=True,
@@ -3178,7 +3187,7 @@ class AetherChip:
     draw_text_fit_common(
       gui_app.font(FontWeight.MEDIUM),
       self.text,
-      rl.Vector2(rect.x + 12, rect.y + (rect.height - self._font_size) / 2),
+      rl.Vector2(rect.x + 12, centered_text_y(rect.y, rect.height, self._font_size)),
       max(1.0, rect.width - 24),
       self._font_size,
       align_center=True,
@@ -5453,7 +5462,7 @@ class AetherSegmentedControl(Widget):
         draw_text_fit_common(
           self._font,
           label,
-          rl.Vector2(face_rect.x + 16, face_rect.y + (face_rect.height - title_size) / 2),
+          rl.Vector2(face_rect.x + 16, centered_text_y(face_rect.y, face_rect.height, title_size)),
           face_rect.width - 32,
           title_size,
           align_center=True,
