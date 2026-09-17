@@ -4,6 +4,7 @@ from enum import IntEnum
 from collections.abc import Callable
 from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from openpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
+from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import draw_rounded_fill, draw_rounded_stroke
 from openpilot.selfdrive.ui.layouts.settings.starpilot.main_panel import StarPilotLayout
 from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from openpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
@@ -20,8 +21,13 @@ from openpilot.system.ui.widgets.network import NetworkUI
 COLLAPSED_WIDTH = 0
 EXPANDED_WIDTH = 500
 SWIPE_THRESHOLD = 80
-CLOSE_BTN_SIZE = 200
-CLOSE_ICON_SIZE = 70
+CLOSE_BTN_SIZE = 200  # vertical slot the back button is centered in
+BACK_BTN_HEIGHT = 110
+BACK_BTN_PAD_X = 40
+BACK_BTN_RADIUS = 24
+BACK_TEXT_SIZE = 50
+BACK_ARROW_W = 38
+BACK_ARROW_GAP = 18
 NAV_BTN_HEIGHT = 110
 PANEL_MARGIN = 10
 
@@ -29,8 +35,9 @@ PANEL_MARGIN = 10
 SIDEBAR_COLOR = rl.BLACK
 ACCENT_LINE_COLOR = rl.Color(139, 92, 246, 55)
 PANEL_COLOR = rl.BLACK
-CLOSE_BTN_COLOR = rl.Color(41, 41, 41, 255)
-CLOSE_BTN_PRESSED = rl.Color(59, 59, 59, 255)
+BACK_BTN_FILL = rl.Color(255, 255, 255, 18)
+BACK_BTN_FILL_PRESSED = rl.Color(255, 255, 255, 36)
+BACK_BTN_BORDER = rl.Color(255, 255, 255, 40)
 TEXT_NORMAL = rl.Color(128, 128, 128, 255)
 TEXT_SELECTED = rl.WHITE
 DARK_CORE_COLOR = rl.Color(12, 10, 18, 190)
@@ -89,7 +96,6 @@ class SettingsLayout(Widget):
     self._panels[PanelType.STARPILOT].instance.set_settings_layout(self)
 
     self._font_medium = gui_app.font(FontWeight.MEDIUM)
-    self._close_icon = gui_app.texture("icons/backspace.png", CLOSE_ICON_SIZE, CLOSE_ICON_SIZE)
 
     # Callbacks
     self._close_callback: Callable | None = None
@@ -133,6 +139,16 @@ class SettingsLayout(Widget):
 
     gui_app.mouse_events[:] = original_events
     self._draw_sidebar(sidebar_rect)
+
+  @staticmethod
+  def _draw_back_arrow(x: float, cy: float, width: float, color: rl.Color, thickness: float = 7.0):
+    """Left arrow with round caps: shaft from x to x + width, head at x."""
+    head = width * 0.45
+    segments = ((x, cy, x + width, cy), (x, cy, x + head, cy - head), (x, cy, x + head, cy + head))
+    for x0, y0, x1, y1 in segments:
+      rl.draw_line_ex(rl.Vector2(x0, y0), rl.Vector2(x1, y1), thickness, color)
+    for px, py in {(x, cy), (x + width, cy), (x + head, cy - head), (x + head, cy + head)}:
+      rl.draw_circle_v(rl.Vector2(px, py), thickness / 2, color)
 
   def _draw_chevron(self, cx: float, cy: float, right: bool, color: rl.Color, size: int = 14, bloom: bool = False):
     half = size / 2
@@ -198,27 +214,28 @@ class SettingsLayout(Widget):
     if self._sidebar_expanded:
       # ── EXPANDED ──
 
-      # Back/Close button - hierarchical navigation
-      back_btn_rect = rl.Rectangle(rect.x + (rect.width - CLOSE_BTN_SIZE) / 2, rect.y + 60, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
+      # Back button - hierarchical navigation. A "<- Back" pill spanning the first nav label ("StarPilot")
+      # below it, in the flat StarPilot button style. The arrow is drawn: the UI fonts have no arrow glyph.
+      back_text = tr("Back")
+      back_font = gui_app.font(FontWeight.SEMI_BOLD)
+      back_text_size = measure_text_cached(back_font, back_text, BACK_TEXT_SIZE)
+      content_w = BACK_ARROW_W + BACK_ARROW_GAP + back_text_size.x
+      nav_right = rect.x + rect.width - 100  # right edge of the right-aligned nav labels below
+      first_label = tr(next(iter(self._panels.values())).name)
+      label_w = measure_text_cached(self._font_medium, first_label, 65).x
+      back_w = max(label_w, content_w + BACK_BTN_PAD_X * 2)
+      back_btn_rect = rl.Rectangle(round(nav_right - back_w), round(rect.y + 60 + (CLOSE_BTN_SIZE - BACK_BTN_HEIGHT) / 2),
+                                   round(back_w), BACK_BTN_HEIGHT)
       pressed = gui_app.last_mouse_event.left_down and rl.check_collision_point_rec(gui_app.last_mouse_event.pos, back_btn_rect)
-      close_color = CLOSE_BTN_PRESSED if pressed else CLOSE_BTN_COLOR
-      rl.draw_rectangle_rounded(back_btn_rect, 1.0, 20, close_color)
+      draw_rounded_fill(back_btn_rect, BACK_BTN_FILL_PRESSED if pressed else BACK_BTN_FILL, radius_px=BACK_BTN_RADIUS * 2)
+      draw_rounded_stroke(back_btn_rect, BACK_BTN_BORDER, thickness=2, radius_px=BACK_BTN_RADIUS * 2)
 
-      icon_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 220, 255)
-      icon_dest = rl.Rectangle(
-        back_btn_rect.x + (back_btn_rect.width - self._close_icon.width) / 2,
-        back_btn_rect.y + (back_btn_rect.height - self._close_icon.height) / 2,
-        self._close_icon.width,
-        self._close_icon.height,
-      )
-      rl.draw_texture_pro(
-        self._close_icon,
-        rl.Rectangle(0, 0, self._close_icon.width, self._close_icon.height),
-        icon_dest,
-        rl.Vector2(0, 0),
-        0,
-        icon_color,
-      )
+      content_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 220, 255)
+      cy = back_btn_rect.y + back_btn_rect.height / 2
+      ax = back_btn_rect.x + (back_btn_rect.width - content_w) / 2
+      self._draw_back_arrow(ax, cy, BACK_ARROW_W, content_color)
+      text_x = ax + BACK_ARROW_W + BACK_ARROW_GAP
+      rl.draw_text_ex(back_font, back_text, rl.Vector2(round(text_x), round(cy - back_text_size.y / 2)), BACK_TEXT_SIZE, 0, content_color)
 
       # Store back button rect for click detection
       self._back_btn_rect = back_btn_rect
