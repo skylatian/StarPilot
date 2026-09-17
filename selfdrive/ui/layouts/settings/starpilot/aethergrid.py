@@ -1601,6 +1601,10 @@ def draw_standard_toggle_row(
 
 
 _KNOB_ANIMATION_STATES: dict[str, float] = {}
+# Constellation decorations collide with labels and controls on small elements, so they're limited to
+# hub tiles for now (AetherTile.show_constellation). Flip these to bring them back, e.g. from a theme.
+TOGGLE_CONSTELLATIONS = False
+
 _TOGGLE_CONSTELLATION_CACHE: dict[str, tuple[list[dict], list[tuple[int, int]]]] = {}
 
 # Anchor-zone regions for tile (near-square) vs pill (wide/short)
@@ -1762,7 +1766,7 @@ def draw_toggle_switch(
     # Concentric with the track: rendered radius = track radius - inset (radius_px is 2x rendered).
     draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(track_radius - knob_inset, 0.5) * 2, max_roundness=1.0)
 
-  if seed_id and enabled:
+  if TOGGLE_CONSTELLATIONS and seed_id and enabled:
     nodes, vecs = _get_or_create_toggle_constellation(seed_id)
     glow = knob_progress
     draw_constellation_nodes(nodes, vecs, toggle_rect, track_color, glow, scale=0.45)
@@ -3823,6 +3827,8 @@ AetherCategoryTileView = AetherCategoryDrawer
 
 
 class AetherTile(Widget):
+  show_constellation = False  # decorative star pattern; hub tiles only (see TOGGLE_CONSTELLATIONS)
+
   def __init__(self, surface_color: rl.Color | str | None = None, on_click: Callable | None = None):
     super().__init__()
     if isinstance(surface_color, str):
@@ -3981,7 +3987,9 @@ class AetherTile(Widget):
     ox = snapped.x + (snapped.width - sw) / 2
     oy = snapped.y + (snapped.height - sh) / 2
     face, accent = draw_hud_background(rl.Rectangle(ox, oy, sw, sh), accent, glow, bg_color=bg_color)
-    if const_connected:
+    if not self.show_constellation:
+      pass
+    elif const_connected:
       self._draw_constellation(face, accent, glow)
     else:
       self._draw_constellation_disconnected(face, accent, glow)
@@ -3992,6 +4000,8 @@ class AetherTile(Widget):
 
 
 class HubTile(AetherTile):
+  show_constellation = True
+
   def __init__(
     self,
     title: str | Callable[[], str],
