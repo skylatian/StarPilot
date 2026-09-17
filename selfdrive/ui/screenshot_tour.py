@@ -25,7 +25,8 @@ SETTLE_SECONDS = float(os.getenv("UI_SCREENSHOT_SETTLE", "0.8"))
 LAZY_SUB_PAGES = [
   ("LONGITUDINAL", "_show_slc_offsets_category", ()),
   *[("LONGITUDINAL", "_show_personality_profile_category", (p,)) for p in ("Traffic", "Aggressive", "Standard", "Relaxed")],
-  *[("LONGITUDINAL", "_show_weather_offsets_category", (s, s)) for s in ("LowVisibility", "Rain", "RainStorm", "Snow")],
+  *[("LONGITUDINAL", "_show_weather_offsets_category", args) for args in
+    (("LowVisibility", "Low Visibility"), ("Rain", "Rain"), ("RainStorm", "Rainstorms"), ("Snow", "Snow"))],  # titles as in longitudinal.py
 ]
 
 Step = tuple[str, Callable[[], None]]
