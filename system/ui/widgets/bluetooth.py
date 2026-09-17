@@ -97,7 +97,7 @@ class BluetoothDeviceRow(Widget):
   def _update_layout_rects(self) -> None:
     if self._show_forget():
       self._forget_rect = rl.Rectangle(
-        self._rect.x + self._rect.width - FORGET_BUTTON_WIDTH,
+        self._rect.x + self._rect.width - HEADER_PADDING - FORGET_BUTTON_WIDTH,  # same right inset as the header toggle
         self._rect.y + (self._rect.height - 80) / 2,
         FORGET_BUTTON_WIDTH,
         80,
@@ -119,7 +119,7 @@ class BluetoothDeviceRow(Widget):
     enabled = self.enabled
     rl.draw_rectangle_rec(rect, PANEL_BACKGROUND)
 
-    right_padding = FORGET_BUTTON_WIDTH + ACTION_GAP if self._show_forget() else HEADER_PADDING
+    right_padding = HEADER_PADDING + FORGET_BUTTON_WIDTH + ACTION_GAP if self._show_forget() else HEADER_PADDING
     text_rect = rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 18, rect.width - HEADER_PADDING - right_padding, 62)
     text_color = rl.WHITE if enabled else TEXT_DISABLED
     gui_label(text_rect, state.device.name, font_size=54, color=text_color, font_weight=FontWeight.MEDIUM)
