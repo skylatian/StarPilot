@@ -184,6 +184,65 @@ def centered_text_y(top: float, height: float, font_size: float) -> float:
   return top + (height - font_size * FONT_SCALE) / 2
 
 
+SUBTITLE_MAX_LINES = 3
+SUBTITLE_LINE_GAP = 4  # between the title line and the first subtitle line
+_SUBTITLE_WRAP_CACHE: dict[tuple[str, int, float], list[str]] = {}
+
+
+def wrap_subtitle(text: str, max_width: float, font_size: float, max_lines: int = SUBTITLE_MAX_LINES) -> list[str]:
+  """Word-wrap a row description to at most max_lines; the last line may still need shrink-to-fit."""
+  key = (text, int(max_width), font_size)
+  cached = _SUBTITLE_WRAP_CACHE.get(key)
+  if cached is not None:
+    return cached
+  font = gui_app.font(FontWeight.NORMAL)
+  lines: list[str] = []
+  current = ""
+  words = text.split()
+  for i, word in enumerate(words):
+    candidate = f"{current} {word}" if current else word
+    if not current or measure_text_cached(font, candidate, int(font_size)).x <= max_width:
+      current = candidate
+      continue
+    if len(lines) == max_lines - 1:
+      current = " ".join([current] + words[i:])  # overflow stays on the last line
+      break
+    lines.append(current)
+    current = word
+  if current:
+    lines.append(current)
+  if len(_SUBTITLE_WRAP_CACHE) > 512:
+    _SUBTITLE_WRAP_CACHE.clear()
+  _SUBTITLE_WRAP_CACHE[key] = lines
+  return lines
+
+
+def title_subtitle_extra_height(subtitle: str, text_width: float, subtitle_size: float) -> float:
+  """Height a row needs beyond its one-description-line layout to fit a wrapped description."""
+  if not subtitle:
+    return 0.0
+  return (len(wrap_subtitle(subtitle, text_width, subtitle_size)) - 1) * subtitle_size * FONT_SCALE
+
+
+def draw_title_subtitle(rect: rl.Rectangle, text_left: float, text_width: float, title: str, subtitle: str, *,
+                        title_size: float, subtitle_size: float, title_color: rl.Color, subtitle_color: rl.Color,
+                        gap: float = SUBTITLE_LINE_GAP):
+  """Title with a wrapped description below it, the whole block centered vertically in rect.
+
+  Wraps to as many lines as fit in rect (keeping 8 px above and below), up to SUBTITLE_MAX_LINES, so rows
+  laid out at a fixed height stay inside it; AetherSettingsView grows rows to fit instead.
+  """
+  title_h = title_size * FONT_SCALE
+  line_h = subtitle_size * FONT_SCALE
+  fit_lines = int((rect.height - 16 - title_h - gap) // line_h)
+  lines = wrap_subtitle(subtitle, text_width, subtitle_size, max(1, min(SUBTITLE_MAX_LINES, fit_lines)))
+  top = rect.y + (rect.height - (title_h + gap + len(lines) * line_h)) / 2
+  draw_text_fit_common(gui_app.font(FontWeight.SEMI_BOLD), title, rl.Vector2(text_left, top), text_width, title_size, color=title_color)
+  for i, line in enumerate(lines):
+    draw_text_fit_common(gui_app.font(FontWeight.NORMAL), line, rl.Vector2(text_left, top + title_h + gap + i * line_h),
+                         text_width, subtitle_size, color=subtitle_color)
+
+
 def draw_text_fit_common(
   font: rl.Font,
   text: str,
@@ -2136,6 +2195,27 @@ def draw_list_group_shell(
   draw_soft_card(rect, fill if fill is not None else style.surface_fill, border if border is not None else style.surface_border, radius=radius, segments=segments)
 
 
+def settings_row_text_width(row_width: float, kind: str, *, show_chevron: bool = False, has_value: bool = False) -> float:
+  """Width available to a row's title/description, matching draw_settings_list_row / draw_selection_list_row.
+
+  kind: "toggle", "value", or "action" (view action rows use the pill layout).
+  """
+  is_narrow = row_width < 1000
+  if kind == "action":
+    return max(0.0, row_width - AETHER_LIST_METRICS.action_width - 36)
+  if kind == "toggle":
+    inset = 28 if is_narrow else AETHER_LIST_METRICS.toggle_right_inset
+    return max(100.0, row_width - AETHER_LIST_METRICS.toggle_width - inset - 12 - 24)
+  if has_value:
+    if is_narrow:
+      return max(100.0, row_width - 48 - (32 if show_chevron else 0)) * 0.46
+    v_width = max(100.0, float(AETHER_LIST_METRICS.utility_value_right - (AETHER_LIST_METRICS.utility_chevron_right if show_chevron else 24) - 16))
+    return max(100.0, row_width - 48 - v_width - (32 if show_chevron else 0))
+  chevron_inset = 28 if is_narrow else AETHER_LIST_METRICS.utility_chevron_right
+  text_right = row_width - chevron_inset - 12 if show_chevron else row_width - 24
+  return max(100.0, text_right - 24)
+
+
 def draw_settings_list_row(
   rect: rl.Rectangle,
   *,
@@ -2188,23 +2268,9 @@ def draw_settings_list_row(
     text_width = max(100.0, text_right - text_left)
 
     if subtitle:
-      eff_title_size = min(36, title_size)
-      eff_sub_size = min(26, subtitle_size)
-      total_h = eff_title_size + eff_sub_size + 4
-      start_y = draw_rect.y + (draw_rect.height - total_h) / 2
-
-      draw_text_fit_common(
-        gui_app.font(FontWeight.SEMI_BOLD), title,
-        rl.Vector2(text_left, start_y),
-        text_width, eff_title_size,
-        color=resolved_title_color,
-      )
-      draw_text_fit_common(
-        gui_app.font(FontWeight.NORMAL), subtitle,
-        rl.Vector2(text_left, start_y + eff_title_size + 4),
-        text_width, eff_sub_size,
-        color=resolved_subtitle_color,
-      )
+      draw_title_subtitle(draw_rect, text_left, text_width, title, subtitle,
+                          title_size=min(36, title_size), subtitle_size=min(26, subtitle_size),
+                          title_color=resolved_title_color, subtitle_color=resolved_subtitle_color)
     else:
       eff_title_size = min(36, title_size)
       title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
@@ -2270,23 +2336,9 @@ def draw_settings_list_row(
       value_y = centered_text_y(draw_rect.y, draw_rect.height, eff_value_size)
 
       if subtitle:
-        eff_title_size = min(34, title_size)
-        eff_sub_size = min(26, subtitle_size)
-        total_h = eff_title_size + eff_sub_size + 4
-        start_y = draw_rect.y + (draw_rect.height - total_h) / 2
-
-        draw_text_fit_common(
-          gui_app.font(FontWeight.SEMI_BOLD), title,
-          rl.Vector2(text_left, start_y),
-          t_width, eff_title_size,
-          color=resolved_title_color,
-        )
-        draw_text_fit_common(
-          gui_app.font(FontWeight.NORMAL), subtitle,
-          rl.Vector2(text_left, start_y + eff_title_size + 4),
-          t_width, eff_sub_size,
-          color=resolved_subtitle_color,
-        )
+        draw_title_subtitle(draw_rect, text_left, t_width, title, subtitle,
+                            title_size=min(34, title_size), subtitle_size=min(26, subtitle_size),
+                            title_color=resolved_title_color, subtitle_color=resolved_subtitle_color)
       else:
         eff_title_size = min(36, title_size) if is_narrow else title_size
         title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
@@ -2314,22 +2366,9 @@ def draw_settings_list_row(
   text_right = chevron_rect.x - 12 if show_chevron else draw_rect.x + draw_rect.width - 24
   text_width = max(100.0, text_right - text_left)
   if subtitle:
-    eff_title_size = min(36, title_size)
-    eff_sub_size = min(26, subtitle_size)
-    total_h = eff_title_size + eff_sub_size + 4
-    start_y = draw_rect.y + (draw_rect.height - total_h) / 2
-    draw_text_fit_common(
-      gui_app.font(FontWeight.SEMI_BOLD), title,
-      rl.Vector2(text_left, start_y),
-      text_width, eff_title_size,
-      color=resolved_title_color,
-    )
-    draw_text_fit_common(
-      gui_app.font(FontWeight.NORMAL), subtitle,
-      rl.Vector2(text_left, start_y + eff_title_size + 4),
-      text_width, eff_sub_size,
-      color=resolved_subtitle_color,
-    )
+    draw_title_subtitle(draw_rect, text_left, text_width, title, subtitle,
+                        title_size=min(36, title_size), subtitle_size=min(26, subtitle_size),
+                        title_color=resolved_title_color, subtitle_color=resolved_subtitle_color)
   else:
     eff_title_size = min(36, title_size)
     title_y = centered_text_y(draw_rect.y, draw_rect.height, eff_title_size)
@@ -2997,30 +3036,17 @@ def draw_selection_list_row(
   subtitle_font = gui_app.font(FontWeight.NORMAL)
 
   if subtitle:
-    text_height = title_size + subtitle_size + 8
-    title_y = info_rect.y + (info_rect.height - text_height) / 2
-    subtitle_y = title_y + title_size + 8
+    draw_title_subtitle(draw_rect, info_rect.x, info_rect.width, title, subtitle,
+                        title_size=title_size, subtitle_size=subtitle_size,
+                        title_color=with_alpha(title_color, alpha), subtitle_color=with_alpha(subtitle_color, alpha), gap=8)
   else:
-    title_y = centered_text_y(info_rect.y, info_rect.height, title_size)
-    subtitle_y = title_y
-
-  draw_text_fit_common(
-    title_font,
-    title,
-    rl.Vector2(info_rect.x, title_y),
-    info_rect.width,
-    title_size,
-    color=with_alpha(title_color, alpha),
-  )
-
-  if subtitle:
     draw_text_fit_common(
-      subtitle_font,
-      subtitle,
-      rl.Vector2(info_rect.x, subtitle_y),
+      title_font,
+      title,
+      rl.Vector2(info_rect.x, centered_text_y(info_rect.y, info_rect.height, title_size)),
       info_rect.width,
-      subtitle_size,
-      color=with_alpha(subtitle_color, alpha),
+      title_size,
+      color=with_alpha(title_color, alpha),
     )
 
   if action_text:
@@ -3447,6 +3473,23 @@ class AetherSettingsView(PanelManagerView):
       return []
     return [row for row in section.rows if row.visible is None or row.visible()]
 
+  def _row_subtitle(self, row: SettingRow) -> str:
+    enabled = row.enabled() if row.enabled is not None else True
+    return tr(row.disabled_label if not enabled and row.disabled_label else row.subtitle)
+
+  def _row_height(self, section: SettingSection, row: SettingRow, width: float) -> float:
+    """Section row height, grown by one description line for each extra line the description wraps to."""
+    subtitle = self._row_subtitle(row)
+    if not subtitle or row.type not in ("toggle", "value", "action"):
+      return section.row_height
+    has_value = row.type == "value" and bool(row.get_value() if row.get_value else "")
+    show_chevron = row.on_click is not None or bool(row.navigate_to)
+    text_width = settings_row_text_width(width, row.type, show_chevron=show_chevron, has_value=has_value)
+    return section.row_height + title_subtitle_extra_height(subtitle, text_width, 26)
+
+  def _rows_height(self, section: SettingSection, rows: list[SettingRow], width: float) -> float:
+    return sum(self._row_height(section, row, width) for row in rows)
+
   def _measure_content_height(self, width: float) -> float:
     total = 0.0
     if self._tab_defs:
@@ -3459,15 +3502,16 @@ class AetherSettingsView(PanelManagerView):
       if not visible_rows:
         i += 1
         continue
-      row_h = len(visible_rows) * section.row_height
       if section.column_pair and i + 1 < len(active) and active[i + 1].column_pair == section.column_pair and self._uses_two_columns(width):
+        col_w = (width - self.COLUMN_GAP) / 2
         right_rows = self._visible_rows(active[i + 1])
-        row_h = max(row_h, len(right_rows) * active[i + 1].row_height)
+        row_h = max(self._rows_height(section, visible_rows, col_w), self._rows_height(active[i + 1], right_rows, col_w))
         i += 2
         total += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
         total += row_h
         total += SECTION_GAP
       else:
+        row_h = self._rows_height(section, visible_rows, width)
         i += 1
         total += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP if section.title else 0.0
         total += row_h
@@ -3524,8 +3568,8 @@ class AetherSettingsView(PanelManagerView):
         right_section = active[i + 1]
         right_rows = self._visible_rows(right_section)
         col_w = (width - self.COLUMN_GAP) / 2
-        section_h = len(visible_rows) * section.row_height
-        right_h = len(right_rows) * right_section.row_height
+        section_h = self._rows_height(section, visible_rows, col_w)
+        right_h = self._rows_height(right_section, right_rows, col_w)
         group_h = max(section_h, right_h)
 
         draw_section_header(
@@ -3543,12 +3587,16 @@ class AetherSettingsView(PanelManagerView):
         draw_list_group_shell(left_group, style=self._panel_style)
         draw_list_group_shell(right_group, style=self._panel_style)
 
+        row_y = y
         for j, row in enumerate(visible_rows):
-          row_rect = rl.Rectangle(rect.x, y + j * section.row_height, col_w, section.row_height)
-          self._draw_row(row_rect, row, is_last=(j == len(visible_rows) - 1))
+          row_h = self._row_height(section, row, col_w)
+          self._draw_row(rl.Rectangle(rect.x, row_y, col_w, row_h), row, is_last=(j == len(visible_rows) - 1))
+          row_y += row_h
+        row_y = y
         for j, row in enumerate(right_rows):
-          row_rect = rl.Rectangle(rect.x + col_w + self.COLUMN_GAP, y + j * right_section.row_height, col_w, right_section.row_height)
-          self._draw_row(row_rect, row, is_last=(j == len(right_rows) - 1))
+          row_h = self._row_height(right_section, row, col_w)
+          self._draw_row(rl.Rectangle(rect.x + col_w + self.COLUMN_GAP, row_y, col_w, row_h), row, is_last=(j == len(right_rows) - 1))
+          row_y += row_h
         y += max(section_h, right_h) + SECTION_GAP
         i += 2
       else:
@@ -3566,12 +3614,14 @@ class AetherSettingsView(PanelManagerView):
       )
       y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
 
-    group_rect = rl.Rectangle(x, y, width, len(rows) * section.row_height)
+    group_rect = rl.Rectangle(x, y, width, self._rows_height(section, rows, width))
     draw_list_group_shell(group_rect, style=self._panel_style)
 
+    row_y = y
     for i, row in enumerate(rows):
-      row_rect = rl.Rectangle(x, y + i * section.row_height, width, section.row_height)
-      self._draw_row(row_rect, row, is_last=(i == len(rows) - 1))
+      row_h = self._row_height(section, row, width)
+      self._draw_row(rl.Rectangle(x, row_y, width, row_h), row, is_last=(i == len(rows) - 1))
+      row_y += row_h
 
     return y + group_rect.height
 
