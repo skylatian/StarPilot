@@ -104,6 +104,38 @@ class Widget(abc.ABC):
       return self._rect
     return rl.get_collision_rec(self._rect, self._parent_rect)
 
+  # Rect attributes that are regions, not tap targets (skipped by _log_touch_targets).
+  _TARGET_LOG_SKIP = ("_rect", "_parent_rect")
+  _TARGET_LOG_SKIP_WORDS = ("scroll", "clip", "header", "progress", "content", "column", "shell", "sidebar")
+
+  def _log_touch_targets(self) -> None:
+    # Screenshot tour: record what this widget made tappable this frame. Covers the widget itself if it
+    # handles taps, and the hit rects of hand-drawn buttons, which by convention live in attributes named
+    # `_*_rect` / `_*_rects` (a rect, or a list/dict/tuple holding rects).
+    name = type(self).__name__
+    if self._click_callback is not None or type(self)._handle_mouse_release is not Widget._handle_mouse_release:
+      gui_app.log_touch_target(name, self._hit_rect)
+    scroll = getattr(self, "_scroll_rect", None)
+    in_view = hasattr(scroll, "width") and scroll.width > 0
+
+    def emit(label, value, depth=0):
+      if hasattr(value, "width") and hasattr(value, "height"):
+        if value.width > 0 and value.height > 0 and not (in_view and not rl.check_collision_recs(value, scroll)):
+          gui_app.log_touch_target(label, value)
+      elif depth < 2 and isinstance(value, dict):
+        for key, item in value.items():
+          emit(f"{label}[{key}]", item, depth + 1)
+      elif depth < 2 and isinstance(value, (list, tuple)):
+        for idx, item in enumerate(value):
+          emit(f"{label}[{idx}]", item, depth + 1)
+
+    for attr, value in vars(self).items():
+      if attr in self._TARGET_LOG_SKIP or not (attr.endswith("_rect") or attr.endswith("_rects")):
+        continue
+      if any(word in attr for word in self._TARGET_LOG_SKIP_WORDS):
+        continue
+      emit(f"{name}.{attr}", value)
+
   def render(self, rect: rl.Rectangle | None = None) -> bool | int | None:
     if rect is not None:
       self.set_rect(rect)
@@ -118,6 +150,9 @@ class Widget(abc.ABC):
 
     self._layout()
     ret = self._render(self._rect)
+
+    if gui_app.logging_frame:
+      self._log_touch_targets()
 
     if gui_app.show_touches:
       self._draw_debug_rect()

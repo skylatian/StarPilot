@@ -538,6 +538,7 @@ class GuiApplication:
     self._frame_digest_requested = False
     self._frame_digest: int | None = None
     self._text_log: list[dict] | None = None
+    self._target_log: list[dict] = []
     self._text_log_recording = False
     self._text_log_clip: tuple[float, float, float, float] | None = None
     self._nav_stack: list[object] = []
@@ -640,6 +641,25 @@ class GuiApplication:
 
   def take_text_log(self) -> list[dict]:
     log, self._text_log = self._text_log or [], None
+    return log
+
+  @property
+  def logging_frame(self) -> bool:
+    """True while the frame recorded by start_text_log is being drawn."""
+    return self._text_log_recording
+
+  def log_touch_target(self, name: str, rect) -> None:
+    """Record a touch target drawn in the logged frame, with the active scissor rect."""
+    if not self._text_log_recording:
+      return
+    self._target_log.append({
+      "name": name, "x": round(float(rect.x), 1), "y": round(float(rect.y), 1),
+      "w": round(float(rect.width), 1), "h": round(float(rect.height), 1),
+      "clip": list(self._text_log_clip) if self._text_log_clip else None,
+    })
+
+  def take_target_log(self) -> list[dict]:
+    log, self._target_log = self._target_log, []
     return log
 
   def _log_text(self, font, text, position, font_size, spacing, tint) -> None:

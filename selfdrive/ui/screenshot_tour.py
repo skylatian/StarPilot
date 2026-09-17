@@ -253,6 +253,8 @@ class ScreenshotTour:
     self._logging = False
     with open(self._path.removesuffix(".png") + ".text.json", "w") as f:
       json.dump(gui_app.take_text_log(), f, indent=0, ensure_ascii=False)
+    with open(self._path.removesuffix(".png") + ".targets.json", "w") as f:
+      json.dump(gui_app.take_target_log(), f, indent=0, ensure_ascii=False)
     gui_app.request_screenshot(self._path)
     self.saved.append(self._path)
     print(f"screenshot tour: {self._path} (settled {self._settled})")

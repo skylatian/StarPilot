@@ -7,6 +7,8 @@ with measured facts per page. Facts, not verdicts: a reviewer confirms each one 
 
   ./dev python scripts/ui_text_lint.py <shots_dir>
 
+Also reports small touch targets from the matching NNN_<page>.targets.json when present.
+
 Coordinates are logical device pixels (2160x1080), same as the PNGs. Text inside render-texture caches
 is not seen, so a page can have visible text with no log entry.
 """
@@ -21,6 +23,7 @@ OVERLAP_MIN_FRACTION = 0.25
 NEAR_MISS_PX = (1.5, 12)  # left edges this far apart look like they were meant to align
 SIZE_NEAR_MISS = (0.5, 2.0)  # sizes are FONT_SCALE-scaled (~2.5px apart per unscaled step), so only flag <2px drift
 TINY_SIZE = 28
+SMALL_TARGET_PX = 100  # touch targets narrower or shorter than this (~6 mm on the C3) are reported
 MAX_ITEMS_PER_CHECK = 6
 
 
@@ -48,7 +51,7 @@ def _intersection(a: dict, b: dict) -> float:
   return w * h if w > 0 and h > 0 else 0.0
 
 
-def lint_page(entries: list[dict]) -> list[str]:
+def lint_page(entries: list[dict], targets: list[dict] | None = None) -> list[str]:
   vis = [e for e in entries if _visible(e)]
   out: list[str] = []
 
@@ -121,6 +124,17 @@ def lint_page(entries: list[dict]) -> list[str]:
       rhythm.append(f"size {size:g} column x={x}: y gaps {gaps}")
   section("uneven vertical spacing (may be intentional, e.g. rows with/without subtitles)", rhythm)
 
+  # 8. Small touch targets (NNN_<page>.targets.json: tappable widgets and hand-drawn button rects).
+  seen, small = set(), []
+  for t in targets or []:
+    key = (round(t["x"]), round(t["y"]), round(t["w"]), round(t["h"]))
+    if key in seen or t["y"] >= SCREEN_H or t["y"] + t["h"] <= 0 or t["x"] >= SCREEN_W or t["x"] + t["w"] <= 0:
+      continue
+    seen.add(key)
+    if min(t["w"], t["h"]) < SMALL_TARGET_PX:
+      small.append(f"`{t['name']}` {key[2]}x{key[3]} at ({key[0]},{key[1]})")
+  section(f"touch targets under {SMALL_TARGET_PX}px on a side", small)
+
   summary = f"{len(vis)} visible text draws, {len(sizes)} font sizes: {', '.join(f'{s:g}' for s in ordered)}"
   return [summary] + out
 
@@ -139,7 +153,9 @@ def main():
            "These are facts to verify against the image, not confirmed bugs.", ""]
   flagged = 0
   for path in pages:
-    result = lint_page(json.loads(path.read_text()))
+    targets_path = path.with_name(path.name.removesuffix(".text.json") + ".targets.json")
+    targets = json.loads(targets_path.read_text()) if targets_path.exists() else None
+    result = lint_page(json.loads(path.read_text()), targets)
     flagged += len(result) > 1
     lines += [f"## {path.name.removesuffix('.text.json')}.png", result[0], *result[1:], ""]
 
