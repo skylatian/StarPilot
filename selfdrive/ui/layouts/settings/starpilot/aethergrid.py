@@ -1736,6 +1736,14 @@ def draw_toggle_switch(
   # Delegate to draw_hud_background — same layered bloom, fill, and lerped border as tiles
   draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress, radius_px=radius_px, bg_color=bg_color)
 
+  # Accent fill from the left edge to the knob so ON reads from color, not only knob position.
+  if knob_progress > 0.0:
+    inset = 3.0
+    fill_rect = rl.Rectangle(toggle_rect.x + inset, toggle_rect.y + inset,
+                             max(0.0, knob_x + 22.0 - toggle_rect.x - inset), toggle_rect.height - 2 * inset)
+    fill_alpha = int((150 if is_enabled else 60) * min(knob_progress * 1.5, 1.0))
+    draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(radius_px - inset, 1.0))
+
   if seed_id and enabled:
     nodes, vecs = _get_or_create_toggle_constellation(seed_id)
     glow = knob_progress
@@ -1765,6 +1773,17 @@ def draw_toggle_switch(
   rl.draw_rectangle_rounded(highlight_rect, knob_roundness, knob_segments, with_alpha(rl.WHITE, 38))
   # Thin border for depth
   rl.draw_rectangle_rounded_lines_ex(knob_rect, knob_roundness, knob_segments, 1.0, with_alpha(rl.WHITE, 50))
+
+
+def draw_dialog_close_button(rect: rl.Rectangle, pressed: bool = False):
+  """Square X button for the top-right corner of Aether dialogs."""
+  rl.draw_rectangle_rounded(rect, 0.35, 12, rl.Color(255, 255, 255, 28 if pressed else 14))
+  rl.draw_rectangle_rounded_lines_ex(rect, 0.35, 12, 1.5, rl.Color(255, 255, 255, 40))
+  cx, cy = rect.x + rect.width / 2, rect.y + rect.height / 2
+  s = rect.width * 0.28
+  color = AetherListColors.HEADER if pressed else AetherListColors.MUTED
+  rl.draw_line_ex(rl.Vector2(cx - s, cy - s), rl.Vector2(cx + s, cy + s), 3.0, color)
+  rl.draw_line_ex(rl.Vector2(cx + s, cy - s), rl.Vector2(cx - s, cy + s), 3.0, color)
 
 
 def draw_action_pill(

@@ -14,12 +14,10 @@ import pyray as rl
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
-from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult, Widget
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
-from openpilot.system.ui.widgets.label import gui_label
 
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.layouts.settings.starpilot.panel import _SettingsPage
@@ -43,11 +41,12 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   GROUP_TOP_INSET,
   draw_group_header,
   AetherSliderDialog,
-  mix_colors,
   snap_rect,
   draw_rounded_fill,
   draw_rounded_stroke,
   point_hits,
+  draw_action_pill,
+  draw_dialog_close_button,
   draw_text_fit_common,
   wrap_text,
   SECTION_GAP,
@@ -674,10 +673,18 @@ class AetherBackupsCareDialog(Widget):
       self._controller.handle_action("ResetStock")
 
   def _render(self, rect: rl.Rectangle):
+    # Layout and button style match the download manager dialogs (SimpleDownloadManager):
+    # left title with an X close button, flat translucent pills.
     rl.draw_rectangle(0, 0, gui_app.width, gui_app.height, rl.Color(0, 0, 0, 160))
 
-    dialog_w = min(2320, int(rect.width - 40))
-    dialog_h = min(1015, int(rect.height - 40))
+    MARGIN = 48
+    COL_GAP = 18
+    ROW_GAP = 18
+    ROWS = 4
+    BTN_H = 130
+    HEADER_H = 36 + 72 + 68  # top pad + title row + status line
+    dialog_w = min(1800, int(rect.width - 80))
+    dialog_h = min(int(rect.height - 80), HEADER_H + ROWS * BTN_H + (ROWS - 1) * ROW_GAP + MARGIN)
     dx = rect.x + (rect.width - dialog_w) / 2
     dy = rect.y + (rect.height - dialog_h) / 2
 
@@ -686,129 +693,41 @@ class AetherBackupsCareDialog(Widget):
     draw_rounded_stroke(d_rect, rl.Color(255, 255, 255, 16), radius_px=35)
     rl.draw_rectangle_rec(rl.Rectangle(d_rect.x, d_rect.y, d_rect.width, 3), self._color)
 
-    title_text = tr("Maintenance")
-    title_size = 64
-    ts = measure_text_cached(self._font_title, title_text, title_size)
-    rl.draw_text_ex(self._font_title, title_text, rl.Vector2(round(dx + (dialog_w - ts.x) / 2), round(dy + 87)), title_size, 0, rl.WHITE)
-
-    MARGIN = 80
+    cx = dx + MARGIN
     content_w = dialog_w - MARGIN * 2
+    y = dy + 36
 
-    status_rect = snap_rect(rl.Rectangle(dx + MARGIN, dy + 170, content_w, 80))
-    draw_list_group_shell(status_rect, style=PANEL_STYLE)
-
-    gui_label(rl.Rectangle(status_rect.x + 20, status_rect.y + 10, status_rect.width - 40, 24),
-              tr("System Status"), 22, AetherListColors.MUTED, FontWeight.SEMI_BOLD)
+    close_size = 56
+    self._close_rect = snap_rect(rl.Rectangle(dx + dialog_w - MARGIN - close_size, y, close_size, close_size))
+    draw_text_fit_common(self._font_title, tr("Maintenance"), rl.Vector2(cx, y + 4), content_w - close_size - 32, 48,
+                         color=AetherListColors.HEADER)
+    draw_dialog_close_button(self._close_rect, pressed=self._pressed_btn_id == "close")
+    y += 72
 
     storage_text = tr("Storage: {}").format(self._controller.storage_summary())
     backup_text = tr("Backups: {}  •  Snapshots: {}").format(
       self._controller.backup_count_text(), self._controller.toggle_backup_count_text())
-    gui_label(rl.Rectangle(status_rect.x + 20, status_rect.y + 40, status_rect.width - 40, 24),
-              storage_text, 22, AetherListColors.HEADER, FontWeight.MEDIUM)
-    gui_label(rl.Rectangle(status_rect.x + 300, status_rect.y + 40, status_rect.width - 320, 24),
-              backup_text, 22, AetherListColors.HEADER, FontWeight.MEDIUM)
+    status_font = gui_app.font(FontWeight.NORMAL)
+    rl.draw_text_ex(status_font, f"{storage_text}  •  {backup_text}", rl.Vector2(round(cx), round(y)), 28, 0, AetherListColors.SUBTEXT)
+    y += 44 + 24
 
-    mouse_pos = gui_app.last_mouse_event.pos
-
-    btn_fill = rl.Color(22, 24, 32, 255)
-    btn_border = rl.Color(255, 255, 255, 40)
-    btn_fill_hover = rl.Color(30, 32, 42, 255)
-    btn_fill_pressed = mix_colors(self._color, rl.Color(0, 0, 0, 255), 0.15)
-    btn_radius = 18.0
-    COL_GAP = 24
-    ROW_GAP = 20
-    btn_pad = 16.0
-    BTN_HEIGHT = 120.0
-    col_w = (content_w - btn_pad * 2 - COL_GAP) / 2
-
-    btn_group_y = dy + 278
-    btn_group_h = btn_pad * 2 + 4 * BTN_HEIGHT + 3 * ROW_GAP
-    btn_group_rect = snap_rect(rl.Rectangle(dx + MARGIN, btn_group_y, content_w, btn_group_h))
-    draw_list_group_shell(btn_group_rect, style=PANEL_STYLE)
+    col_w = (content_w - COL_GAP) / 2
+    btn_h = min(float(BTN_H), (dy + dialog_h - MARGIN - y - ROW_GAP * (ROWS - 1)) / ROWS)
 
     self._button_rects.clear()
     for i, btn in enumerate(self._buttons):
       btn_id = btn["id"]
-      row = i % 4
-      col = i // 4
-      bx = btn_group_rect.x + btn_pad + col * (col_w + COL_GAP)
-      by = btn_group_rect.y + btn_pad + row * (BTN_HEIGHT + ROW_GAP)
-      btn_rect = snap_rect(rl.Rectangle(bx, by, col_w, BTN_HEIGHT))
+      row, col = i % ROWS, i // ROWS
+      btn_rect = snap_rect(rl.Rectangle(cx + col * (col_w + COL_GAP), y + row * (btn_h + ROW_GAP), col_w, btn_h))
       self._button_rects[btn_id] = btn_rect
 
-      hovered = rl.check_collision_point_rec(mouse_pos, btn_rect)
-      pressed = self._pressed_btn_id == btn_id
-
       if btn["danger"]:
-        if pressed:
-          fill = rl.Color(173, 78, 90, 120)
-          border = PANEL_STYLE.danger_text
-        elif hovered:
-          fill = rl.Color(173, 78, 90, 80)
-          border = PANEL_STYLE.danger_text
-        else:
-          fill = PANEL_STYLE.danger_fill
-          border = PANEL_STYLE.danger_border
-        text_color = PANEL_STYLE.danger_text
+        fill, border, text_color = PANEL_STYLE.danger_fill, PANEL_STYLE.danger_border, PANEL_STYLE.danger_text
       else:
-        if pressed:
-          fill = btn_fill_pressed
-          border = self._color
-        elif hovered:
-          fill = btn_fill_hover
-          border = self._color
-        else:
-          fill = btn_fill
-          border = btn_border
-        text_color = AetherListColors.HEADER
-
-      draw_rounded_fill(btn_rect, fill, radius_px=btn_radius)
-      draw_rounded_stroke(btn_rect, border, thickness=2, radius_px=btn_radius)
-
-      font_size = 36
-      draw_text_fit_common(
-        self._font_btn,
-        btn["text"],
-        rl.Vector2(btn_rect.x + 16, btn_rect.y + (btn_rect.height - font_size) / 2),
-        btn_rect.width - 32,
-        font_size,
-        align_center=True,
-        color=text_color,
-      )
-
-    close_w = 600.0
-    close_h = 110.0
-    cx = dx + (dialog_w - close_w) / 2
-    cy = btn_group_rect.y + btn_group_rect.height + 40
-    self._close_rect = snap_rect(rl.Rectangle(cx, cy, close_w, close_h))
-
-    close_hovered = rl.check_collision_point_rec(mouse_pos, self._close_rect)
-    close_pressed = self._pressed_btn_id == "close"
-
-    if close_pressed:
-      close_fill = mix_colors(self._color, rl.Color(0, 0, 0, 255), 0.2)
-      close_border = self._color
-    elif close_hovered:
-      close_fill = self._color
-      close_border = self._color
-    else:
-      close_fill = rl.Color(255, 255, 255, 14)
-      close_border = rl.Color(255, 255, 255, 28)
-
-    draw_rounded_fill(self._close_rect, close_fill, radius_px=28)
-    draw_rounded_stroke(self._close_rect, close_border, thickness=2, radius_px=28)
-
-    close_text = tr("Close")
-    close_size = 38
-    cts = measure_text_cached(self._font_btn, close_text, close_size)
-    rl.draw_text_ex(
-      self._font_btn,
-      close_text,
-      rl.Vector2(round(self._close_rect.x + (self._close_rect.width - cts.x) / 2), round(self._close_rect.y + (self._close_rect.height - cts.y) / 2)),
-      close_size,
-      0,
-      rl.WHITE,
-    )
+        fill, border, text_color = rl.Color(255, 255, 255, 8), rl.Color(255, 255, 255, 36), AetherListColors.HEADER
+      draw_action_pill(btn_rect, btn["text"], fill, border, text_color, font_size=34, roundness=0.35)
+      if self._pressed_btn_id == btn_id:
+        rl.draw_rectangle_rounded(btn_rect, 0.35, 12, rl.Color(255, 255, 255, 16))
 
 
 class StarPilotSystemLayout(_SettingsPage):

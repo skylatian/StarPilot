@@ -15,7 +15,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
     draw_hud_background, draw_soft_card, draw_action_pill, draw_selection_list_row,
     draw_empty_state_card, draw_busy_ring, draw_list_scroll_fades,
     draw_rounded_fill, draw_rounded_stroke, draw_text_fit_common,
-    draw_download_icon,
+    draw_download_icon, draw_dialog_close_button,
     with_alpha, hex_to_color, snap_rect, point_hits,
     aether_begin_scissor_mode, aether_end_scissor_mode,
 )
@@ -382,17 +382,7 @@ class SimpleDownloadManager(Widget):
     draw_text_fit_common(title_font, tr(self.title), rl.Vector2(float(cx), float(y + 4)),
                          float(cw - close_size - 32), 48, color=AetherListColors.HEADER)
 
-    close_hovered = self._pressed_target == "close"
-    rl.draw_rectangle_rounded(self._close_rect, 0.35, 12,
-                              with_alpha(rl.Color(255, 255, 255, 28 if close_hovered else 14), 255))
-    rl.draw_rectangle_rounded_lines_ex(self._close_rect, 0.35, 12, 1.5,
-                                       with_alpha(rl.Color(255, 255, 255, 40), 255))
-    cx_c = self._close_rect.x + self._close_rect.width / 2
-    cy_c = self._close_rect.y + self._close_rect.height / 2
-    s = close_size * 0.28
-    clr = AetherListColors.HEADER if close_hovered else AetherListColors.MUTED
-    rl.draw_line_ex(rl.Vector2(cx_c - s, cy_c - s), rl.Vector2(cx_c + s, cy_c + s), 3.0, clr)
-    rl.draw_line_ex(rl.Vector2(cx_c + s, cy_c - s), rl.Vector2(cx_c - s, cy_c + s), 3.0, clr)
+    draw_dialog_close_button(self._close_rect, pressed=self._pressed_target == "close")
 
     y += 72
 
