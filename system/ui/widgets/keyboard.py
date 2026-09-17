@@ -19,6 +19,7 @@ DELETE_REPEAT_INTERVAL = 0.07
 
 # Constants for special keys
 CONTENT_MARGIN = 50
+CANCEL_BUTTON_WIDTH = 386
 BACKSPACE_KEY = "<-"
 ENTER_KEY = "->"
 SPACE_KEY = " "
@@ -146,9 +147,11 @@ class Keyboard(Widget):
 
   def _render(self, rect: rl.Rectangle):
     rect = rl.Rectangle(rect.x + CONTENT_MARGIN, rect.y + CONTENT_MARGIN, rect.width - 2 * CONTENT_MARGIN, rect.height - 2 * CONTENT_MARGIN)
-    self._title.render(rl.Rectangle(rect.x, rect.y, rect.width, 95))
+    # Cancel sits in the title row only (was 125 px tall and covered the end of a long subtitle).
+    header_width = rect.width - CANCEL_BUTTON_WIDTH - 30
+    self._title.render(rl.Rectangle(rect.x, rect.y, header_width, 95))
     self._sub_title.render(rl.Rectangle(rect.x, rect.y + 95, rect.width, 60))
-    self._cancel_button.render(rl.Rectangle(rect.x + rect.width - 386, rect.y, 386, 125))
+    self._cancel_button.render(rl.Rectangle(rect.x + rect.width - CANCEL_BUTTON_WIDTH, rect.y, CANCEL_BUTTON_WIDTH, 90))
 
     # Draw input box and password toggle
     input_margin = 25

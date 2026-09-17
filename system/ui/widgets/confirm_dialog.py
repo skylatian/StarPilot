@@ -14,6 +14,7 @@ RICH_OUTER_MARGIN = 100
 BUTTON_HEIGHT = 160
 MARGIN = 50
 TEXT_PADDING = 10
+SCROLLER_PADDING = 40  # scroller_tici.Scroller._render inset
 BACKGROUND_COLOR = rl.Color(27, 27, 27, 255)
 
 
@@ -69,8 +70,10 @@ class ConfirmDialog(Widget):
     if not self._rich:
       self._label.render(text_rect)
     else:
-      html_rect = rl.Rectangle(text_rect.x, text_rect.y, text_rect.width,
-                               self._html_renderer.get_total_height(int(text_rect.width)))
+      # Wrap to the Scroller's inner (clipped) width, not text_rect — it insets its content on each side.
+      html_width = text_rect.width - 2 * SCROLLER_PADDING
+      html_rect = rl.Rectangle(text_rect.x, text_rect.y, html_width,
+                               self._html_renderer.get_total_height(int(html_width)))
       self._html_renderer.set_rect(html_rect)
       self._scroller.render(text_rect)
 
