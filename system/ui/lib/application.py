@@ -909,10 +909,17 @@ class GuiApplication:
       image_obj = self._load_image_from_path(fspath.as_posix(), width, height, alpha_premultiply, keep_aspect_ratio, flip_x)
       texture_obj = self._load_texture_from_image(image_obj)
 
-    # Set logical size so widget layout math stays at 1x coordinates.
+    # Set logical size so widget layout math stays at 1x coordinates. With keep_aspect_ratio the
+    # image was fit inside width x height, so fit the logical size the same way — forcing it to
+    # width x height stretches any non-square image (e.g. 184x168 icons drawn into an 80x80 box).
     if width is not None and height is not None:
-      texture_obj.width = width
-      texture_obj.height = height
+      if keep_aspect_ratio and image_obj.width > 0 and image_obj.height > 0:
+        fit = min(width / image_obj.width, height / image_obj.height)
+        texture_obj.width = round(image_obj.width * fit)
+        texture_obj.height = round(image_obj.height * fit)
+      else:
+        texture_obj.width = width
+        texture_obj.height = height
 
     self._textures[cache_key] = texture_obj
     return texture_obj

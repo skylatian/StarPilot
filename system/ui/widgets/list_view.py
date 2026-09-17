@@ -211,13 +211,32 @@ class DualButtonAction(ItemAction):
 
 
 class MultipleButtonAction(ItemAction):
+  TEXT_SIZE = 40
+  TEXT_PADDING_X = 40  # per side; a pill's width follows its label
+
   def __init__(self, buttons: list[str | Callable[[], str]], button_width: int, selected_index: int = 0, callback: Callable | None = None):
     super().__init__(width=len(buttons) * button_width + (len(buttons) - 1) * RIGHT_ITEM_PADDING, enabled=True)
     self.buttons = buttons
-    self.button_width = button_width
+    self.button_width = button_width  # initial width hint only; pills are sized to their labels
     self.selected_button = selected_index
     self.callback = callback
     self._font = gui_app.font(FontWeight.MEDIUM)
+
+  def _button_widths(self) -> list[float]:
+    return [max(2.0 * BUTTON_HEIGHT, measure_text_cached(self._font, _resolve_value(t, ""), self.TEXT_SIZE).x + 2 * self.TEXT_PADDING_X)
+            for t in self.buttons]
+
+  def _button_rects(self, rect: rl.Rectangle) -> list[rl.Rectangle]:
+    button_y = rect.y + (rect.height - BUTTON_HEIGHT) / 2
+    rects, x = [], rect.x
+    for w in self._button_widths():
+      rects.append(rl.Rectangle(x, button_y, w, BUTTON_HEIGHT))
+      x += w + RIGHT_ITEM_PADDING
+    return rects
+
+  def get_width_hint(self) -> float:
+    widths = self._button_widths()
+    return sum(widths) + (len(widths) - 1) * RIGHT_ITEM_PADDING
 
   def set_selected_button(self, index: int):
     if 0 <= index < len(self.buttons):
@@ -227,12 +246,7 @@ class MultipleButtonAction(ItemAction):
     return self.selected_button
 
   def _render(self, rect: rl.Rectangle):
-    spacing = RIGHT_ITEM_PADDING
-    button_y = rect.y + (rect.height - BUTTON_HEIGHT) / 2
-
-    for i, _text in enumerate(self.buttons):
-      button_x = rect.x + i * (self.button_width + spacing)
-      button_rect = rl.Rectangle(button_x, button_y, self.button_width, BUTTON_HEIGHT)
+    for i, (_text, button_rect) in enumerate(zip(self.buttons, self._button_rects(rect), strict=True)):
 
       # Check button state
       mouse_pos = rl.get_mouse_position()
@@ -255,18 +269,14 @@ class MultipleButtonAction(ItemAction):
 
       # Draw text
       text = _resolve_value(_text, "")
-      text_size = measure_text_cached(self._font, text, 40)
-      text_x = button_x + (self.button_width - text_size.x) / 2
-      text_y = button_y + (BUTTON_HEIGHT - text_size.y) / 2
+      text_size = measure_text_cached(self._font, text, self.TEXT_SIZE)
+      text_x = button_rect.x + (button_rect.width - text_size.x) / 2
+      text_y = button_rect.y + (BUTTON_HEIGHT - text_size.y) / 2
       text_color = rl.Color(228, 228, 228, 255) if self.enabled else rl.Color(150, 150, 150, 255)
-      rl.draw_text_ex(self._font, text, rl.Vector2(text_x, text_y), 40, 0, text_color)
+      rl.draw_text_ex(self._font, text, rl.Vector2(text_x, text_y), self.TEXT_SIZE, 0, text_color)
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
-    spacing = RIGHT_ITEM_PADDING
-    button_y = self._rect.y + (self._rect.height - BUTTON_HEIGHT) / 2
-    for i, _ in enumerate(self.buttons):
-      button_x = self._rect.x + i * (self.button_width + spacing)
-      button_rect = rl.Rectangle(button_x, button_y, self.button_width, BUTTON_HEIGHT)
+    for i, button_rect in enumerate(self._button_rects(self._rect)):
       if rl.check_collision_point_rec(mouse_pos, button_rect):
         self.selected_button = i
         if self.callback:
@@ -359,7 +369,8 @@ class ListItem(Widget):
     if self.title:
       # Draw icon if present
       if self.icon:
-        rl.draw_texture_ex(self._icon_texture, rl.Vector2(content_x, self._rect.y + (ITEM_BASE_HEIGHT - self._icon_texture.height) / 2), 0.0, 1.0, rl.WHITE)
+        rl.draw_texture_ex(self._icon_texture, rl.Vector2(content_x + (ICON_SIZE - self._icon_texture.width) / 2,
+                                                         self._rect.y + (ITEM_BASE_HEIGHT - self._icon_texture.height) / 2), 0.0, 1.0, rl.WHITE)
         text_x += ICON_SIZE + ITEM_PADDING
 
       # Draw main text
