@@ -15,6 +15,7 @@ MIN_DRAG_PIXELS = 12
 AUTO_SCROLL_TC_SNAP = 0.025
 AUTO_SCROLL_TC = 0.18
 BOUNCE_RETURN_RATE = 10.0
+OVERSHOOT_DAMP_RATE = 40.0  # fling velocity decay once past the edge; at 10 (= return rate) a 3000 px/s fling overshot ~108 px, now ~67 px
 REJECT_DECELERATION_FACTOR = 3
 MAX_SPEED = 10000.0  # px/s
 
@@ -140,7 +141,7 @@ class GuiScrollPanel2:
 
           dist = target - self.get_offset()
           self.set_offset(self.get_offset() + dist * factor)  # ease toward the edge
-          self._velocity *= (1.0 - factor)  # damp any leftover fling
+          self._velocity *= math.exp(-OVERSHOOT_DAMP_RATE * dt)  # damp any leftover fling
 
           # Steady once we are close enough to the target
           if abs(dist) < 1 and abs(self._velocity) < MIN_VELOCITY:
