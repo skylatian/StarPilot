@@ -3600,7 +3600,7 @@ class AetherSettingsView(PanelManagerView):
         hovered=hovered,
         pressed=pressed,
         is_last=is_last,
-        show_chevron=row.on_click is not None,
+        show_chevron=row.on_click is not None or bool(row.navigate_to),
         title_size=36, subtitle_size=26, value_size=30,
         style=self._panel_style,
       )
