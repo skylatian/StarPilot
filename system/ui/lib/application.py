@@ -6,7 +6,9 @@ import queue
 import time
 import signal
 import sys
+import zlib
 import pyray as rl
+from concurrent.futures import Future, ThreadPoolExecutor
 import threading
 import platform
 import subprocess
@@ -531,6 +533,10 @@ class GuiApplication:
     self._frame = 0
     self._window_close_requested = False
     self._pending_screenshot: str | None = None
+    self._screenshot_writes: list[Future] = []
+    self._screenshot_pool: ThreadPoolExecutor | None = None
+    self._frame_digest_requested = False
+    self._frame_digest: int | None = None
     self._text_log: list[dict] | None = None
     self._text_log_recording = False
     self._text_log_clip: tuple[float, float, float, float] | None = None
@@ -653,19 +659,53 @@ class GuiApplication:
       cloudlog.exception("text log entry failed")
 
   def screenshot_pending(self) -> bool:
+    """True until the requested frame has been read back and every PNG write has finished."""
+    self._screenshot_writes = [f for f in self._screenshot_writes if not f.done()]
+    return self._pending_screenshot is not None or bool(self._screenshot_writes)
+
+  def screenshot_capture_pending(self) -> bool:
+    """True only until the requested frame has been read back (its PNG may still be writing)."""
     return self._pending_screenshot is not None
+
+  def request_frame_digest(self) -> None:
+    """Compute a cheap checksum of the next fully drawn frame (see take_frame_digest)."""
+    self._frame_digest_requested = True
+
+  def take_frame_digest(self) -> int | None:
+    digest, self._frame_digest = self._frame_digest, None
+    return digest
+
+  def _compute_frame_digest(self) -> None:
+    if self._render_texture is None:
+      return
+    image = rl.load_image_from_texture(self._render_texture.texture)
+    try:
+      # Nearest-neighbour downscale keeps this to a few ms; it only needs to notice the page still moving.
+      w, h = max(1, image.width // 4), max(1, image.height // 4)
+      rl.image_resize_nn(image, w, h)
+      self._frame_digest = zlib.crc32(rl.ffi.buffer(image.data, w * h * 4))
+    finally:
+      rl.unload_image(image)
 
   def _save_screenshot(self, path: str) -> None:
     if self._render_texture is None:
       cloudlog.warning(f"screenshot skipped, no render texture: {path}")
       return
+    # GPU readback has to happen here; the flip, resize and PNG encode (~120 ms) run on a worker thread.
     image = rl.load_image_from_texture(self._render_texture.texture)
+    if self._screenshot_pool is None:
+      self._screenshot_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="screenshot")
+    self._screenshot_writes.append(self._screenshot_pool.submit(self._write_screenshot, image, path))
+
+  def _write_screenshot(self, image, path: str) -> None:
     try:
       rl.image_flip_vertical(image)
       # Retina hosts render at 2x; save at the device's logical resolution.
       if image.width != self._width or image.height != self._height:
         rl.image_resize(image, self._width, self._height)
       rl.export_image(image, path)
+    except Exception:
+      cloudlog.exception(f"screenshot write failed: {path}")
     finally:
       rl.unload_image(image)
 
@@ -1208,6 +1248,10 @@ class GuiApplication:
         rl.end_drawing()
         self._mark_progress("gui_app.after_end_drawing")
         self._populate_render_texture_cache()
+
+        if self._frame_digest_requested:
+          self._frame_digest_requested = False
+          self._compute_frame_digest()
 
         if self._pending_screenshot is not None:
           self._save_screenshot(self._pending_screenshot)

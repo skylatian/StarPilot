@@ -9,6 +9,8 @@ shows exactly what a user would land on (top of the page, no scroll). Each PNG g
 NNN_<name>.text.json with every text draw of that exact frame (see scripts/ui_text_lint.py). After the pages, one sample
 of each dialog type is opened over a representative page (never confirmed).
 Optional UI_SCREENSHOT_FILTER=substr keeps only pages whose name contains substr.
+A page is captured once its frame stops changing (STABLE_FRAMES identical frames after UI_SCREENSHOT_MIN_SETTLE),
+or after UI_SCREENSHOT_SETTLE seconds if it keeps animating.
 """
 import json
 import os
@@ -19,7 +21,9 @@ from collections.abc import Callable, Iterator
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.ui.lib.application import gui_app
 
-SETTLE_SECONDS = float(os.getenv("UI_SCREENSHOT_SETTLE", "0.8"))
+SETTLE_SECONDS = float(os.getenv("UI_SCREENSHOT_SETTLE", "1.0"))  # cap for pages that never stop animating
+MIN_SETTLE_SECONDS = float(os.getenv("UI_SCREENSHOT_MIN_SETTLE", "0.15"))  # lets async content start loading
+STABLE_FRAMES = 3
 
 # Sub-pages that are only built when their tile is tapped: (panel key, builder method, args).
 LAZY_SUB_PAGES = [
@@ -184,7 +188,12 @@ class ScreenshotTour:
     gui_app.set_show_touches(False)
     gui_app.set_show_fps(False)
     self._index = 0
-    self._shot_at = 0.0
+    self._min_at = 0.0
+    self._max_at = 0.0
+    self._last_digest: int | None = None
+    self._stable = 0
+    self._opened_at = 0.0
+    self._settled = ""
     self._path: str | None = None
     self._logging = False
     self.done = False
@@ -207,20 +216,36 @@ class ScreenshotTour:
         continue
       self._index += 1
       self._path = os.path.join(self._out_dir, f"{self._index:03d}_{name.replace('/', '__')}.png")
-      self._shot_at = time.monotonic() + SETTLE_SECONDS
+      now = time.monotonic()
+      self._opened_at = now
+      self._min_at = now + MIN_SETTLE_SECONDS
+      self._max_at = now + SETTLE_SECONDS
+      self._last_digest, self._stable = None, 0
+      gui_app.take_frame_digest()  # drop any digest from the previous page
       return
     self.done = True
 
   def update(self) -> None:
     """Call once per rendered frame."""
-    if self.done or gui_app.screenshot_pending():
+    if self.done or gui_app.screenshot_capture_pending():
       return
     if self._path is None:
       self._advance()
       return
-    if time.monotonic() < self._shot_at:
+    now = time.monotonic()
+    if now < self._min_at:
       return
     if not self._logging:
+      digest = gui_app.take_frame_digest()  # checksum of the previous frame
+      gui_app.request_frame_digest()
+      if now < self._max_at:
+        if digest is None or digest != self._last_digest:
+          self._last_digest, self._stable = digest, 0
+          return
+        self._stable += 1
+        if self._stable < STABLE_FRAMES:
+          return
+      self._settled = "cap" if now >= self._max_at else f"{now - self._opened_at:.2f}s"
       # Record text draws of the next frame; that same frame is the one captured below.
       gui_app.start_text_log()
       self._logging = True
@@ -230,5 +255,5 @@ class ScreenshotTour:
       json.dump(gui_app.take_text_log(), f, indent=0, ensure_ascii=False)
     gui_app.request_screenshot(self._path)
     self.saved.append(self._path)
-    print(f"screenshot tour: {self._path}")
+    print(f"screenshot tour: {self._path} (settled {self._settled})")
     self._path = None
