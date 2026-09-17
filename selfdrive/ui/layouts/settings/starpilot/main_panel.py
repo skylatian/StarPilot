@@ -301,8 +301,10 @@ class StarPilotLayout(Widget):
 
   def _render(self, rect: rl.Rectangle):
     TOP_BAR_HEIGHT = 72
+    TOP_BAR_GAP = 7  # extra space under the breadcrumb bar so it matches the panel's side/bottom margins
     BOTTOM_BAR_HEIGHT = 10
-    content_rect = rl.Rectangle(rect.x, rect.y + TOP_BAR_HEIGHT, rect.width, rect.height - TOP_BAR_HEIGHT - BOTTOM_BAR_HEIGHT)
+    content_top = TOP_BAR_HEIGHT + TOP_BAR_GAP
+    content_rect = rl.Rectangle(rect.x, rect.y + content_top, rect.width, rect.height - content_top - BOTTOM_BAR_HEIGHT)
 
     # Standardize width to perfectly match subpanel shells
     shell_w = min(rect.width - AETHER_LIST_METRICS.outer_margin_x * 2, AETHER_LIST_METRICS.max_content_width)

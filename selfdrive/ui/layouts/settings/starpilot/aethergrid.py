@@ -2216,6 +2216,28 @@ def settings_row_text_width(row_width: float, kind: str, *, show_chevron: bool =
   return max(100.0, text_right - 24)
 
 
+# Page header and section labels (see starpilot-ui-changes/DESIGN-GUIDELINES.md)
+PAGE_HEADER_INDENT = 24      # page title/description align with the row text
+SECTION_LABEL_INDENT = 12    # section labels sit slightly outside the row text
+SECTION_LABEL_SIZE = 38      # one step above the 36 px row titles
+SECTION_LABEL_BASELINE_GAP = 6
+SECTION_RULE_GAP = 20        # between the label and its rule
+SECTION_RULE_RIGHT_INSET = 24
+SECTION_RULE_COLOR = rl.Color(255, 255, 255, 34)
+
+
+def draw_section_label(rect: rl.Rectangle, title: str, style: PanelStyle):
+  """Section label, bottom-aligned in rect, with a rule running from the label to the right edge."""
+  x = rect.x + SECTION_LABEL_INDENT
+  text_h = SECTION_LABEL_SIZE * FONT_SCALE
+  y = rect.y + rect.height - text_h - SECTION_LABEL_BASELINE_GAP
+  font = gui_app.font(FontWeight.SEMI_BOLD)
+  rl.draw_text_ex(font, title, rl.Vector2(x, round(y)), SECTION_LABEL_SIZE, 0, style.title_color)
+  rule_x = x + measure_text_cached(font, title, SECTION_LABEL_SIZE).x + SECTION_RULE_GAP
+  rule_w = max(0.0, rect.x + rect.width - rule_x - SECTION_RULE_RIGHT_INSET)
+  rl.draw_rectangle_rec(rl.Rectangle(rule_x, round(y + text_h / 2), rule_w, 2), SECTION_RULE_COLOR)
+
+
 def draw_settings_list_row(
   rect: rl.Rectangle,
   *,
@@ -3256,7 +3278,7 @@ class AetherScrollbar:
 # ── SettingRow / SettingSection dataclasses ──
 
 SECTION_GAP = AETHER_LIST_METRICS.section_gap
-SECTION_HEADER_HEIGHT = AETHER_LIST_METRICS.section_header_height
+SECTION_HEADER_HEIGHT = 58  # room for the section label + its rule
 SECTION_HEADER_GAP = AETHER_LIST_METRICS.section_header_gap
 ROW_HEIGHT = AETHER_LIST_METRICS.row_height
 
@@ -3363,32 +3385,42 @@ class AetherSettingsView(PanelManagerView):
     elif row.type == "toggle" and row.set_state and row.get_state:
       row.set_state(not row.get_state())
 
+  # Page header: a band across the top of the panel, its height measured from the text it holds.
+  _HB_TOP = 22                 # above the title
+  _HB_TITLE_SIZE = 38
+  _HB_SUB_SIZE = 26
+  _HB_TITLE_GAP = 6            # title to description
+  _HB_BAND_PAD = 22            # below the text, inside the band
+  _HB_BAND_GAP = 26            # band to the first section label
+  _HB_BAND_LIFT = 26           # band brightness above the panel background
+  _HB_BAND_TINT = 0.14         # accent mixed into the band when the header toggle owns the rows
+  CHILD_RAIL_X = 12            # accent rail marking rows owned by the header toggle
+  CHILD_RAIL_WIDTH = 6
+  CHILD_INDENT = 32
+
+  def _hb_text(self, width: float):
+    title = tr(self._header_title) if self._header_title else ""
+    subtitle = tr(self._header_subtitle) if self._header_subtitle else ""
+    if self._parent_toggle:
+      title = title or tr(self._parent_toggle.label)
+      subtitle = subtitle or (tr(self._parent_toggle.subtitle) if self._parent_toggle.subtitle else "")
+      text_w = width - PAGE_HEADER_INDENT - (AETHER_LIST_METRICS.toggle_width + AETHER_LIST_METRICS.toggle_right_inset + 16)
+    else:
+      text_w = (width - PAGE_HEADER_INDENT) * 0.75
+    lines = wrap_subtitle(subtitle, text_w, self._HB_SUB_SIZE, 4) if subtitle else []
+    return title, lines, text_w
+
+  def _hb_text_height(self, width: float) -> float:
+    _, lines, _ = self._hb_text(width)
+    h = self._HB_TITLE_SIZE * FONT_SCALE
+    if lines:
+      h += self._HB_TITLE_GAP + len(lines) * self._HB_SUB_SIZE * FONT_SCALE
+    return h
+
   def _compute_header_height(self, content_width: float) -> float:
     if not self._has_header:
       return 0.0
-    if self._parent_toggle:
-      h = max(float(AETHER_LIST_METRICS.toggle_height), 54.0)  # toggle vs title(46px + 8px gap)
-      subtitle_text = tr(self._parent_toggle.subtitle) if self._parent_toggle.subtitle else ""
-      if self._header_subtitle:
-        subtitle_text = tr(self._header_subtitle)
-      if subtitle_text:
-        toggle_take = AETHER_LIST_METRICS.toggle_width + AETHER_LIST_METRICS.toggle_right_inset + 16
-        col_w = max(100.0, content_width + AETHER_LIST_METRICS.content_right_gutter - toggle_take)
-        desc_font = gui_app.font(FontWeight.NORMAL)
-        desc_lines = wrap_text(desc_font, subtitle_text, col_w, 29, max_lines=4)
-        h += len(desc_lines) * PANEL_HEADER_SUBTITLE_LINE_HEIGHT + 12.0
-      h += SECTION_GAP
-      return h
-    h = 54.0  # title (46px) + inner gap (8px)
-    if self._header_subtitle:
-      subtitle_text = tr(self._header_subtitle)
-      if subtitle_text:
-        desc_font = gui_app.font(FontWeight.NORMAL)
-        col_w = (content_width - self.COLUMN_GAP) / 2 if self._uses_two_columns(content_width) else content_width
-        desc_lines = wrap_text(desc_font, subtitle_text, col_w, 29, max_lines=4)
-        h += len(desc_lines) * PANEL_HEADER_SUBTITLE_LINE_HEIGHT + 12.0
-    h += SECTION_GAP
-    return h
+    return self._HB_TOP + self._hb_text_height(content_width) + self._HB_BAND_PAD + self._HB_BAND_GAP
 
   def _render(self, rect: rl.Rectangle):
     self.set_rect(rect)
@@ -3430,38 +3462,39 @@ class AetherSettingsView(PanelManagerView):
                              AetherListColors.PANEL_BG, fade_height=self._fade_height)
 
   def _draw_header(self, rect: rl.Rectangle):
-    title = tr(self._header_title) if self._header_title else ""
-    subtitle = tr(self._header_subtitle) if self._header_subtitle else ""
+    title, lines, text_w = self._hb_text(rect.width)
+    text_bottom = rect.y + self._HB_TOP + self._hb_text_height(rect.width)
+
+    band = rl.Rectangle(rect.x + 1, rect.y + 1, rect.width - 2, text_bottom + self._HB_BAND_PAD - rect.y - 1)
+    bg = self._panel_style.shell_bg
+    lift = self._HB_BAND_LIFT
+    fill = rl.Color(min(255, bg.r + lift), min(255, bg.g + lift), min(255, bg.b + lift + 2), 255)  # opaque: overlapping fills would seam
+    if self._parent_toggle and self._parent_toggle.get_state():
+      fill = mix_colors(fill, self._panel_style.accent, self._HB_BAND_TINT, alpha=255)
+    draw_rounded_fill(rl.Rectangle(band.x, band.y, band.width, min(band.height, 64)), fill, radius_px=31)
+    if band.height > 32:
+      rl.draw_rectangle_rec(rl.Rectangle(band.x, band.y + 32, band.width, band.height - 32), fill)
+    rl.draw_rectangle_rec(rl.Rectangle(rect.x, band.y + band.height, rect.width, 1), self._panel_style.divider_color)
+
+    x = rect.x + PAGE_HEADER_INDENT
+    y = rect.y + self._HB_TOP
+    title_h = self._HB_TITLE_SIZE * FONT_SCALE
+    draw_text_fit_common(gui_app.font(PANEL_HEADER_TITLE_FONT), title, rl.Vector2(x, y), text_w, self._HB_TITLE_SIZE,
+                         color=AetherListColors.HEADER)
+    line_y = y + title_h + self._HB_TITLE_GAP
+    for line in lines:
+      rl.draw_text_ex(gui_app.font(PANEL_HEADER_SUBTITLE_FONT), line, rl.Vector2(x, round(line_y)), self._HB_SUB_SIZE, 0,
+                      AetherListColors.SUBTEXT)
+      line_y += self._HB_SUB_SIZE * FONT_SCALE
 
     if self._parent_toggle:
       toggle = self._parent_toggle
-
-      display_title = title if title else tr(toggle.label)
-      subtitle_text = subtitle if subtitle else (tr(toggle.subtitle) if toggle.subtitle else "")
-
-      toggle_take = AETHER_LIST_METRICS.toggle_width + AETHER_LIST_METRICS.toggle_right_inset + 16
-      text_rect = rl.Rectangle(rect.x, rect.y, max(100.0, rect.width - toggle_take), rect.height)
-      draw_settings_panel_header(text_rect, display_title, subtitle_text, title_size=30, subtitle_size=26, max_subtitle_width=1.0)
-
-      toggle_id = f"parent_toggle:{toggle.label}"
-      tw = AETHER_LIST_METRICS.toggle_width
-      th = AETHER_LIST_METRICS.toggle_height
-      ri = AETHER_LIST_METRICS.toggle_right_inset
-      toggle_rect = rl.Rectangle(rect.x + rect.width - tw - ri, rect.y, tw, th)
-      self._interactive_rects[toggle_id] = toggle_rect
-
+      tw, th, ri = AETHER_LIST_METRICS.toggle_width, AETHER_LIST_METRICS.toggle_height, AETHER_LIST_METRICS.toggle_right_inset
+      ty = y + (title_h - th) / 2
+      self._interactive_rects[f"parent_toggle:{toggle.label}"] = rl.Rectangle(rect.x + rect.width - tw - ri, ty, tw, th)
       toggle_value = toggle.get_state()
-
-      draw_toggle_switch(
-        rl.Rectangle(rect.x, rect.y, rect.width, th),
-        toggle_value,
-        knob_progress=1.0 if toggle_value else 0.0,
-        track_color=self._panel_style.accent,
-        seed_id=toggle_id,
-        bg_color=rl.Color(12, 10, 18, 255),
-      )
-    else:
-      draw_settings_panel_header(rect, title, subtitle, title_size=30, subtitle_size=26)
+      draw_toggle_switch(rl.Rectangle(rect.x, ty, rect.width, th), toggle_value, knob_progress=1.0 if toggle_value else 0.0,
+                         track_color=self._panel_style.accent, seed_id=f"parent_toggle:{toggle.label}", bg_color=rl.Color(12, 10, 18, 255))
 
   def _active_sections(self) -> list[SettingSection]:
     if self._tab_defs and self._active_tab_key:
@@ -3535,6 +3568,12 @@ class AetherSettingsView(PanelManagerView):
     return False
 
   def _draw_scroll_content(self, rect: rl.Rectangle, width: float):
+    if self._parent_toggle and self._parent_toggle.get_state():
+      # Accent rail + indent: these rows exist because the header toggle is on.
+      rl.draw_rectangle_rec(rl.Rectangle(rect.x + self.CHILD_RAIL_X, rect.y + self._scroll_offset, self.CHILD_RAIL_WIDTH,
+                                         max(0.0, self._content_height)), with_alpha(self._panel_style.accent, 220))
+      rect = rl.Rectangle(rect.x + self.CHILD_INDENT, rect.y, rect.width - self.CHILD_INDENT, rect.height)
+      width -= self.CHILD_INDENT
     y = rect.y + self._scroll_offset
     
     if self._tab_defs:
@@ -3572,14 +3611,9 @@ class AetherSettingsView(PanelManagerView):
         right_h = self._rows_height(right_section, right_rows, col_w)
         group_h = max(section_h, right_h)
 
-        draw_section_header(
-          rl.Rectangle(rect.x, y, col_w, SECTION_HEADER_HEIGHT),
-          tr(section.title), style=self._panel_style,
-        )
-        draw_section_header(
-          rl.Rectangle(rect.x + col_w + self.COLUMN_GAP, y, col_w, SECTION_HEADER_HEIGHT),
-          tr(right_section.title), style=self._panel_style,
-        )
+        draw_section_label(rl.Rectangle(rect.x, y, col_w, SECTION_HEADER_HEIGHT), tr(section.title), self._panel_style)
+        draw_section_label(rl.Rectangle(rect.x + col_w + self.COLUMN_GAP, y, col_w, SECTION_HEADER_HEIGHT),
+                           tr(right_section.title), self._panel_style)
         y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
 
         left_group = rl.Rectangle(rect.x, y, col_w, section_h)
@@ -3607,11 +3641,7 @@ class AetherSettingsView(PanelManagerView):
   def _draw_section(self, y: float, x: float, width: float,
                     section: SettingSection, rows: list[SettingRow]) -> float:
     if section.title:
-      draw_section_header(
-        rl.Rectangle(x, y, width, SECTION_HEADER_HEIGHT),
-        tr(section.title),
-        style=self._panel_style,
-      )
+      draw_section_label(rl.Rectangle(x, y, width, SECTION_HEADER_HEIGHT), tr(section.title), self._panel_style)
       y += SECTION_HEADER_HEIGHT + SECTION_HEADER_GAP
 
     group_rect = rl.Rectangle(x, y, width, self._rows_height(section, rows, width))
