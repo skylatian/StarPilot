@@ -5,7 +5,8 @@ Enabled by UI_SCREENSHOT_DIR (see system/ui/lib/application.py), driven from ui.
   UI_SCREENSHOT_DIR=/tmp/shots FINGERPRINT=TOYOTA_COROLLA_RETROFIT ./c3
 
 Pages are reached by calling the layouts' own navigation methods, not by clicking, so a page
-shows exactly what a user would land on (top of the page, no scroll, no dialog open).
+shows exactly what a user would land on (top of the page, no scroll). After the pages, one sample
+of each dialog type is opened over a representative page (never confirmed).
 Optional UI_SCREENSHOT_FILTER=substr keeps only pages whose name contains substr.
 """
 import os
@@ -103,8 +104,72 @@ def _steps(main_layout) -> Iterator[Step]:
       getattr(panel, method)(*args)
     yield f"starpilot/{key.lower()}/{_slug(method.removeprefix('_show_').removesuffix('_category'))}_{_slug(args[0]) if args else ''}".rstrip("_"), open_lazy
 
+  yield from _dialog_steps(main_layout, sp, open_leaf)
+
   # Leave the UI where it started.
   yield "", lambda: (sp.reset_to_root(), main_layout._set_mode_for_state())
+
+
+def _dialog_steps(main_layout, sp, open_leaf: Callable[[str], None]) -> Iterator[Step]:
+  """One sample of each dialog type, opened over a representative page. Nothing is confirmed, so no params change."""
+  import os as _os
+  from openpilot.common.basedir import BASEDIR
+  from openpilot.selfdrive.ui.layouts.onboarding import TrainingGuide
+  from openpilot.selfdrive.ui.layouts.settings.device import GalaxyQRDialog
+  from openpilot.selfdrive.ui.layouts.settings.settings import PanelType
+  from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import AetherSliderDialog
+  from openpilot.selfdrive.ui.layouts.settings.starpilot.main_panel import StarPilotPanelType
+  from openpilot.selfdrive.ui.layouts.settings.starpilot.system_settings import AetherBackupsCareDialog
+  from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+  from openpilot.system.ui.widgets.html_render import HtmlModal
+  from openpilot.system.ui.lib.application import FontWeight
+  from openpilot.system.ui.lib.multilang import multilang
+  from openpilot.system.ui.widgets.keyboard import Keyboard
+  from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+
+  panel = lambda t: sp._panels[t].instance  # noqa: E731
+
+  def over_device(push):
+    def action():
+      main_layout.open_settings(PanelType.DEVICE)
+      push()
+    return action
+
+  def over_panel(key: str, push):
+    def action():
+      main_layout.open_settings(PanelType.STARPILOT)
+      open_leaf(key)
+      push()
+    return action
+
+  def keyboard():
+    kb = Keyboard(min_text_size=6, password_mode=True, show_password_toggle=True)
+    kb.set_title("Set Galaxy Password", "Set a password to secure your Galaxy access. Min 6 characters.")
+    gui_app.push_widget(kb)
+
+  yield "dialog/confirm", over_device(lambda: gui_app.push_widget(
+    ConfirmDialog("Are you sure you want to reset calibration?", "Reset")))
+  yield "dialog/confirm_rich", over_panel("DRIVING_MODEL", lambda: gui_app.push_widget(ConfirmDialog(
+    "<h1>Experimental Mode</h1><br><p>openpilot defaults to driving in chill mode. Experimental mode enables alpha-level "
+    "features that aren't ready for chill mode. Experimental features are listed below.</p>", "Enable", rich=True)))
+  yield "dialog/alert", over_panel("DRIVING_MODEL", lambda: gui_app.push_widget(
+    alert_dialog("Cannot download models while driving.")))
+  yield "dialog/option_long_list", over_device(lambda: gui_app.push_widget(
+    MultiOptionDialog("Select a language", list(multilang.languages), next(iter(multilang.languages)), option_font_weight=FontWeight.UNIFONT)))
+  yield "dialog/option_short_list", over_panel("LONGITUDINAL", panel(StarPilotPanelType.LONGITUDINAL)._show_acceleration_profile_selector)
+  yield "dialog/option_colors", over_panel("VISUALS", lambda: panel(StarPilotPanelType.VISUALS)._show_color_selector("LaneLinesColor"))
+  yield "dialog/slider", over_panel("LONGITUDINAL", lambda: gui_app.push_widget(AetherSliderDialog(
+    "Below Speed", 0, 100, 1, 35, lambda *_: None, presets=[0, 20, 35, 55, 75], unit=" mph")))
+  yield "dialog/keyboard", over_device(keyboard)
+  yield "dialog/button_combo", over_panel("VEHICLE", lambda: panel(StarPilotPanelType.VEHICLE)._show_button_combo_dialog("combo:distance"))
+  yield "dialog/action_picker", over_panel("VEHICLE", lambda: panel(StarPilotPanelType.VEHICLE)._show_action_picker("LKASButtonControl"))
+  yield "dialog/galaxy_qr", over_device(lambda: gui_app.push_widget(GalaxyQRDialog("https://galaxy.firestar.link/example")))
+  yield "dialog/html_modal", over_device(lambda: gui_app.push_widget(
+    HtmlModal(_os.path.join(BASEDIR, "selfdrive/assets/offroad/fcc.html"))))
+  yield "dialog/training_guide", over_device(lambda: gui_app.push_widget(TrainingGuide(completed_callback=gui_app.pop_widget)))
+  yield "dialog/backups_care", over_panel("SYSTEM", lambda: gui_app.push_widget(
+    AetherBackupsCareDialog(panel(StarPilotPanelType.SYSTEM))))
+  yield "dialog/download_manager", over_panel("VISUALS", panel(StarPilotPanelType.VISUALS)._show_boot_logo_manager)
 
 
 class ScreenshotTour:
@@ -124,6 +189,8 @@ class ScreenshotTour:
       if name and self._filter and self._filter not in name:
         continue
       try:
+        if len(gui_app._nav_stack) > 1:
+          gui_app.pop_widgets_to(gui_app._nav_stack[0], instant=True)
         action()
       except Exception:
         cloudlog.exception(f"screenshot tour: failed to open {name!r}")
