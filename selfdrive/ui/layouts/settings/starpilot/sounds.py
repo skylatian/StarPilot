@@ -112,6 +112,10 @@ class SoundsManagerView(AdjustorTogglesPanelView):
         set_active=lambda active, k=key: self._show_volume_slider(k) if active else None,
         style=PANEL_STYLE,
         color=PANEL_STYLE.accent,
+        on_set=lambda v, k=key: self._set_volume(k, v),
+        drag_range=(0.0, 100.0),
+        drag_floor=float(info["min"]),
+        auto_toggle=(101.0, 100.0),
       )
       self._adjustor_rows[key] = adjustor
 
@@ -148,8 +152,15 @@ class SoundsManagerView(AdjustorTogglesPanelView):
       ) if active else None,
       style=PANEL_STYLE,
       color=PANEL_STYLE.accent,
+      on_set=lambda v: self._controller._params.put_int(cd_key, int(v)),
+      drag_range=(0.0, float(cd_info["max"])),
+      reserve_auto_space=True,
     )
     self._adjustor_rows[cd_key] = cd_adjustor
+
+  def _set_volume(self, key: str, value: float):
+    self._controller._params.put_int(key, int(value))
+    self._controller._test_sound(key)
 
   def _show_volume_slider(self, key: str):
     info = self._controller.VOLUME_INFO[key]

@@ -651,6 +651,82 @@ class TestAethergridContracts(unittest.TestCase):
     self.assertFalse(view._page_drag_eligible)
     self.assertFalse(view._page_drag_active)
 
+  def _direct_volume_row(self, mod, value, **kwargs):
+    state = {"value": value, "set": [], "opened": 0}
+    def on_set(v):
+      state["set"].append(v)
+      state["value"] = v
+    row = mod.AetherAdjustorRow(
+      "Volume", "", 0.0, 101.0, 1.0,
+      get_value=lambda: state["value"], on_change=lambda _v: None,
+      labels={0.0: "Muted", 101.0: "Auto"},
+      set_active=lambda active: state.__setitem__("opened", state["opened"] + int(active)),
+      on_set=on_set, drag_range=(0.0, 100.0), **kwargs,
+    )
+    row._touch_valid = lambda: True
+    rect = mod.rl.Rectangle
+    row._rect = rect(0, 0, 700, 100)
+    row._track_rect = rect(24, 6, 500, 88)
+    row._auto_rect = rect(540, 22, 90, 56)
+    row._chevron_rect = rect(630, 0, 56, 100)
+    return row, state
+
+  @staticmethod
+  def _pos(x, y=50):
+    return types.SimpleNamespace(x=x, y=y)
+
+  @staticmethod
+  def _move(x, y=50, released=False):
+    return types.SimpleNamespace(pos=types.SimpleNamespace(x=x, y=y), left_pressed=False, left_down=not released, left_released=released, slot=0)
+
+  def test_direct_adjustor_tap_sets_value_under_finger(self):
+    mod = _import_aethergrid()
+    row, state = self._direct_volume_row(mod, 101.0, auto_toggle=(101.0, 100.0))
+    row._handle_mouse_press(self._pos(274))
+    row._handle_mouse_release(self._pos(274))
+    self.assertEqual(state["set"], [50.0])
+
+  def test_direct_adjustor_drag_commits_once_on_release(self):
+    mod = _import_aethergrid()
+    row, state = self._direct_volume_row(mod, 20.0, drag_floor=25.0)
+    row._handle_mouse_press(self._pos(100))
+    row._handle_mouse_event(self._move(200))
+    self.assertEqual(row._current_value(), 35.0)
+    row._handle_mouse_event(self._move(10))  # past the left end: clamped to the floor
+    self.assertEqual(row._current_value(), 25.0)
+    self.assertEqual(state["set"], [])
+    row._handle_mouse_event(self._move(10, released=True))
+    row._handle_mouse_release(self._pos(10))  # the widget also delivers the release; must not commit twice
+    self.assertEqual(state["set"], [25.0])
+
+  def test_direct_adjustor_vertical_swipe_does_not_set_value(self):
+    mod = _import_aethergrid()
+    row, state = self._direct_volume_row(mod, 60.0)
+    row._handle_mouse_press(self._pos(100))
+    row._handle_mouse_event(self._move(104, 90))
+    row._handle_mouse_release(self._pos(104, 90))
+    self.assertEqual(state["set"], [])
+
+  def test_direct_adjustor_auto_pill_toggles_auto_and_max(self):
+    mod = _import_aethergrid()
+    row, state = self._direct_volume_row(mod, 101.0, auto_toggle=(101.0, 100.0))
+    for _ in range(2):
+      row._handle_mouse_press(self._pos(580))
+      row._handle_mouse_release(self._pos(580))
+    row._handle_mouse_press(self._pos(274))  # a manual level replaces Auto, the pill then turns it back on
+    row._handle_mouse_release(self._pos(274))
+    row._handle_mouse_press(self._pos(580))
+    row._handle_mouse_release(self._pos(580))
+    self.assertEqual(state["set"], [100.0, 101.0, 50.0, 101.0])
+
+  def test_direct_adjustor_chevron_opens_dialog(self):
+    mod = _import_aethergrid()
+    row, state = self._direct_volume_row(mod, 60.0, auto_toggle=(101.0, 100.0))
+    row._handle_mouse_press(self._pos(660))
+    row._handle_mouse_release(self._pos(660))
+    self.assertEqual(state["opened"], 1)
+    self.assertEqual(state["set"], [])
+
 
 if __name__ == "__main__":
   unittest.main()

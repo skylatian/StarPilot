@@ -2744,6 +2744,11 @@ class AetherInlineRangeControl(Widget):
 ADJUSTOR_BAR_RADIUS = 18.0   # same corner radius as the toggles
 ADJUSTOR_BAR_INSET = 5.0     # fill inset inside the bar, like the toggle knob inset
 AUTO_MODE_COLOR = rl.Color(56, 170, 178, 255)   # teal: "Auto" is a mode, not a level
+ADJUSTOR_DRAG_SLOP = 12.0    # px of movement before a press on the track becomes a drag
+ADJUSTOR_PILL_H = 56.0       # Auto pill next to a draggable track
+ADJUSTOR_PILL_PAD_X = 22.0
+ADJUSTOR_PILL_TEXT = 30
+ADJUSTOR_CHEVRON_ZONE_W = 56.0
 
 
 class AetherAdjustorRow(Widget):
@@ -2766,8 +2771,27 @@ class AetherAdjustorRow(Widget):
     style: PanelStyle = DEFAULT_PANEL_STYLE,
     color: rl.Color | None = None,
     icon_key: str | None = None,
+    on_set: Callable[[float], None] | None = None,
+    drag_range: tuple[float, float] | None = None,
+    drag_floor: float | None = None,
+    auto_toggle: tuple[float, float] | None = None,
+    reserve_auto_space: bool = False,
   ):
     super().__init__()
+    # Direct manipulation (on_set given): drag or tap the track to set the value, the chevron opens the dialog
+    # (set_active), and auto_toggle=(auto_value, max_value) adds an Auto pill that flips between the two.
+    # drag_range is the value span the track shows; drag_floor is the lowest value a drag can set.
+    self._on_set = on_set
+    self._drag_range = drag_range or (min_val, max_val)
+    self._drag_floor = self._drag_range[0] if drag_floor is None else drag_floor
+    self._auto_toggle = auto_toggle
+    self._reserve_auto_space = reserve_auto_space  # keep the track edge aligned with Auto rows in the same list
+    self._drag_state: str | None = None  # "pending" (pressed, not yet moved) or "dragging"
+    self._drag_value = 0.0
+    self._press_pos = rl.Vector2(0, 0)
+    self._track_rect = rl.Rectangle(0, 0, 0, 0)
+    self._auto_rect = rl.Rectangle(0, 0, 0, 0)
+    self._chevron_rect = rl.Rectangle(0, 0, 0, 0)
     self._title = title
     self._subtitle = subtitle
     self._get_value = get_value
@@ -2826,6 +2850,8 @@ class AetherAdjustorRow(Widget):
     self._is_last = is_last
 
   def _current_value(self) -> float:
+    if self._drag_state == "dragging":
+      return self._drag_value
     return self._scrubber.current_val if (self._active() or self._scrubber.is_interacting) else self._get_value()
 
   def formatted_value(self) -> str:
@@ -2844,10 +2870,76 @@ class AetherAdjustorRow(Widget):
     if self._set_active is not None:
       self._set_active(active)
 
+  @property
+  def _direct(self) -> bool:
+    return self._on_set is not None
+
+  def _row_band(self, r: rl.Rectangle) -> rl.Rectangle:
+    # Hit area for a control inside the row: its own width, the full row height.
+    return rl.Rectangle(r.x, self._rect.y, r.width, self._rect.height)
+
+  def _value_at(self, x: float) -> float:
+    lo, hi = self._drag_range
+    track = self._track_rect
+    rel = max(0.0, min(1.0, (x - track.x) / track.width)) if track.width > 0 else 0.0
+    return clamp_and_snap(lo + rel * (hi - lo), self._drag_floor, hi, self._step)
+
+  def _set_direct(self, value: float) -> None:
+    if self._on_set is not None:
+      self._on_set(value)
+    self._scrubber.set_value(value)
+
+  def _direct_press(self, mouse_pos: MousePos):
+    self._drag_state = None
+    if self._auto_toggle and rl.check_collision_point_rec(mouse_pos, self._row_band(self._auto_rect)):
+      self._pressed_zone = "auto"
+    elif rl.check_collision_point_rec(mouse_pos, self._row_band(self._chevron_rect)):
+      self._pressed_zone = "header"
+    elif rl.check_collision_point_rec(mouse_pos, self._row_band(self._track_rect)):
+      self._pressed_zone = "track"
+      self._drag_state = "pending"
+      self._press_pos = rl.Vector2(mouse_pos.x, mouse_pos.y)
+
+  def _direct_release(self, mouse_pos: MousePos):
+    zone, state = self._pressed_zone, self._drag_state
+    self._pressed_zone = None
+    self._drag_state = None
+    if zone == "track":
+      # A drag commits where it ended; a tap sets the value under the finger.
+      self._set_direct(self._drag_value if state == "dragging" else self._value_at(mouse_pos.x))
+    elif zone == "auto" and rl.check_collision_point_rec(mouse_pos, self._row_band(self._auto_rect)):
+      auto_value, max_value = self._auto_toggle
+      self._set_direct(max_value if self._is_auto(self._get_value()) else auto_value)
+    elif zone == "header" and rl.check_collision_point_rec(mouse_pos, self._row_band(self._chevron_rect)):
+      self._set_active_state(True)
+
+  def _direct_event(self, mouse_event: MouseEvent):
+    if self._pressed_zone != "track" or self._drag_state is None:
+      return
+    if mouse_event.left_released:
+      if self._drag_state == "dragging":  # released outside the row: still commit
+        self._direct_release(mouse_event.pos)
+      return
+    dx = mouse_event.pos.x - self._press_pos.x
+    dy = mouse_event.pos.y - self._press_pos.y
+    if self._drag_state == "pending":
+      if abs(dy) > ADJUSTOR_DRAG_SLOP and abs(dy) > abs(dx):
+        self._pressed_zone = None
+        self._drag_state = None
+        return
+      if abs(dx) <= ADJUSTOR_DRAG_SLOP:
+        return
+      self._drag_state = "dragging"
+    self._drag_value = self._value_at(mouse_event.pos.x)
+    gui_app.animating()
+
   def _handle_mouse_press(self, mouse_pos: MousePos):
     if not self._touch_valid() or not rl.check_collision_point_rec(mouse_pos, self._rect):
       return
     self._pressed_zone = None
+    if self._direct:
+      self._direct_press(mouse_pos)
+      return
 
     if self._active():
       for preset_value, preset_rect in self._preset_rects:
@@ -2862,6 +2954,9 @@ class AetherAdjustorRow(Widget):
       self._pressed_zone = "header"
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
+    if self._direct:
+      self._direct_release(mouse_pos)
+      return
     pressed_zone = self._pressed_zone
     self._pressed_zone = None
 
@@ -2889,15 +2984,21 @@ class AetherAdjustorRow(Widget):
         self._set_active_state(not active)
 
   def _handle_mouse_event(self, mouse_event: MouseEvent):
-    pass
+    if self._direct:
+      self._direct_event(mouse_event)
+
+  def _is_auto(self, value: float) -> bool:
+    auto = tr("Auto")
+    return any(abs(value - k) < 1e-4 and label == auto for k, label in self._labels.items())
 
   def _level_fraction(self) -> float | None:
     """Fill fraction for the level bar, or None when the value is the "Auto" mode (e.g. volume Auto, stored
     as max+1). Auto is not a level, so it gets its own fill instead of reading as 100%."""
     value = self._current_value()
-    auto = tr("Auto")
-    if any(abs(value - k) < 1e-4 and label == auto for k, label in self._labels.items()):
+    if self._is_auto(value):
       return None
+    if self._direct:
+      return value_fraction(value, *self._drag_range)
     return self._scrubber._value_fraction(value)
 
   def _render_value_row(self, rect: rl.Rectangle):
@@ -2905,14 +3006,18 @@ class AetherAdjustorRow(Widget):
     # left and value + chevron on the right, since tapping opens the slider dialog.
     value_str = self.formatted_value()
     frac = self._level_fraction()
-    pressed = self._pressed_zone == "header"
+    pressed = self._pressed_zone in ("header", "track")
 
     bar_h = max(74, min(94, int(rect.height * 0.87)))
     title_size = max(38, int(bar_h * 0.53))
     value_size = max(28, int(bar_h * 0.38))
-    bar = snap_rect(rl.Rectangle(rect.x + 24, rect.y + (rect.height - bar_h) / 2, rect.width - 48, bar_h))
+    bar_w = rect.width - 48
+    if self._direct:
+      bar_w = self._layout_direct_controls(rect, frac is None) - (rect.x + 24)
+    bar = snap_rect(rl.Rectangle(rect.x + 24, rect.y + (rect.height - bar_h) / 2, bar_w, bar_h))
     self._header_rect = bar
     self._progress_bar_rect = bar
+    self._track_rect = bar
     radius = min(ADJUSTOR_BAR_RADIUS, bar_h / 2)
     draw_rounded_fill(bar, rl.Color(255, 255, 255, 36 if pressed else 16), radius_px=radius * 2, max_roundness=1.0)
     draw_rounded_stroke(bar, rl.Color(255, 255, 255, 30), radius_px=radius * 2, max_roundness=1.0)
@@ -2925,7 +3030,12 @@ class AetherAdjustorRow(Widget):
     elif frac > 0:
       fill_w = max(2 * (radius - inset), (bar.width - 2 * inset) * frac)
       fill = snap_rect(rl.Rectangle(bar.x + inset, bar.y + inset, fill_w, bar_h - 2 * inset))
-      draw_rounded_fill(fill, with_alpha(self._color, 150), radius_px=inner_radius_px, max_roundness=1.0)
+      draw_rounded_fill(fill, with_alpha(self._color, 200 if self._drag_state == "dragging" else 150),
+                        radius_px=inner_radius_px, max_roundness=1.0)
+
+    if self._direct:
+      self._render_direct_value(bar, value_str, frac is None, value_size, title_size)
+      return
 
     chevron_w = 30
     chevron = rl.Rectangle(bar.x + bar.width - 16 - chevron_w, bar.y + (bar_h - chevron_w) / 2, chevron_w, chevron_w)
@@ -2938,6 +3048,48 @@ class AetherAdjustorRow(Widget):
     draw_text_fit_common(self._font_title, self._title,
                          rl.Vector2(text_left, centered_text_y(bar.y, bar_h, title_size)),
                          max(1.0, value_x - 16 - text_left), title_size, color=self._style.title_color)
+
+  def _layout_direct_controls(self, rect: rl.Rectangle, is_auto: bool) -> float:
+    """Place the chevron (far right) and the Auto pill left of it, draw both, return the track's right edge."""
+    right = rect.x + rect.width - 24
+    self._chevron_rect = rl.Rectangle(right - ADJUSTOR_CHEVRON_ZONE_W, rect.y, ADJUSTOR_CHEVRON_ZONE_W, rect.height)
+    chevron_w = 30
+    chevron = rl.Rectangle(right - ADJUSTOR_CHEVRON_ZONE_W / 2 - chevron_w / 2, rect.y + (rect.height - chevron_w) / 2, chevron_w, chevron_w)
+    draw_chevron_icon(chevron, self._style.title_color if self._pressed_zone != "header" else self._color)
+    track_right = self._chevron_rect.x
+    font = gui_app.font(FontWeight.SEMI_BOLD)
+    label = tr("Auto")
+    pill_w = measure_text_cached(font, label, ADJUSTOR_PILL_TEXT).x + ADJUSTOR_PILL_PAD_X * 2
+    if self._reserve_auto_space and not self._auto_toggle:
+      track_right = self._chevron_rect.x - pill_w - 14
+    if self._auto_toggle:
+      pill = snap_rect(rl.Rectangle(self._chevron_rect.x - pill_w, rect.y + (rect.height - ADJUSTOR_PILL_H) / 2, pill_w, ADJUSTOR_PILL_H))
+      self._auto_rect = pill
+      pressed = self._pressed_zone == "auto"
+      if is_auto:
+        draw_rounded_fill(pill, with_alpha(AUTO_MODE_COLOR, 230 if pressed else 180), radius_px=ADJUSTOR_PILL_H, max_roundness=1.0)
+        text_color = self._style.title_color
+      else:
+        draw_rounded_fill(pill, rl.Color(255, 255, 255, 36 if pressed else 14), radius_px=ADJUSTOR_PILL_H, max_roundness=1.0)
+        draw_rounded_stroke(pill, rl.Color(255, 255, 255, 46), radius_px=ADJUSTOR_PILL_H, max_roundness=1.0)
+        text_color = self._style.subtitle_color
+      text_w = measure_text_cached(font, label, ADJUSTOR_PILL_TEXT).x
+      rl.draw_text_ex(font, label, rl.Vector2(round(pill.x + (pill.width - text_w) / 2), round(centered_text_y(pill.y, pill.height, ADJUSTOR_PILL_TEXT))),
+                      ADJUSTOR_PILL_TEXT, 0, text_color)
+      track_right = pill.x - 14
+    return track_right
+
+  def _render_direct_value(self, bar: rl.Rectangle, value_str: str, is_auto: bool, value_size: int, title_size: int):
+    text_right = bar.x + bar.width - 20
+    if not is_auto:  # in Auto the pill already says so
+      value_w = measure_text_cached(self._font_value, value_str, value_size).x
+      text_right -= value_w
+      rl.draw_text_ex(self._font_value, value_str, rl.Vector2(round(text_right), round(centered_text_y(bar.y, bar.height, value_size))),
+                      value_size, 0, self._style.title_color)
+      text_right -= 16
+    text_left = bar.x + 20
+    draw_text_fit_common(self._font_title, self._title, rl.Vector2(text_left, centered_text_y(bar.y, bar.height, title_size)),
+                         max(1.0, text_right - text_left), title_size, color=self._style.title_color)
 
   def _render_preset_chip(self, rect: rl.Rectangle, text: str, *, current: bool, pressed: bool):
     fill = rl.Color(255, 255, 255, 5)
