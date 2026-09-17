@@ -180,6 +180,9 @@ class ScreenshotTour:
     self._out_dir = out_dir
     self._filter = os.getenv("UI_SCREENSHOT_FILTER", "")
     self._steps = _steps(main_layout)
+    # UI debug mode (ShowDebugInfo param) outlines every widget in red and draws an FPS counter; keep it out of review shots.
+    gui_app.set_show_touches(False)
+    gui_app.set_show_fps(False)
     self._index = 0
     self._shot_at = 0.0
     self._path: str | None = None
