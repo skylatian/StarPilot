@@ -1717,12 +1717,18 @@ def draw_toggle_switch(
   width: int = AETHER_LIST_METRICS.toggle_width,
   height: int = AETHER_LIST_METRICS.toggle_height,
   right_inset: int = AETHER_LIST_METRICS.toggle_right_inset,
-  knob_offset: int = 29,
+  knob_offset: float | None = None,
   seed_id: str = "",
   radius_px: float = TILE_RADIUS_PX,
   bg_color: rl.Color | None = None,
 ):
-  toggle_rect = rl.Rectangle(rect.x + rect.width - width - right_inset, rect.y + (rect.height - height) / 2, width, height)
+  # Snap first: draw_hud_background snaps the track, so the knob and fill must use the same pixels.
+  toggle_rect = snap_rect(rl.Rectangle(rect.x + rect.width - width - right_inset, rect.y + (rect.height - height) / 2, width, height))
+  knob_inset = 4.0  # same gap between the knob and the track on all four sides
+  knob_w = 44.0
+  knob_h = toggle_rect.height - 2 * knob_inset
+  if knob_offset is None:
+    knob_offset = knob_w / 2 + knob_inset
 
   if knob_progress is None:
     knob_progress = 1.0 if enabled else 0.0
@@ -1737,12 +1743,12 @@ def draw_toggle_switch(
   draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress, radius_px=radius_px, bg_color=bg_color)
 
   # Accent fill from the left edge to the knob so ON reads from color, not only knob position.
+  # Same inset as the knob, so the fill's edges line up with the knob's.
   if knob_progress > 0.0:
-    inset = 3.0
-    fill_rect = rl.Rectangle(toggle_rect.x + inset, toggle_rect.y + inset,
-                             max(0.0, knob_x + 22.0 - toggle_rect.x - inset), toggle_rect.height - 2 * inset)
+    fill_rect = rl.Rectangle(toggle_rect.x + knob_inset, toggle_rect.y + knob_inset,
+                             max(0.0, knob_x + knob_w / 2 - toggle_rect.x - knob_inset), knob_h)
     fill_alpha = int((150 if is_enabled else 60) * min(knob_progress * 1.5, 1.0))
-    draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(radius_px - inset, 1.0))
+    draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(radius_px - knob_inset, 1.0))
 
   if seed_id and enabled:
     nodes, vecs = _get_or_create_toggle_constellation(seed_id)
@@ -1759,8 +1765,6 @@ def draw_toggle_switch(
         rl.draw_line_ex(rl.Vector2(nx, ny), rl.Vector2(knob_x, knob_y), 1.2, tether_col)
 
   # Nearly-square slider thumb — physical button sliding across the starfield
-  knob_w = 44.0
-  knob_h = toggle_rect.height - 8.0  # 4px inset top + bottom = 34px
   knob_roundness = 0.65              # ≈10px corner radius on 30px width — rect, not pill
   knob_segments = 8
   knob_rect = snap_rect(rl.Rectangle(
