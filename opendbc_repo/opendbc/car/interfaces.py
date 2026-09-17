@@ -22,7 +22,7 @@ from opendbc.car.honda.values import CAR as HONDA, HONDA_BOSCH, HondaFlags, Hond
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, HyundaiStarPilotFlags, HyundaiStarPilotSafetyFlags, ALT_BUS_LDA_BUTTON_CARS
 from opendbc.car.mock.values import CAR as MOCK
-from opendbc.car.subaru.values import CAR as SUBARU, SubaruSafetyFlags
+from opendbc.car.subaru.values import CAR as SUBARU, SUBARU_REDNECK_CRUISE_CARS, SubaruSafetyFlags
 from opendbc.car.toyota.values import CAR as TOYOTA, NO_DSU_CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaStarPilotFlags, ToyotaSafetyFlags
 from opendbc.car.values import PLATFORMS
 from opendbc.can import CANParser
@@ -109,6 +109,7 @@ class RadarInterfaceBase(ABC):
     self.CP = CP
     self.rcp = None
     self.pts: dict[int, structs.RadarData.RadarPoint] = {}
+    self.track_id: int = 0
     self.frame = 0
 
   def update(self, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
@@ -232,9 +233,6 @@ class CarInterfaceBase(ABC):
           fp_ret.flags |= int(HondaStarPilotFlags.HAS_CAMERA_MESSAGES)
 
       elif platform in HYUNDAI:
-        if CP.openpilotLongitudinalControl and not (CP.flags & HyundaiFlags.CANFD):
-          fp_ret.flags |= HyundaiStarPilotFlags.MAIN_CRUISE_STATE_TRACKING.value
-
         if candidate in CANFD_CAR:
           hda2 = Ecu.adas in [fw.ecu for fw in car_fw]
           CAN = CanBus(None, fingerprint, bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING))
@@ -243,10 +241,16 @@ class CarInterfaceBase(ABC):
           if 0x1FA in fingerprint[CAN.ECAN]:
             fp_ret.flags |= HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE.value
 
+        if candidate != HYUNDAI.KIA_RAY_EV and not (CP.flags & HyundaiFlags.CANFD) and 0x53E in fingerprint[2]:
+          fp_ret.flags |= HyundaiStarPilotFlags.HAS_LKAS12.value
+
         fp_ret.redneckCruiseAvailable = bool(CP.flags & HyundaiFlags.NON_SCC) and not bool(CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS)
         if fp_ret.redneckCruiseAvailable and params.get_bool("RedneckCruise"):
           fp_ret.pcmCruiseSpeed = False
           CP.openpilotLongitudinalControl = True
+
+        if candidate == HYUNDAI.HYUNDAI_ELANTRA_HEV_2024 and CP.openpilotLongitudinalControl:
+          fp_ret.flags |= HyundaiStarPilotFlags.MAIN_CRUISE_STATE_TRACKING.value
 
         hyundai_has_lda_button = not (CP.flags & HyundaiFlags.CANFD) and (
           0x391 in fingerprint[0] or
@@ -260,13 +264,22 @@ class CarInterfaceBase(ABC):
         if getattr(starpilot_toggles, "always_on_lateral_lkas", False):
           fp_ret.safetyConfigs[-1].safetyParam |= HyundaiStarPilotSafetyFlags.AOL_LKAS_ON_ENGAGE.value
 
-        # LKASButtonControl == 9 means BUTTON_FUNCTIONS["AOL_TOGGLE"] in starpilot_variables.
-        if params.get_bool("AlwaysOnLateral") and params.get_int("LKASButtonControl") == 9:
+        if candidate in (HYUNDAI.HYUNDAI_ELANTRA_HEV_2024, HYUNDAI.HYUNDAI_SONATA_HYBRID) and \
+            getattr(starpilot_toggles, "always_on_lateral_main", False):
+          fp_ret.safetyConfigs[-1].safetyParam |= HyundaiStarPilotSafetyFlags.AOL_MAIN_LKAS_ON_ENGAGE.value
+          if candidate == HYUNDAI.HYUNDAI_SONATA_HYBRID:
+            fp_ret.safetyConfigs[-1].safetyParam |= HyundaiStarPilotSafetyFlags.AOL_LKAS_ON_ENGAGE.value
+
+        # The refresh Elantra's safety mapping comes from the resolved Galaxy
+        # toggle above, not from this legacy persisted-parameter fallback.
+        if candidate != HYUNDAI.HYUNDAI_ELANTRA_HEV_2024 and \
+            params.get_bool("AlwaysOnLateral") and params.get_int("LKASButtonControl") == 9:
           fp_ret.safetyConfigs[-1].safetyParam |= HyundaiStarPilotSafetyFlags.AOL_LKAS_ON_ENGAGE.value
 
         if candidate == HYUNDAI.HYUNDAI_SONATA_HYBRID and getattr(starpilot_toggles, "always_on_lateral_lkas", False) and \
             getattr(starpilot_toggles, "main_cruise_aol_toggle", False):
           fp_ret.safetyConfigs[-1].safetyParam |= HyundaiStarPilotSafetyFlags.AOL_MAIN_LKAS_SYNC.value
+
       elif platform in TOYOTA:
         fp_ret.canUsePedal = not CP.autoResumeSng
         fp_ret.canUseSDSU = candidate not in UNSUPPORTED_DSU_CAR and candidate not in TSS2_CAR
@@ -277,7 +290,7 @@ class CarInterfaceBase(ABC):
         if 0x2FF in fingerprint[0] or (0x2AA in fingerprint[0] and candidate in NO_DSU_CAR):
           fp_ret.flags |= ToyotaStarPilotFlags.SMART_DSU.value
 
-        if candidate == TOYOTA.TOYOTA_PRIUS:
+        if candidate in (TOYOTA.TOYOTA_PRIUS, TOYOTA.TOYOTA_PRIUS_RETROFIT):
           if 0x23 in fingerprint[0]:
             fp_ret.flags |= ToyotaStarPilotFlags.ZSS.value
 
@@ -287,6 +300,14 @@ class CarInterfaceBase(ABC):
       elif platform in SUBARU:
         if getattr(starpilot_toggles, "subaru_sng", False):
           fp_ret.safetyConfigs[-1].safetyParam |= SubaruSafetyFlags.STOP_AND_GO.value
+
+        fp_ret.redneckCruiseAvailable = candidate in SUBARU_REDNECK_CRUISE_CARS
+        if fp_ret.redneckCruiseAvailable and params.get_bool("SubaruRedneckCruise") and \
+            not CP.openpilotLongitudinalControl:
+          fp_ret.pcmCruiseSpeed = False
+          CP.openpilotLongitudinalControl = True
+          CP.safetyConfigs[-1].safetyParam |= SubaruSafetyFlags.REDNECK_CRUISE.value
+          fp_ret.safetyConfigs[-1].safetyParam |= SubaruSafetyFlags.REDNECK_CRUISE.value
 
     return fp_ret
 

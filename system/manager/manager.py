@@ -70,7 +70,9 @@ STARPILOT_PARAMS_CACHE_MIGRATION_FLAG = Path("/data") / "starpilot_params_cache_
 STARPILOT_DEFAULT_MODEL_MIGRATION_FLAG = Path("/data") / "starpilot_default_model_rdf_v4"
 STARPILOT_CE_MODEL_STOP_TIME_MIGRATION_FLAG = Path("/data") / "starpilot_ce_model_stop_time_v2"
 STARPILOT_LEGACY_CACHE_MARKER_KEYS = ("RemapCancelToDistance",)
-STARPILOT_REMOVED_PARAM_KEYS = ("CoastUpToLeads", "HumanAcceleration", "HumanFollowing", "PrioritizeSmoothFollowing")
+STARPILOT_REMOVED_PARAM_KEYS = (
+  "CoastUpToLeads", "HumanAcceleration", "HumanFollowing", "PrioritizeSmoothFollowing",
+)
 LEGACY_CARMODEL_MIGRATIONS = {
   "CHEVROLET_BOLT_CC_2019_2021": "CHEVROLET_BOLT_CC_2018_2021",
 }
@@ -1094,11 +1096,6 @@ def manager_init() -> None:
                        device=HARDWARE.get_device_type())
   last_timing = _log_boot_timing("manager_init", "logging_ready", manager_init_start, last_timing)
 
-  # preimport all processes
-  for p in managed_processes.values():
-    p.prepare()
-  last_timing = _log_boot_timing("manager_init", "preimport_processes", manager_init_start, last_timing)
-
   # StarPilot variables
   install_starpilot(build_metadata, params)
   last_timing = _log_boot_timing("manager_init", "install_starpilot", manager_init_start, last_timing)
@@ -1116,6 +1113,16 @@ def manager_cleanup() -> None:
     p.stop(block=True)
 
   cloudlog.info("everything is dead")
+
+
+def reset_onroad_transition_params(params, params_memory, force_onroad: bool) -> None:
+  """Clear stale card-readiness state before a forced onroad restart."""
+  if force_onroad:
+    params.remove("ControlsReady")
+    params.remove("FirmwareQueryDone")
+  else:
+    params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
+    params_memory.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
 
 
 def manager_thread() -> None:
@@ -1166,11 +1173,8 @@ def manager_thread() -> None:
 
     started = sm['deviceState'].started
 
-    if started and not started_prev and not starpilot_toggles.force_onroad:
-      params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
-
-      # StarPilot variables
-      params_memory.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
+    if started and not started_prev:
+      reset_onroad_transition_params(params, params_memory, starpilot_toggles.force_onroad)
     elif not started and started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
 

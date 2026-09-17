@@ -175,6 +175,7 @@ class GMSafetyFlags(IntFlag):
   FLAG_GM_REMOTE_START_BOOTS_COMMA = 8192
   FLAG_GM_PANDA_3D1_SCHED = 16384
   FLAG_GM_PANDA_PADDLE_SCHED = 32768
+  FLAG_GM_VOLT_CC_GATEWAY = 16384
 
 
 class Footnote(Enum):
@@ -214,16 +215,12 @@ class GMPlatformConfig(PlatformConfig):
 
 @dataclass
 class GMASCMPlatformConfig(GMPlatformConfig):
-  def init(self):
-    # ASCM is supported, but due to a janky install and hardware configuration, we are not showing in the car docs
-    self.car_docs = []
+  pass
 
 
 @dataclass
 class GMSDGMPlatformConfig(GMPlatformConfig):
-  def init(self):
-    # Don't show in docs until the harness is sold. See https://github.com/commaai/openpilot/issues/32471
-    self.car_docs = []
+  pass
 
 
 class CAR(Platforms):
@@ -251,7 +248,7 @@ class CAR(Platforms):
     dbc_dict=CHEVROLET_VOLT.dbc_dict,
   )
   CHEVROLET_VOLT_CC = GMPlatformConfig(
-    [GMCarDocs("Chevrolet Volt No-ACC 2017-18", min_enable_speed=0)],
+    [GMCarDocs("Chevrolet Volt No-ACC 2016-18 (OBD Harness)", "Redneck ACC", min_enable_speed=0)],
     CHEVROLET_VOLT.specs,
     dbc_dict=CHEVROLET_VOLT.dbc_dict,
   )
@@ -359,6 +356,14 @@ class CAR(Platforms):
   CHEVROLET_SUBURBAN = GMPlatformConfig(
     [GMCarDocs("Chevrolet Suburban Premier 2016-20")],
     CarSpecs(mass=2731, wheelbase=3.302, steerRatio=17.3, centerToFrontRatio=0.49),
+  )
+  CHEVROLET_SUBURBAN_ASCM = GMPlatformConfig(
+    [GMCarDocs("Chevrolet Suburban Premier ASCM Harness 2016-20", "Adaptive Cruise Control (ACC) & LKAS")],
+    CHEVROLET_SUBURBAN.specs,
+  )
+  CHEVROLET_SUBURBAN_CAMERA = GMPlatformConfig(
+    [GMCarDocs("Chevrolet Suburban Premier Camera Harness 2016-20", "Adaptive Cruise Control (ACC) & LKAS")],
+    CHEVROLET_SUBURBAN.specs,
   )
   GMC_YUKON_CC = GMPlatformConfig(
     [GMCarDocs("GMC Yukon No-ACC 2019-20")],
@@ -536,12 +541,21 @@ EV_CAR = {
   CAR.CHEVROLET_MALIBU_HYBRID_CC,
 }
 
+GM_AUTO_HOLD_CARS = {
+  CAR.CHEVROLET_VOLT,
+  CAR.CHEVROLET_VOLT_2019,
+  CAR.CHEVROLET_VOLT_ASCM,
+  CAR.CHEVROLET_VOLT_CAMERA,
+  CAR.BUICK_LACROSSE,
+}
+
 # We're integrated at the camera with VOACC on these cars (instead of ASCM w/ OBD-II harness)
 CAMERA_ACC_CAR = {
   CAR.CHEVROLET_BOLT_ACC_2022_2023,
   CAR.CHEVROLET_SILVERADO,
   CAR.CHEVROLET_EQUINOX,
   CAR.CHEVROLET_TRAILBLAZER,
+  CAR.CHEVROLET_SUBURBAN_CAMERA,
   CAR.CHEVROLET_VOLT_CAMERA,
   CAR.CHEVROLET_BLAZER,
   CAR.CHEVROLET_TRAX,
@@ -549,7 +563,7 @@ CAMERA_ACC_CAR = {
 }
 
 # Alt ASCMActiveCruiseControlStatus
-ALT_ACCS = {CAR.GMC_YUKON, CAR.GMC_YUKON_CC}
+ALT_ACCS = {CAR.CHEVROLET_SUBURBAN_CAMERA, CAR.GMC_YUKON, CAR.GMC_YUKON_CC}
 
 # We're integrated at the Safety Data Gateway Module on these cars
 SDGM_CAR = {
@@ -588,9 +602,10 @@ CC_REGEN_PADDLE_CAR = {
 }
 CAMERA_ACC_CAR.update(CC_ONLY_CAR)
 
-# ASCM-INT paths are only enabled when SASCM (0x2FF) is detected at runtime
+# ASCM-intercept variants preserve stock ACC. SASCM (0x2FF) enables alpha-long where supported.
 ASCM_INT = {
   CAR.CHEVROLET_VOLT_ASCM,
+  CAR.CHEVROLET_SUBURBAN_ASCM,
   CAR.GMC_ACADIA_ASCM,
   CAR.CHEVROLET_MALIBU_ASCM,
   CAR.CADILLAC_ESCALADE_ASCM,

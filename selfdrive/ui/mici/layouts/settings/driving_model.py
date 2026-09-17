@@ -9,6 +9,7 @@ from pathlib import Path
 
 from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
 from openpilot.common.params import Params
+from openpilot.starpilot.assets.model_manager import external_gpu_available, model_uses_external_gpu, set_model_profile
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog, BigDialogBase, BigMultiOptionDialog
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -62,6 +63,7 @@ class ModelEntry:
   version: str
   released: str
   community_favorite: bool
+  requires_external_gpu: bool = False
 
 
 def _clean_model_name(name: str) -> str:
@@ -515,6 +517,10 @@ class DrivingModelBigButton(BigButton):
     return entry_list
 
   def _start_model_download(self, model_key: str):
+    entry = next((item for item in self._load_model_entries() if item.key == model_key), None)
+    if entry is not None and entry.requires_external_gpu and not external_gpu_available():
+      self._show_message("GPU required", "This model requires a detected external GPU.", return_to_manager=True)
+      return
     if not self._start_worker("download", self._run_download_one, model_key):
       self._show_message("Model manager busy", "Please wait for the current task.", return_to_manager=True)
       return
@@ -546,6 +552,10 @@ class DrivingModelBigButton(BigButton):
       self._show_message("Model unavailable", "Refresh manifest and try again.", return_to_manager=True)
       return
 
+    if entry.requires_external_gpu and not external_gpu_available():
+      self._show_message("GPU required", "This model requires a detected external GPU.", return_to_manager=True)
+      return
+
     if not self._is_model_installed(entry.key, entry.version):
       self._show_message("Model not downloaded", "Download this model first.", return_to_manager=True)
       return
@@ -558,6 +568,13 @@ class DrivingModelBigButton(BigButton):
     if version:
       self._params.put("ModelVersion", version)
       self._params.put("DrivingModelVersion", version)
+    set_model_profile(
+      self._params,
+      "big" if entry.requires_external_gpu else "small",
+      entry.key,
+      entry.name,
+      version,
+    )
 
     if ui_state.started:
       self._params.put_bool("OnroadCycleRequested", True)
@@ -662,6 +679,7 @@ class DrivingModelBigButton(BigButton):
         version=version,
         released=released,
         community_favorite=(key in community_favs),
+        requires_external_gpu=model_uses_external_gpu(key),
       ))
 
     return entries

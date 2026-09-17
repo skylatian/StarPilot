@@ -24,9 +24,9 @@ Usage:
   ./tools/host <command> [args...]
 
 Commands:
-  c3           Launch the desktop Qt UI from the isolated host cache.
+  c3           Launch the large raylib UI from the isolated host cache.
   c4           Launch the small raylib UI from the isolated host cache.
-  raybig       Launch the large raylib UI from the isolated host cache.
+  galaxy       Launch the local Galaxy web UI from the isolated host cache.
   onroad       Launch replay plus desktop UI(s) from the isolated host cache.
   replay       Build and run replay from the isolated host cache.
   cabana       Build and run cabana from the isolated host cache.
@@ -43,9 +43,8 @@ Notes:
   - `cabana` uses its own host-runtime bucket, so it can run together with `plotjuggler`.
   - Other commands that share a bucket still wait on that bucket's lock.
   - `./build` remains the device-target flow.
-  - For c3/c4/raybig, pass the jobs count first to preserve existing shorthand:
+  - For c3/c4, pass the jobs count first to preserve existing shorthand:
       ./dev c3 8
-      ./dev raybig 12
   - `./onroad --c3 f08912a233c1584f/2022-08-11--18-02-41/1` launches replay plus the selected desktop UI.
   - `./dev sync` refreshes all host buckets. Use `./dev sync cabana` to sync one.
 EOF
@@ -65,7 +64,7 @@ resolve_host_bucket() {
   local name="${1:-shared}"
 
   case "${name}" in
-    shared|default|ui|c3|c4|raybig|onroad|replay|shell)
+    shared|default|ui|c3|c4|onroad|replay|shell)
       echo "shared"
       ;;
     cabana)
@@ -235,16 +234,13 @@ purge_host_foreign_platform_artifacts() {
   esac
 }
 
-purge_host_desktop_ui_artifacts() {
-  rm -f \
-    "${WORK_DIR}/selfdrive/ui/libqt_widgets.a" \
-    "${WORK_DIR}/selfdrive/ui/libqt_util.a" \
-    "${WORK_DIR}/selfdrive/ui/assets.o" \
-    "${WORK_DIR}/selfdrive/ui/main.o" \
-    "${WORK_DIR}/selfdrive/ui/moc_ui.o" \
-    "${WORK_DIR}/selfdrive/ui/ui.o" \
-    "${WORK_DIR}/selfdrive/ui/ui" \
-    "${WORK_DIR}/cereal/gen/cpp/"*.capnp.o
+purge_host_generated_objects() {
+  rm -f "${WORK_DIR}/cereal/gen/cpp/"*.capnp.o
+}
+
+purge_host_obsolete_ui_artifacts() {
+  find "${WORK_DIR}/selfdrive/ui" -maxdepth 1 -type f \
+    \( -name 'ui' -o -name 'ui.macos' -o -name 'ui.larch64' -o -name '*.o' -o -name '*.a' \) -delete
 }
 
 ensure_host_python_tools() {
@@ -288,19 +284,22 @@ ensure_host_python_extensions() {
 }
 
 sync_host_generated_headers() {
-  if ! command -v capnpc >/dev/null 2>&1; then
+  local capnpc="${ROOT_DIR}/.venv/bin/capnpc"
+  local capnpc_cpp
+  capnpc_cpp="$(find "${ROOT_DIR}/.venv/lib" -path '*/capnproto/install/bin/capnpc-c++' -type f -print -quit)"
+  if [[ ! -x "${capnpc}" || ! -x "${capnpc_cpp}" ]]; then
     return
   fi
 
   (
     cd "${WORK_DIR}"
     mkdir -p cereal/gen/cpp
-    capnpc --src-prefix=cereal \
+    "${capnpc}" --src-prefix=cereal \
       cereal/log.capnp \
       cereal/car.capnp \
       cereal/legacy.capnp \
       cereal/custom.capnp \
-      -o c++:cereal/gen/cpp/
+      -o "${capnpc_cpp}:cereal/gen/cpp/"
   )
 }
 
@@ -333,11 +332,6 @@ sync_worktree() {
     "tools/replay/tests/test_replay"
     "tools/cabana/cabana"
     "tools/cabana/tests/test_cabana"
-    "selfdrive/ui/ui"
-    "selfdrive/ui/ui.macos"
-    "selfdrive/ui/ui.larch64"
-    "selfdrive/ui/libqt_widgets.a"
-    "selfdrive/ui/libqt_util.a"
     "cereal/libcereal.a"
     "cereal/libsocketmaster.a"
     "cereal/messaging/bridge"
@@ -388,7 +382,8 @@ sync_worktree() {
   if [[ "${_capnp_before}" != "${_capnp_after}" ]]; then
     rm -rf "${SP_SCONS_CACHE_DIR:-${HOST_ROOT}/scons_cache}"
   fi
-  purge_host_desktop_ui_artifacts
+  purge_host_generated_objects
+  purge_host_obsolete_ui_artifacts
   purge_host_foreign_platform_artifacts
   rm -f "${WORK_DIR}/third_party/libjson11.a" "${WORK_DIR}/third_party/libkaitai.a"
   sync_host_generated_headers
@@ -478,7 +473,7 @@ launch_c3() {
   fi
 
   sync_worktree
-  run_in_worktree "${WORK_DIR}/scripts/launch_ui_desktop.sh" "${jobs}" "$@"
+  run_in_worktree "${WORK_DIR}/scripts/launch_ui_c3_desktop.sh" "${jobs}" "$@"
 }
 
 launch_c4() {
@@ -493,16 +488,45 @@ launch_c4() {
   run_in_worktree "${WORK_DIR}/scripts/launch_ui_c4_desktop.sh" "${jobs}" "$@"
 }
 
-launch_raybig() {
-  local jobs
-  jobs="$(default_jobs)"
-  if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
-    jobs="$1"
-    shift || true
-  fi
+pick_free_galaxy_port() {
+  "${ROOT_DIR}/.venv/bin/python3" - <<'PY'
+import socket
 
+# Desktop ZMQ hashes replay service names into ports 8023-65535. Keep Galaxy
+# below that range so its HTTP server never steals a replay service port.
+for port in range(4600, 8023):
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    try:
+      sock.bind(("0.0.0.0", port))
+    except OSError:
+      continue
+    print(port)
+    raise SystemExit(0)
+
+raise SystemExit("Unable to find a free local Galaxy port.")
+PY
+}
+
+launch_galaxy() {
   sync_worktree
-  run_in_worktree "${WORK_DIR}/scripts/launch_ui_raybig_desktop.sh" "${jobs}" "$@"
+  ensure_host_python_extensions
+
+  local port
+  port="$(pick_free_galaxy_port)"
+  local galaxy_dir="${HOME}/.comma/starpilot/data/galaxy"
+
+  echo "Starting local Galaxy session on port ${port}..."
+  (
+    cd "${WORK_DIR}"
+    setup_build_env
+    export_workdir_pythonpath
+    export SP_GALAXY_DIR="${galaxy_dir}"
+    export SP_GALAXY_HOST="0.0.0.0"
+    export SP_GALAXY_PORT="${port}"
+    export SP_GALAXY_DEBUG="${SP_GALAXY_DEBUG:-1}"
+    export SP_GALAXY_RELOAD="${SP_GALAXY_RELOAD:-0}"
+    exec "${WORK_DIR}/.venv/bin/python3" -m openpilot.starpilot.system.the_galaxy.the_galaxy
+  )
 }
 
 launch_onroad() {
@@ -609,7 +633,7 @@ main() {
     help|-h|--help)
       usage
       ;;
-    c3|c4|raybig|onroad|replay|shell|python|pytest)
+    c3|c4|galaxy|onroad|replay|shell|python|pytest)
       set_host_bucket "shared"
       acquire_host_lock "${command} $*"
       ;;
@@ -650,8 +674,8 @@ main() {
     c4)
       launch_c4 "$@"
       ;;
-    raybig)
-      launch_raybig "$@"
+    galaxy)
+      launch_galaxy "$@"
       ;;
     onroad)
       launch_onroad "$@"

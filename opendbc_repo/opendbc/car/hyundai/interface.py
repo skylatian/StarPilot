@@ -1,26 +1,40 @@
 import time
+# Provenance: portions of HKG angle integration are adapted from sunnypilot/opendbc's
+# hkg-angle-steering-2025 branch at cc4b08625. See CREDITS.md and THIRD_PARTY_NOTICES.md.
 from opendbc.car import get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, CarControllerParams, \
                                                    CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
                                                    CANFD_SECURITYACCESS_CAR, \
                                                    CANFD_ANGLE_LONGITUDINAL_CAR, \
-                                                   CANFD_RADAR_LIVE_LONGITUDINAL_CAR, \
+                                                   CANFD_RADAR_ECU_KEEPALIVE_CAR, \
                                                    RADAR_LIVE_LONGITUDINAL_CAR, \
                                                    UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags, \
                                                    LEGACY_LONGITUDINAL_CAR, \
+                                                   CAN_CANFD_BLENDED_HDA2_LONGITUDINAL_CAR, \
                                                    HyundaiStarPilotSafetyFlags, \
                                                    hyundai_cancel_button_enables_cruise, \
-                                                   kia_ev6_gt_line_longitudinal_tuning
+                                                   kia_ev6_gt_line_longitudinal_tuning, \
+                                                   KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID
 from opendbc.car.hyundai.radar_interface import get_radar_track_config, radar_tracks_available
 from opendbc.car.interfaces import CarInterfaceBase, ACCEL_MIN
 from opendbc.car.disable_ecu import disable_ecu, ecu_log
 from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
+from openpilot.starpilot.common.testing_grounds import testing_ground
 
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
+
+
+def get_communication_control_request(car_fingerprint):
+  if car_fingerprint in CANFD_RADAR_ECU_KEEPALIVE_CAR:
+    return bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, uds.CONTROL_TYPE.ENABLE_RX_DISABLE_TX,
+                  uds.MESSAGE_TYPE.NORMAL])
+
+  return bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX,
+                uds.MESSAGE_TYPE.NORMAL])
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
@@ -28,7 +42,7 @@ ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.can
 # Track when ECU disable happened - used to permanently suppress CAN errors from disabled ECU
 ECU_DISABLE_TIMESTAMP = 0.0
 KONA_NON_SCC_FCA_RADAR_ADDR = 0x602
-KIA_EV9_ACCEL_MAX = 2.5
+KIA_EV9_ACCEL_MAX = 2.2
 
 
 def apply_platform_longitudinal_params(ret: structs.CarParams) -> None:
@@ -45,7 +59,7 @@ def apply_platform_longitudinal_params(ret: structs.CarParams) -> None:
 
 def apply_kia_ev6_gt_line_longitudinal_params(ret: structs.CarParams) -> None:
   ret.startAccel = 1.4
-  ret.longitudinalActuatorDelay = 0.35
+  ret.longitudinalActuatorDelay = 0.5
   ret.vEgoStarting = 0.5
 
 
@@ -105,7 +119,8 @@ class CarInterface(CarInterfaceBase):
 
   @staticmethod
   def apply_post_fingerprint_params(CP: structs.CarParams, candidate, fingerprint, car_fw) -> None:
-    if kia_ev6_gt_line_longitudinal_tuning(CP.carFingerprint, CP.carVin):
+    gt_line_testing_ground = testing_ground.use(KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID)
+    if kia_ev6_gt_line_longitudinal_tuning(CP.carFingerprint, CP.carVin, gt_line_testing_ground):
       apply_kia_ev6_gt_line_longitudinal_params(CP)
 
   @staticmethod
@@ -148,7 +163,8 @@ class CarInterface(CarInterfaceBase):
           ret.flags |= HyundaiFlags.CANFD_LKA_STEERING_ALT.value
         # This HDA II Carnival uses the alternate 0x1AA cruise-button frame even
         # though other LKA-steering platforms use 0x1CF.
-        if candidate == CAR.KIA_CARNIVAL_2025 and 0x1aa in fingerprint[CAN.ECAN] and 0x1cf not in fingerprint[CAN.ECAN]:
+        if candidate in (CAR.KIA_CARNIVAL_2025, CAR.KIA_CARNIVAL_HEV_4TH_GEN) and \
+            0x1aa in fingerprint[CAN.ECAN] and 0x1cf not in fingerprint[CAN.ECAN]:
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
       else:
         # no LKA steering
@@ -198,7 +214,8 @@ class CarInterface(CarInterfaceBase):
     else:
       # Shared configuration for non CAN-FD cars
       ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR or candidate in LEGACY_LONGITUDINAL_CAR
-      if ret.flags & HyundaiFlags.CAN_CANFD_BLENDED and ret.flags & HyundaiFlags.CANFD_LKA_STEERING:
+      if ret.flags & HyundaiFlags.CAN_CANFD_BLENDED and ret.flags & HyundaiFlags.CANFD_LKA_STEERING and \
+          candidate not in CAN_CANFD_BLENDED_HDA2_LONGITUDINAL_CAR:
         ret.alphaLongitudinalAvailable = False
       ret.enableBsm = 0x58b in fingerprint[CAN.ECAN]
 
@@ -217,6 +234,9 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hyundaiLegacy)]
       else:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hyundai, 0)]
+
+      if candidate == CAR.KIA_RAY_EV and fingerprint[CAN.CAM].get(0x485) == 8:
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAN_REFRESH_MSGS.value
 
       if ret.flags & HyundaiFlags.CAMERA_SCC:
         ret.safetyConfigs[0].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
@@ -342,14 +362,7 @@ class CarInterface(CarInterfaceBase):
     params = Params()
 
     if communication_control is None:
-      if CP.carFingerprint in CANFD_RADAR_LIVE_LONGITUDINAL_CAR:
-        # Don't use 0x80 suppress bit so we can read the ECU response.
-        # Use ENABLE_RX_DISABLE_TX (0x01) so the ECU can still receive from rear radars for BSM
-        # while blocking SCC TX.
-        communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, uds.CONTROL_TYPE.ENABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL])
-      else:
-        # 0x80 silences response for other cars (original behavior)
-        communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL])
+      communication_control = get_communication_control_request(CP.carFingerprint)
 
     ecu_log(f"=== init() called: opLong={CP.openpilotLongitudinalControl}, flags=0x{CP.flags:x}, safetyParam={CP.safetyConfigs[-1].safetyParam} ===")
 

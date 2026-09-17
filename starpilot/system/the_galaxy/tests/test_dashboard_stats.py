@@ -41,7 +41,36 @@ loggerd_uploader.listdir_by_creation = lambda path: [
 sys.modules.setdefault("openpilot.system.loggerd.uploader", loggerd_uploader)
 
 model_manager = ModuleType("openpilot.starpilot.assets.model_manager")
+model_manager.MODEL_LAB_DOWNLOAD_PARAM = "ModelLabModelToDownload"
 model_manager.canonical_model_key = lambda value: str(value or "").strip().lower().replace(" ", "-")
+model_manager.external_gpu_available = lambda: False
+model_manager.disable_big_model_profile = lambda params: (
+  params.put("ActiveBigModel", "none"),
+  params.remove("ActiveBigModelName"),
+  params.remove("ActiveBigModelVersion"),
+)
+def _stub_get_model_profile(params, profile):
+  prefix = "ActiveBigModel" if profile == "big" else "ActiveSmallModel"
+  stored_key = params.get(prefix)
+  if profile == "big" and stored_key == "none":
+    return "", "", ""
+  key = stored_key or ("rdf43" if profile == "small" else "")
+  return key, params.get(f"{prefix}Name") or key, params.get(f"{prefix}Version") or ""
+
+
+def _stub_set_model_profile(params, profile, key, name="", version=""):
+  prefix = "ActiveBigModel" if profile == "big" else "ActiveSmallModel"
+  params.put(prefix, key)
+  params.put(f"{prefix}Name", name or key)
+  params.put(f"{prefix}Version", version)
+
+
+model_manager.get_model_profile = _stub_get_model_profile
+model_manager.is_builtin_model_key = lambda key: False
+model_manager.model_accelerator_artifact_filename = lambda key: f"{key}_driving_chestnut_tinygrad.pkl"
+model_manager.model_key_aliases = lambda key: ()
+model_manager.model_uses_external_gpu = lambda key: False
+model_manager.set_model_profile = _stub_set_model_profile
 sys.modules.setdefault("openpilot.starpilot.assets.model_manager", model_manager)
 
 starpilot_variables = ModuleType("openpilot.starpilot.common.starpilot_variables")
@@ -54,6 +83,8 @@ theme_manager.HOLIDAY_THEME_PATH = Path("/tmp/dashboard-test-holiday-themes")
 sys.modules.setdefault("openpilot.starpilot.assets.theme_manager", theme_manager)
 
 import utilities
+
+_REAL_COMMON_PARAMS_MODULE = sys.modules.get("openpilot.common.params")
 
 for _module_name, _module in _INITIAL_MODULES.items():
   if _module is None:
@@ -82,6 +113,8 @@ def _simple_module(name, **attrs):
 
 
 def _install_server_import_stubs():
+  if _REAL_COMMON_PARAMS_MODULE is not None:
+    sys.modules["openpilot.common.params"] = _REAL_COMMON_PARAMS_MODULE
   sys.modules["openpilot.system.loggerd.config"] = loggerd_config
   sys.modules["openpilot.system.loggerd.deleter"] = loggerd_deleter
   sys.modules["openpilot.system.loggerd.uploader"] = loggerd_uploader
@@ -126,6 +159,14 @@ def _install_server_import_stubs():
   )
 
   sys.modules["openpilot.common.realtime"] = _simple_module("openpilot.common.realtime", DT_HW=0.01)
+  sys.modules["openpilot.common.swaglog"] = _simple_module(
+    "openpilot.common.swaglog",
+    cloudlog=SimpleNamespace(
+      error=lambda *args, **kwargs: None,
+      exception=lambda *args, **kwargs: None,
+      info=lambda *args, **kwargs: None,
+    ),
+  )
   sys.modules["openpilot.common.time_helpers"] = _simple_module("openpilot.common.time_helpers", system_time_valid=lambda: True)
   sys.modules["openpilot.system.hardware"] = _simple_module(
     "openpilot.system.hardware",
@@ -145,18 +186,86 @@ def _install_server_import_stubs():
     get_longitudinal_maneuver_support=lambda *args, **kwargs: {},
   )
   sys.modules["panda"] = _simple_module("panda", Panda=lambda *args, **kwargs: SimpleNamespace(can_send=lambda *send_args, **send_kwargs: None))
+  msgq_module = _simple_module("msgq")
+  msgq_visionipc = _simple_module(
+    "msgq.visionipc",
+    VisionIpcClient=lambda *args, **kwargs: SimpleNamespace(connect=lambda *connect_args: False),
+    VisionStreamType=SimpleNamespace(VISION_STREAM_DRIVER=0),
+  )
+  msgq_module.visionipc = msgq_visionipc
+  sys.modules["msgq"] = msgq_module
+  sys.modules["msgq.visionipc"] = msgq_visionipc
 
   model_manager.is_builtin_model_key = lambda value: False
   model_manager.model_key_aliases = lambda value: [value]
   theme_manager.THEME_COMPONENT_PARAMS = {}
 
+  def parse_custom_accel_profile_curve(count, breakpoints, values):
+    numeric_count = float(count)
+    if not numeric_count.is_integer():
+      raise ValueError("Breakpoint count must be a whole number")
+    point_count = int(numeric_count)
+    active_breakpoints = [float(value) for value in breakpoints[:point_count]]
+    if any(current <= previous for previous, current in zip(active_breakpoints, active_breakpoints[1:], strict=False)):
+      raise ValueError("Breakpoint speeds must be strictly increasing")
+    return [value * 0.44704 for value in active_breakpoints], [float(value) for value in values[:point_count]]
+
+  def get_accel_profile_curve_values(profile, ev_tuning=False, truck_tuning=False):
+    gas = {
+      0: [2.00, 1.80, 1.55, 1.30, 1.05, 0.85, 0.55],
+      1: [1.50, 1.30, 1.10, 0.90, 0.75, 0.55, 0.35],
+      2: [2.50, 2.25, 1.95, 1.60, 1.30, 1.05, 0.75],
+      3: [3.50, 3.20, 2.80, 2.35, 1.90, 1.55, 1.15],
+    }
+    ev = {
+      0: [2.00, 1.84, 1.64, 1.44, 1.24, 1.08, 0.84],
+      1: [1.50, 1.34, 1.18, 1.02, 0.90, 0.74, 0.58],
+      2: [2.50, 2.30, 2.06, 1.78, 1.54, 1.34, 1.10],
+      3: [3.50, 3.26, 2.94, 2.58, 2.22, 1.94, 1.62],
+    }
+    return list((ev if ev_tuning and not truck_tuning else gas)[int(profile or 0)])
+
+  def interpolate_accel_profile(v_ego, accel_curve, breakpoints=None):
+    curve_breakpoints = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 40.0] if breakpoints is None else list(breakpoints)
+    speed = float(v_ego)
+    if speed <= curve_breakpoints[0]:
+      return float(accel_curve[0])
+    if speed >= curve_breakpoints[-1]:
+      return float(accel_curve[-1])
+    for index, upper in enumerate(curve_breakpoints[1:], start=1):
+      if speed <= upper:
+        lower = curve_breakpoints[index - 1]
+        ratio = (speed - lower) / (upper - lower)
+        smooth_ratio = ratio ** 3 * (10.0 - 15.0 * ratio + 6.0 * ratio * ratio)
+        return float(accel_curve[index - 1] + (accel_curve[index] - accel_curve[index - 1]) * smooth_ratio)
+    raise AssertionError("unreachable")
+
   sys.modules["openpilot.starpilot.common.accel_profile"] = _simple_module(
     "openpilot.starpilot.common.accel_profile",
+    A_CRUISE_MAX_BP_CUSTOM=[0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 40.0],
+    CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS=[f"CustomAccelProfileBreakpoint{index}MPH" for index in range(1, 13)],
+    CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY="CustomAccelProfileBreakpointsInitialized",
+    CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS=[
+      "CustomAccelProfilePointCount",
+      *[f"CustomAccelProfileBreakpoint{index}MPH" for index in range(1, 13)],
+      *[f"CustomAccelProfilePoint{index}Accel" for index in range(1, 13)],
+    ],
+    CUSTOM_ACCEL_PROFILE_DEFAULT_BREAKPOINTS_MPH=[0.0, 11.2, 22.4, 33.6, 44.7, 55.9, 89.5, 100.7, 111.8, 123.0, 134.2, 145.4],
+    CUSTOM_ACCEL_PROFILE_DEFAULT_POINT_COUNT=7,
     CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY="CustomAccelProfileInitialized",
-    CUSTOM_ACCEL_PROFILE_PARAM_KEYS=[],
+    CUSTOM_ACCEL_PROFILE_PARAM_KEYS=[f"CustomAccelProfile{mph}MPH" for mph in (0, 11, 22, 34, 45, 56, 89)],
+    CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY="CustomAccelProfilePointCount",
+    CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS=[f"CustomAccelProfilePoint{index}Accel" for index in range(1, 13)],
+    CUSTOM_ACCEL_PROFILE_VALUE_MAX=6.0,
+    CUSTOM_ACCEL_PROFILE_VALUE_MIN=0.0,
     build_custom_accel_profile_defaults=lambda *args, **kwargs: {},
-    custom_accel_profile_is_initialized=lambda *args, **kwargs: False,
-    normalize_acceleration_profile=lambda value: value,
+    custom_accel_profile_is_initialized=lambda flag, values: bool(flag) or all(value is not None for value in values.values()),
+    get_accel_profile_curve_values=get_accel_profile_curve_values,
+    interpolate_accel_profile=interpolate_accel_profile,
+    get_custom_accel_profile_curve_defaults=lambda *args, **kwargs: {},
+    normalize_acceleration_profile=lambda value: int(value or 0),
+    normalize_deceleration_profile=lambda value: int(value or 0),
+    parse_custom_accel_profile_curve=parse_custom_accel_profile_curve,
   )
   sys.modules["openpilot.starpilot.common.maps_catalog"] = _simple_module(
     "openpilot.starpilot.common.maps_catalog",
@@ -178,7 +287,7 @@ def _install_server_import_stubs():
     sync_persist_chill_state=lambda *args, **kwargs: None,
     sync_persist_experimental_state=lambda *args, **kwargs: None,
   )
-  def _trigger_stub_favorite_action(key, params_memory=None):
+  def _trigger_stub_favorite_action(key, params_memory=None, **_kwargs):
     if params_memory is None:
       return False
     counter_key = (
@@ -208,7 +317,42 @@ def _install_server_import_stubs():
       },
     ),
     FAVORITE_SLOTS_PARAM="FavoriteSlots",
+    SETTINGS_CATALOG_PATH=MODULE_DIR.parents[1] / "common/assets/device_settings_layout.json",
+    build_favorite_slot_options=lambda *args, **kwargs: [
+      {
+        "key": "__starpilot_favorite_action__:distance_decrease",
+        "label": "Distance - / SET",
+        "description": "Acts like a short press of the car's SET/- cruise button.",
+        "section": "Actions",
+        "action": "decelCruise",
+      },
+      {
+        "key": "__starpilot_favorite_action__:distance_increase",
+        "label": "Distance + / RES",
+        "description": "Acts like a short press of the car's RES/+ cruise button.",
+        "section": "Actions",
+        "action": "accelCruise",
+      },
+    ],
+    filter_favorite_slot_options=lambda options, capabilities=None: [
+      dict(option)
+      for option in options
+      if not option.get("requiresCapability") or (capabilities or {}).get(option["requiresCapability"], False)
+    ],
+    get_favorite_values=lambda items, params=None: {
+      (item if isinstance(item, str) else item.get("key")): (
+        bool(params.get_bool(item if isinstance(item, str) else item.get("key")))
+        if params is not None and hasattr(params, "get_bool")
+        else False
+      )
+      for item in items
+      if (item if isinstance(item, str) else (isinstance(item, dict) and item.get("key")))
+      and not str(item if isinstance(item, str) else item.get("key", "")).startswith("__starpilot_favorite_action__:")
+    },
     is_favorite_action_key=lambda key: str(key or "").startswith("__starpilot_favorite_action__:"),
+    load_settings_catalog=lambda layout_path=None: json.loads(
+      (Path(layout_path) if layout_path else MODULE_DIR.parents[1] / "common/assets/device_settings_layout.json").read_text()
+    ),
     normalize_favorite_slots=lambda *args, **kwargs: "",
     trigger_favorite_action=_trigger_stub_favorite_action,
   )
@@ -220,6 +364,7 @@ def _install_server_import_stubs():
   )
   for name, value in {
     "ACTIVE_THEME_PATH": Path("/tmp/dashboard-test-active-theme"),
+    "BUTTON_FUNCTIONS": {},
     "ERROR_LOGS_PATH": "/tmp/dashboard-test-errors",
     "EXCLUDED_KEYS": set(),
     "LEGACY_STARPILOT_PARAM_RENAMES": {},
@@ -229,6 +374,7 @@ def _install_server_import_stubs():
     "SCREEN_RECORDINGS_PATH": Path("/tmp/dashboard-test-recordings"),
     "STOCK_THEME_PATH": Path("/tmp/dashboard-test-stock-theme"),
     "THEME_SAVE_PATH": Path("/tmp/dashboard-test-themes"),
+    "TOGGLE_BACKUPS": Path("/tmp/dashboard-test-toggle-backups"),
   }.items():
     setattr(starpilot_variables, name, value)
   starpilot_variables.default_ev_tuning_enabled = lambda *args, **kwargs: False
@@ -247,6 +393,7 @@ def _install_server_import_stubs():
   sys.modules["openpilot.starpilot.navigation.destination_store"] = _simple_module(
     "openpilot.starpilot.navigation.destination_store",
     normalize_destination_payload=lambda payload: payload,
+    routing_configured=lambda params: bool(str(params.get("MapboxSecretKey") or "").strip()),
     update_recent_destinations=lambda *args, **kwargs: [],
   )
   sys.modules["openpilot.starpilot.system.the_galaxy.factory_reset"] = _simple_module(
@@ -257,6 +404,36 @@ def _install_server_import_stubs():
     "openpilot.starpilot.system.the_galaxy.flm_workspace",
   )
   sys.modules["openpilot.starpilot.system.the_galaxy.utilities"] = utilities
+  sys.modules["openpilot.starpilot.system.wheel_controls"] = _simple_module(
+    "openpilot.starpilot.system.wheel_controls",
+    CONTROLLER_ACTION_OPTIONS=(
+      {"key": "__starpilot_controller_action__:cycle_driving_personality", "label": "Cycle Driving Personality", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:set_speed", "label": "Set Speed To", "section": "Controller Actions", "value_type": "speed"},
+      {"key": "__starpilot_controller_action__:selfie", "label": "Take Comma Selfie", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:bookmark", "label": "Bookmark", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:pulse_and_glide", "label": "Pulse and Glide", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:force_coast", "label": "Force Coasting", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:toggle_aol", "label": "Toggle AOL", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:engage_openpilot", "label": "Engage Openpilot", "section": "Controller Actions"},
+      {"key": "__starpilot_controller_action__:disengage_openpilot", "label": "Disengage Openpilot", "section": "Controller Actions"},
+    ),
+    CONTROLLER_ACTION_SET_SPEED="__starpilot_controller_action__:set_speed",
+    CONTROLLER_ACTION_SLOT_COUNT=10,
+    FAVORITE_SLOT_COUNT=3,
+    cancel_learning=lambda *args, **kwargs: None,
+    clear_mappings=lambda *args, **kwargs: None,
+    controller_speed_bounds=lambda is_metric: (8, 145) if is_metric else (5, 90),
+    delete_mapping=lambda *args, **kwargs: True,
+    load_controller_action_slots=lambda *args, **kwargs: [
+      {"enabled": False, "key": None, "label": "", "value": None} for _ in range(10)
+    ],
+    public_status=lambda *args, **kwargs: {"mappings": [], "devices": [], "available": True},
+    set_controller_action_slot=lambda *args, **kwargs: None,
+    set_joystick_device=lambda *args, **kwargs: None,
+    start_learning=lambda *args, **kwargs: None,
+    start_testing=lambda *args, **kwargs: None,
+    stop_testing=lambda *args, **kwargs: None,
+  )
 
 
 class FakeParams:
@@ -279,6 +456,9 @@ class FakeParams:
   def put(self, key, value):
     self.values[key] = value
 
+  def remove(self, key):
+    self.values.pop(key, None)
+
 
 class FailingPutParams(FakeParams):
   def put(self, key, value):
@@ -297,17 +477,16 @@ class FakeDashboardAnalyzerProcess:
 
 
 def test_route_inventory_counts_segments_without_video_probing(monkeypatch):
-  segments = [
-    SimpleNamespace(route_name=SimpleNamespace(time_str="route-new")),
-    SimpleNamespace(route_name=SimpleNamespace(time_str="route-new")),
-    SimpleNamespace(route_name=SimpleNamespace(time_str="route-new")),
-    SimpleNamespace(route_name=SimpleNamespace(time_str="route-old")),
-  ]
+  def segment(time_str, segment_num):
+    return SimpleNamespace(route_name=SimpleNamespace(time_str=time_str), segment_num=segment_num)
+
+  # route-new has aged out of its first two segments, so it no longer starts at --0.
+  segments = [segment("route-new", 4), segment("route-new", 2), segment("route-new", 3), segment("route-old", 0)]
   monkeypatch.setattr(utilities, "get_all_segment_names", lambda _path: segments)
 
-  assert utilities.get_routes_with_segment_counts("/tmp/routes") == [
-    ("route-old", 1),
-    ("route-new", 3),
+  assert utilities.get_routes_with_segment_details("/tmp/routes") == [
+    ("route-old", {"segmentCount": 1, "firstSegmentNum": 0}),
+    ("route-new", {"segmentCount": 3, "firstSegmentNum": 2}),
   ]
 
 
@@ -584,6 +763,67 @@ def test_route_listing_uses_all_segment_times_when_segment_zero_was_touched(tmp_
   assert end == "2026-07-18T07:22:00"
 
 
+def test_route_listing_does_not_parse_logs_when_filesystem_time_is_valid(tmp_path, monkeypatch):
+  route_start = utilities.datetime(2026, 7, 18, 7, 19, 0)
+  route_name = "000011e3--6e01289631"
+  segment = tmp_path / f"{route_name}--0"
+  segment.mkdir()
+  (segment / "qlog.zst").write_bytes(b"placeholder")
+  segment_end = route_start.timestamp() + 60
+  os.utime(segment, (segment_end, segment_end))
+
+  def fail_if_read(_path):
+    raise AssertionError("valid filesystem timestamps must not decompress route logs")
+
+  monkeypatch.setattr(utilities, "_route_logged_start_time", fail_if_read)
+
+  routes = utilities._list_dashboard_routes([tmp_path])
+
+  assert routes[0]["startedAt"] == route_start
+  assert routes[0]["timeSource"] == utilities.DASHBOARD_TIME_SOURCE_FILESYSTEM
+
+
+def test_route_listing_applies_limit_before_parsing_old_logs(tmp_path, monkeypatch):
+  old_segment = tmp_path / "00000001--abcdef1234--0"
+  old_segment.mkdir()
+  (old_segment / "qlog.zst").write_bytes(b"placeholder")
+  stale_time = utilities.datetime(2025, 7, 18, 7, 20, 0).timestamp()
+  os.utime(old_segment, (stale_time, stale_time))
+
+  current_segment = tmp_path / "00000002--abcdef1234--0"
+  current_segment.mkdir()
+  current_time = utilities.datetime(2026, 7, 18, 7, 20, 0).timestamp()
+  os.utime(current_segment, (current_time, current_time))
+
+  def fail_if_read(_path):
+    raise AssertionError("routes outside the scan limit must not be parsed")
+
+  monkeypatch.setattr(utilities, "_route_logged_start_time", fail_if_read)
+
+  routes = utilities._list_dashboard_routes([tmp_path], limit=1)
+
+  assert [route["name"] for route in routes] == ["00000002--abcdef1234"]
+
+
+def test_route_listing_defers_offline_clock_repair_to_background_analysis(tmp_path, monkeypatch):
+  route_name = "000011e3--6e01289631"
+  segment = tmp_path / f"{route_name}--0"
+  segment.mkdir()
+  (segment / "qlog.zst").write_bytes(b"placeholder")
+
+  stale_time = utilities.datetime(2025, 7, 18, 7, 20, 0).timestamp()
+  os.utime(segment, (stale_time, stale_time))
+  def fail_if_read(_path):
+    raise AssertionError("dashboard route listing must not decompress logs")
+
+  monkeypatch.setattr(utilities, "_route_logged_start_time", fail_if_read)
+
+  routes = utilities._list_dashboard_routes([tmp_path])
+
+  assert routes[0]["startedAt"] is None
+  assert routes[0]["timeSource"] == ""
+
+
 def test_top_models_are_ranked_from_persisted_usage_not_favorites():
   params = FakeParams({
     "AvailableModels": "orion,vega,atlas,nova",
@@ -836,6 +1076,20 @@ def test_cpu_temp_reader_uses_hardware_cpu_values(monkeypatch):
   assert utilities._read_cpu_temp_c() == 57
 
 
+def test_gpu_temp_reader_uses_hardware_gpu_values(monkeypatch):
+  hardware_module = _simple_module(
+    "openpilot.system.hardware",
+    HARDWARE=SimpleNamespace(
+      get_thermal_config=lambda: SimpleNamespace(
+        get_msg=lambda: {"gpuTempC": [41.2, 42.6], "cpuTempC": [56.0]}
+      )
+    ),
+  )
+  monkeypatch.setitem(sys.modules, "openpilot.system.hardware", hardware_module)
+
+  assert utilities._read_gpu_temp_c() == 43
+
+
 def test_cpu_temp_reader_ignores_non_cpu_thermal_zones(tmp_path):
   cpu_zone = tmp_path / "thermal_zone0"
   cpu_zone.mkdir()
@@ -848,6 +1102,20 @@ def test_cpu_temp_reader_ignores_non_cpu_thermal_zones(tmp_path):
   (pmic_zone / "temp").write_text("75000", encoding="utf-8")
 
   assert utilities._read_cpu_temp_c(tmp_path) == 61
+
+
+def test_gpu_temp_reader_ignores_non_gpu_thermal_zones(tmp_path):
+  gpu_zone = tmp_path / "thermal_zone0"
+  gpu_zone.mkdir()
+  (gpu_zone / "type").write_text("gpu0-usr", encoding="utf-8")
+  (gpu_zone / "temp").write_text("42000", encoding="utf-8")
+
+  cpu_zone = tmp_path / "thermal_zone1"
+  cpu_zone.mkdir()
+  (cpu_zone / "type").write_text("cpu0-silver-usr", encoding="utf-8")
+  (cpu_zone / "temp").write_text("61000", encoding="utf-8")
+
+  assert utilities._read_gpu_temp_c(tmp_path) == 42
 
 
 def test_network_name_uses_wifi_ssid(monkeypatch):
@@ -892,6 +1160,7 @@ def test_network_name_reports_no_wireless_connectivity(monkeypatch):
 def test_device_summary_includes_network_name(monkeypatch):
   monkeypatch.setattr(utilities, "_read_uptime_seconds", lambda: 120)
   monkeypatch.setattr(utilities, "_read_cpu_temp_c", lambda: 55)
+  monkeypatch.setattr(utilities, "_read_gpu_temp_c", lambda: 42)
   monkeypatch.setattr(utilities, "get_current_lan_ip", lambda: "192.168.1.10")
   monkeypatch.setattr(utilities, "get_current_network_name", lambda: "Home Network")
 
@@ -899,6 +1168,7 @@ def test_device_summary_includes_network_name(monkeypatch):
 
   assert summary["networkName"] == "Home Network"
   assert summary["lanIp"] == "192.168.1.10"
+  assert summary["gpuTempC"] == 42
 
 
 def test_persistent_loader_accepts_decoded_param_dict():
@@ -968,6 +1238,28 @@ def test_clear_dashboard_route_history_keeps_durable_records(tmp_path, monkeypat
   assert stats["personalRecords"]["cleanDriveStreak"]["drives"] == 4
   assert stats["attentionRecords"]["cleanDriveStreak"]["drives"] == 4
   assert stats["modelUsage"]["orion"]["drives"] == 3
+
+
+def test_clear_dashboard_route_history_can_retain_preserved_routes(tmp_path, monkeypatch):
+  monkeypatch.setattr(utilities, "DASHBOARD_PARAMS_DIR", tmp_path)
+  params = FakeParams({
+    utilities.DASHBOARD_PERSISTENT_STATS_PARAM: {
+      "routes": {
+        "0000006a--9f0a7bdf9c": {"date": "2026-06-15T08:00:00"},
+        "0000006b--9f0a7bdf9d": {"date": "2026-06-16T08:00:00"},
+      },
+      "ignoredRoutes": ["0000006a--9f0a7bdf9c", "0000006b--9f0a7bdf9d"],
+      "personalRecords": {"cleanDriveStreak": {"drives": 4}},
+    },
+  })
+
+  removed = utilities.clear_dashboard_route_history(params, retained_route_names={"0000006a--9f0a7bdf9c"})
+
+  assert removed == 1
+  stats = utilities._load_dashboard_persistent_stats(params)
+  assert list(stats["routes"]) == ["0000006a--9f0a7bdf9c"]
+  assert stats["ignoredRoutes"] == ["0000006a--9f0a7bdf9c"]
+  assert stats["personalRecords"]["cleanDriveStreak"]["drives"] == 4
 
 
 def test_lightweight_routes_surface_recent_drives_without_log_analysis(monkeypatch):
@@ -1552,6 +1844,316 @@ def _load_server_module():
   return module
 
 
+def test_model_profiles_can_be_selected_without_external_gpu(monkeypatch, tmp_path):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  class ModelParams(FakeParams):
+    defaults = {
+      "Model": "rdf43",
+      "DrivingModel": "rdf43",
+      "DrivingModelName": "Regret Driven Framework V4",
+      "ModelVersion": "v15",
+      "DrivingModelVersion": "v15",
+    }
+
+    def get_default_value(self, key):
+      return self.defaults.get(key)
+
+  params = ModelParams({
+    "AvailableModels": "rdf43,small-one,big-one",
+    "AvailableModelNames": "Regret Driven Framework V4,Small One,Big One",
+    "AvailableModelSeries": "Built-in,Small,Large",
+    "AvailableModelArtifactFormats": "tinygrad_single_v1,tinygrad_single_v1,tinygrad_single_v1",
+    "ModelVersions": "v15,v15,v16",
+    "ModelReleasedDates": "2026-01-01,2026-01-02,2026-01-03",
+    "Model": "rdf43",
+    "DrivingModel": "rdf43",
+  })
+  (tmp_path / "small-one_driving_tinygrad.pkl").write_bytes(b"small")
+  (tmp_path / "big-one_driving_tinygrad.pkl").write_bytes(b"big")
+
+  app = server.Flask(
+    "model_profiles_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  monkeypatch.setattr(server, "params", params)
+  monkeypatch.setattr(server, "params_memory", FakeParams())
+  monkeypatch.setattr(server, "MODELS_PATH", tmp_path)
+  monkeypatch.setattr(server, "external_gpu_available", lambda: False)
+  monkeypatch.setattr(server, "is_builtin_model_key", lambda key: key == "rdf43")
+  monkeypatch.setattr(server, "model_uses_external_gpu", lambda key: key == "big-one")
+  client = app.test_client()
+
+  big_response = client.put("/api/models/active", json={"profile": "big", "model": "big-one"})
+  assert big_response.status_code == 200
+  assert params.values["ActiveBigModel"] == "big-one"
+  assert params.values["Model"] == "rdf43"
+
+  small_response = client.put("/api/models/active", json={"profile": "small", "model": "small-one"})
+  assert small_response.status_code == 200
+  assert params.values["ActiveSmallModel"] == "small-one"
+
+  status = client.get("/api/models/status").get_json()
+  assert status["activeBigModel"] == "big-one"
+  assert status["activeSmallModel"] == "small-one"
+
+  monkeypatch.setattr(server, "external_gpu_available", lambda: True)
+  active_big_response = client.put("/api/models/active", json={"profile": "big", "model": "big-one"})
+  assert active_big_response.status_code == 200
+  assert params.values["Model"] == params.values["DrivingModel"] == "big-one"
+  assert params.values["DrivingModelName"] == "Big One"
+
+  disabled = client.put("/api/models/active", json={"profile": "big", "model": ""})
+  assert disabled.status_code == 200
+  assert params.values["ActiveBigModel"] == "none"
+  assert params.values["Model"] == params.values["DrivingModel"] == "small-one"
+  assert disabled.get_json()["model"] == ""
+  assert client.get("/api/models/status").get_json()["activeBigModel"] == ""
+
+  wrong_profile = client.put("/api/models/active", json={"profile": "small", "model": "big-one"})
+  assert wrong_profile.status_code == 409
+
+  params.put("IsOnroad", True)
+  onroad = client.put("/api/models/active", json={"profile": "small", "model": "rdf43"})
+  assert onroad.status_code == 403
+
+
+def test_model_laboratory_api_uses_installed_models_and_enforces_hardware_size_version_guards(monkeypatch, tmp_path):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  class ModelLabParams(FakeParams):
+    defaults = {
+      "Model": "rdf43",
+      "DrivingModel": "rdf43",
+      "DrivingModelName": "Regret Driven Framework V4",
+      "ModelVersion": "v15",
+      "DrivingModelVersion": "v15",
+    }
+
+    def get_default_value(self, key):
+      return self.defaults.get(key)
+
+  params = ModelLabParams({
+    "AvailableModels": "lat,long,old,big",
+    "AvailableModelNames": "Lateral Ace,Longitudinal Ace,Old Generation,Chestnut One Billion",
+    "AvailableModelSeries": "Lab,Lab,Legacy,Large",
+    "AvailableModelArtifactFormats": "tinygrad_single_v1,tinygrad_single_v1,tinygrad_single_v1,tinygrad_single_v1",
+    "ModelVersions": "v15,v15,v9,v16",
+    "ModelReleasedDates": "2026-01-01,2026-01-02,2025-01-01,2026-08-01",
+    "ModelManifestVersion": "v25",
+    "Model": "rdf43",
+    "DrivingModel": "rdf43",
+    "ActiveSmallModel": "rdf43",
+    "ActiveSmallModelName": "Regret Driven Framework V4",
+    "ActiveSmallModelVersion": "v15",
+    "ActiveBigModel": "big",
+    "ActiveBigModelName": "Chestnut One Billion",
+    "ActiveBigModelVersion": "v16",
+  })
+  metadata = {
+    "lat": {"model_size": "small", "model_size_declared": True, "model_lab_eligible": True,
+            "accelerator_artifacts": {"chestnut": {"execution_device": "AMD"}}},
+    "long": {"model_size": "small", "model_size_declared": True, "model_lab_eligible": True,
+             "accelerator_artifacts": {"chestnut": {"execution_device": "AMD"}}},
+    "old": {"model_size": "small", "model_size_declared": True, "model_lab_eligible": True,
+            "accelerator_artifacts": {"chestnut": {"execution_device": "AMD"}}},
+    "big": {"model_size": "chestnut", "model_size_declared": True, "uses_external_gpu": True},
+  }
+  (tmp_path / ".model_artifacts.json").write_text(json.dumps(metadata))
+  (tmp_path / "lat_driving_tinygrad.pkl").write_bytes(b"lat")
+  (tmp_path / "long_driving_tinygrad.pkl").write_bytes(b"long")
+  (tmp_path / "old_driving_tinygrad.pkl").write_bytes(b"old")
+  (tmp_path / "lat_driving_chestnut_tinygrad.pkl").write_bytes(b"lat-amd")
+  (tmp_path / "long_driving_chestnut_tinygrad.pkl").write_bytes(b"long-amd")
+  (tmp_path / "old_driving_chestnut_tinygrad.pkl").write_bytes(b"old-amd")
+
+  app = server.Flask(
+    "model_lab_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  monkeypatch.setattr(server, "params", params)
+  params_memory = FakeParams()
+  monkeypatch.setattr(server, "params_memory", params_memory)
+  monkeypatch.setattr(server, "MODELS_PATH", tmp_path)
+  monkeypatch.setattr(server, "external_gpu_available", lambda: True)
+  monkeypatch.setattr(server, "model_uses_external_gpu", lambda key: key == "big")
+  client = app.test_client()
+
+  status = client.get("/api/model-laboratory")
+  status_payload = status.get_json()
+  assert status.status_code == 200
+  assert status_payload["chestnutReady"] is True
+  assert {model["value"] for model in status_payload["models"]} == {"rdf43", "lat", "long", "old"}
+  assert status_payload["summary"]["ready"] == 3
+  assert status_payload["summary"]["published"] == 3
+
+  enabled = client.put("/api/model-laboratory", json={
+    "enabled": True,
+    "lateralModel": "lat",
+    "longitudinalModel": "long",
+  })
+  assert enabled.status_code == 200
+  assert params.values["ModelLabConfig"]["enabled"] is True
+  assert params.values["Model"] == params.values["DrivingModel"] == "lat"
+  assert params.values["DrivingModelName"] == "LA + LA"
+  assert params.values["ModelVersion"] == params.values["DrivingModelVersion"] == "v15"
+
+  mixed_version = client.put("/api/model-laboratory", json={
+    "enabled": True,
+    "lateralModel": "lat",
+    "longitudinalModel": "old",
+  })
+  assert mixed_version.status_code == 200
+  assert params.values["ModelLabConfig"] == {
+    "enabled": True,
+    "lateralModel": "lat",
+    "longitudinalModel": "old",
+  }
+
+  oversized = client.put("/api/model-laboratory", json={
+    "enabled": True,
+    "lateralModel": "lat",
+    "longitudinalModel": "big",
+  })
+  assert oversized.status_code == 409
+  assert "Chestnut-class" in oversized.get_json()["error"]
+
+  (tmp_path / "old_driving_chestnut_tinygrad.pkl").unlink()
+  queued = client.post("/api/model-laboratory/download", json={"model": "old"})
+  assert queued.status_code == 200
+  assert params_memory.values["ModelLabModelToDownload"] == "old"
+  assert "eGPU variant" in params_memory.values["ModelDownloadProgress"]
+  params_memory.remove("ModelLabModelToDownload")
+
+  monkeypatch.setattr(server, "external_gpu_available", lambda: False)
+  (tmp_path / "old_driving_chestnut_tinygrad.pkl").unlink(missing_ok=True)
+  queued_without_chestnut = client.post("/api/model-laboratory/download", json={"model": "old"})
+  assert queued_without_chestnut.status_code == 200
+  assert params_memory.values["ModelLabModelToDownload"] == "old"
+  params_memory.remove("ModelLabModelToDownload")
+
+  no_chestnut = client.put("/api/model-laboratory", json={
+    "enabled": True,
+    "lateralModel": "lat",
+    "longitudinalModel": "long",
+  })
+  assert no_chestnut.status_code == 409
+  assert "Chestnut" in no_chestnut.get_json()["error"]
+
+  monkeypatch.setattr(server, "external_gpu_available", lambda: True)
+  disabled = client.put("/api/model-laboratory", json={
+    "enabled": False,
+    "lateralModel": "lat",
+    "longitudinalModel": "long",
+  })
+  assert disabled.status_code == 200
+  assert params.values["Model"] == params.values["DrivingModel"] == "big"
+  assert params.values["DrivingModelName"] == "Chestnut One Billion"
+
+  deleted = client.delete("/api/model-laboratory/artifact", json={"model": "lat"})
+  assert deleted.status_code == 200
+  assert not (tmp_path / "lat_driving_chestnut_tinygrad.pkl").exists()
+  assert (tmp_path / "lat_driving_tinygrad.pkl").exists()
+
+  params.values["IsOnroad"] = True
+  onroad = client.put("/api/model-laboratory", json={"enabled": False})
+  assert onroad.status_code == 403
+
+
+def test_clear_generated_build_state_preserves_prebuilts_and_user_data(tmp_path):
+  server = _load_server_module()
+  sconsign = tmp_path / ".sconsign.dblite"
+  generated = tmp_path / "cereal" / "gen" / "cpp" / "log.capnp.h"
+  prebuilt = tmp_path / "prebuilt"
+  user_model = tmp_path / "uncompiledmodels" / "custom.onnx"
+  for path in (sconsign, generated, prebuilt, user_model):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("test")
+
+  server._clear_generated_build_state(tmp_path)
+
+  assert not sconsign.exists()
+  assert not (tmp_path / "cereal" / "gen").exists()
+  assert prebuilt.read_text() == "test"
+  assert user_model.read_text() == "test"
+
+
+def test_maps_status_uses_cache_without_scanning_legacy_storage(monkeypatch):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  app = server.Flask(
+    "maps_status_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  monkeypatch.setattr(server, "params", FakeParams({
+    "MapsDownloadSizeCache": '{"country:CA":{"downloadBytes":123}}',
+    "MapsSelected": "",
+  }))
+  monkeypatch.setattr(server, "params_memory", FakeParams())
+  monkeypatch.setattr(server, "MAPS_PATH", SimpleNamespace(rglob=lambda *_args: (_ for _ in ()).throw(AssertionError("status must not scan maps"))))
+
+  response = app.test_client().get("/api/maps/status")
+  payload = response.get_json()
+
+  assert response.status_code == 200
+  assert payload["storageKnown"] is False
+  assert payload["storageBytes"] == 0
+  assert payload["mapsPresent"] is False
+
+
+def test_maps_status_returns_known_storage_from_v2_cache(monkeypatch):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  app = server.Flask(
+    "maps_status_known_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  monkeypatch.setattr(server, "params", FakeParams({
+    "MapsDownloadSizeCache": '{"version":2,"storageBytes":4096,"selections":{}}',
+    "MapsSelected": "",
+  }))
+  monkeypatch.setattr(server, "params_memory", FakeParams())
+
+  payload = app.test_client().get("/api/maps/status").get_json()
+
+  assert payload["storageKnown"] is True
+  assert payload["storageBytes"] == 4096
+  assert payload["mapsPresent"] is True
+
+
+def test_sentry_notification_rate_limit_persists_and_expires(monkeypatch, tmp_path):
+  server = _load_server_module()
+  rate_limit_path = tmp_path / "sentry_notification_rate_limit.json"
+  now = [1000.0]
+  monkeypatch.setattr(server, "_sentry_notification_rate_limit_path", lambda: rate_limit_path)
+  monkeypatch.setattr(server.time, "time", lambda: now[0])
+  server._SENTRY_NOTIFICATION_LAST_AT = None
+  event = {"eventId": "event-1"}
+
+  assert server._claim_sentry_notification_slot(event) is True
+  assert rate_limit_path.exists()
+  server._SENTRY_NOTIFICATION_LAST_AT = None
+  assert server._claim_sentry_notification_slot({"eventId": "event-2"}) is False
+
+  now[0] += server.SENTRY_NOTIFICATION_RATE_LIMIT_SECONDS - 0.1
+  assert server._claim_sentry_notification_slot({"eventId": "event-3"}) is False
+
+  now[0] += 0.1
+  assert server._claim_sentry_notification_slot({"eventId": "event-4"}) is True
+
+
 def test_troubleshoot_steer_delay_normalizes_vehicle_delay_for_display():
   server = _load_server_module()
 
@@ -1735,6 +2337,200 @@ def test_toggle_backup_restore_round_trip_filters_non_settings(monkeypatch):
   assert update_calls == [True]
 
 
+@pytest.mark.parametrize("device_state", [
+  {"IsOnroad": True, "IsOffroad": False},
+  {"IsOnroad": False, "IsOffroad": False},
+])
+def test_toggle_restore_rejects_without_confirmed_offroad_for_parked_personality_key_without_mutation(monkeypatch, device_state):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  parked_key = "StandardFollow"
+  definitions = {
+    parked_key: (1.45, server.ParamKeyType.FLOAT, server.ParamKeyFlag.PERSISTENT),
+    "EnabledSetting": (False, server.ParamKeyType.BOOL, server.ParamKeyFlag.PERSISTENT),
+  }
+
+  class ToggleParams:
+    def __init__(self):
+      self.values = {**device_state, parked_key: 1.45, "EnabledSetting": False}
+
+    def get(self, key, block=False):
+      del block
+      return self.values.get(key)
+
+    def get_bool(self, key):
+      return bool(self.values.get(key, False))
+
+    def get_default_value(self, key):
+      return definitions[key][0]
+
+    def get_key_flag(self, key):
+      return definitions[key][2]
+
+    def get_type(self, key):
+      return definitions[key][1]
+
+    def put(self, key, value):
+      self.values[key] = value
+
+  raw_params = ToggleParams()
+  server.starpilot_default_params = [
+    (key, default, value_type, 0)
+    for key, (default, value_type, _) in definitions.items()
+  ]
+  monkeypatch.setattr(server, "_params_raw", raw_params)
+  monkeypatch.setattr(server, "params", server.ParamsCompat(raw_params))
+  monkeypatch.setattr(server, "EXCLUDED_KEYS", set())
+  monkeypatch.setattr(server, "update_starpilot_toggles", lambda: pytest.fail("restore side effect ran"))
+
+  app = server.Flask(
+    "toggle_restore_onroad_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  client = app.test_client()
+  before = dict(raw_params.values)
+
+  encoded_data = utilities.encode_parameters({"EnabledSetting": True, parked_key: 1.25})
+  response = client.post("/api/toggles/restore", json={"data": encoded_data})
+
+  assert response.status_code == 403
+  assert "parked" in response.get_json()["message"].lower()
+  assert raw_params.values == before
+
+
+@pytest.mark.parametrize("invalid_value", [99.0, "false"])
+def test_toggle_restore_rejects_invalid_personality_value_without_mutation(monkeypatch, invalid_value):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  parked_key = "StandardFollow" if isinstance(invalid_value, float) else "CustomPersonalities"
+  definitions = {
+    parked_key: (1.45, server.ParamKeyType.FLOAT, server.ParamKeyFlag.PERSISTENT),
+    "EnabledSetting": (False, server.ParamKeyType.BOOL, server.ParamKeyFlag.PERSISTENT),
+  }
+  if parked_key == "CustomPersonalities":
+    definitions[parked_key] = (False, server.ParamKeyType.BOOL, server.ParamKeyFlag.PERSISTENT)
+
+  class ToggleParams:
+    def __init__(self):
+      self.values = {"IsOnroad": False, "IsOffroad": True, parked_key: 1.45, "EnabledSetting": False}
+
+    def get(self, key, block=False):
+      del block
+      return self.values.get(key)
+
+    def get_bool(self, key):
+      return bool(self.values.get(key, False))
+
+    def get_default_value(self, key):
+      return definitions[key][0]
+
+    def get_key_flag(self, key):
+      return definitions[key][2]
+
+    def get_type(self, key):
+      return definitions[key][1]
+
+    def put(self, key, value):
+      self.values[key] = value
+
+  raw_params = ToggleParams()
+  server.starpilot_default_params = [
+    (key, default, value_type, 0)
+    for key, (default, value_type, _) in definitions.items()
+  ]
+  monkeypatch.setattr(server, "_params_raw", raw_params)
+  monkeypatch.setattr(server, "params", server.ParamsCompat(raw_params))
+  monkeypatch.setattr(server, "EXCLUDED_KEYS", set())
+  monkeypatch.setattr(server, "update_starpilot_toggles", lambda: pytest.fail("restore side effect ran"))
+
+  app = server.Flask(
+    "toggle_restore_personality_bounds_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  client = app.test_client()
+  before = dict(raw_params.values)
+
+  encoded_data = utilities.encode_parameters({"EnabledSetting": True, parked_key: invalid_value})
+  response = client.post("/api/toggles/restore", json={"data": encoded_data})
+
+  assert response.status_code == 400
+  assert "invalid" in response.get_json()["message"].lower()
+  assert raw_params.values == before
+
+
+def test_toggle_restore_enables_master_only_after_installing_a_strict_profile_document(monkeypatch):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  definitions = {
+    "CustomPersonalities": (False, server.ParamKeyType.BOOL, server.ParamKeyFlag.PERSISTENT),
+    server.PERSONALITY_PROFILES_PARAM: (
+      {}, server.ParamKeyType.JSON, server.ParamKeyFlag.PERSISTENT | server.ParamKeyFlag.DONT_LOG,
+    ),
+  }
+
+  class ToggleParams:
+    def __init__(self):
+      self.values = {"IsOnroad": False, "IsOffroad": True, "CustomPersonalities": False}
+      self.writes = []
+
+    def get(self, key, block=False):
+      del block
+      return self.values.get(key)
+
+    def get_bool(self, key):
+      return bool(self.values.get(key, False))
+
+    def get_default_value(self, key):
+      return definitions[key][0]
+
+    def get_key_flag(self, key):
+      return definitions[key][2]
+
+    def get_type(self, key):
+      return definitions[key][1]
+
+    def put(self, key, value):
+      self.values[key] = value
+      self.writes.append((key, value))
+
+    def put_bool(self, key, value):
+      self.put(key, bool(value))
+
+  raw_params = ToggleParams()
+  server.starpilot_default_params = [
+    (key, default, value_type, 0)
+    for key, (default, value_type, _) in definitions.items()
+  ]
+  monkeypatch.setattr(server, "_params_raw", raw_params)
+  monkeypatch.setattr(server, "params", server.ParamsCompat(raw_params))
+  monkeypatch.setattr(server, "EXCLUDED_KEYS", set())
+  monkeypatch.setattr(server, "update_starpilot_toggles", lambda: None)
+
+  app = server.Flask(
+    "toggle_restore_personality_master_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  response = app.test_client().post(
+    "/api/toggles/restore",
+    json={"data": utilities.encode_parameters({"CustomPersonalities": True})},
+  )
+
+  assert response.status_code == 200, response.get_json()
+  document = server.strict_profile_document(raw_params.values[server.PERSONALITY_PROFILES_PARAM])
+  assert document is not None and document["enabled"] is True
+  assert raw_params.values["CustomPersonalities"] is True
+  assert [key for key, _ in raw_params.writes] == [server.PERSONALITY_PROFILES_PARAM, "CustomPersonalities"]
+
+
 def test_toggle_restore_reports_invalid_and_unavailable_settings(monkeypatch):
   server = _load_server_module()
   assert server._import_galaxy_web_symbols()
@@ -1790,3 +2586,85 @@ def test_toggle_restore_reports_invalid_and_unavailable_settings(monkeypatch):
   assert damaged_response.get_json()["success"] is False
   assert wrong_format_response.status_code == 400
   assert wrong_format_response.get_json()["success"] is False
+
+
+def test_toggle_profile_slots_save_and_load_the_same_filtered_settings(monkeypatch, tmp_path):
+  server = _load_server_module()
+  assert server._import_galaxy_web_symbols()
+
+  definitions = {
+    "EnabledSetting": (True, server.ParamKeyType.BOOL, server.ParamKeyFlag.PERSISTENT),
+    "NumericSetting": (1.5, server.ParamKeyType.FLOAT, server.ParamKeyFlag.PERSISTENT),
+    "SensitiveSetting": ("", server.ParamKeyType.STRING, server.ParamKeyFlag.PERSISTENT | server.ParamKeyFlag.DONT_LOG),
+  }
+
+  class ToggleParams:
+    def __init__(self):
+      self.values = {
+        "EnabledSetting": False,
+        "NumericSetting": 2.75,
+        "SensitiveSetting": "secret",
+      }
+
+    def get(self, key, block=False):
+      del block
+      return self.values.get(key, definitions[key][0])
+
+    def get_default_value(self, key):
+      return definitions[key][0]
+
+    def get_key_flag(self, key):
+      return definitions[key][2]
+
+    def get_type(self, key):
+      return definitions[key][1]
+
+    def put(self, key, value):
+      self.values[key] = value
+
+  raw_params = ToggleParams()
+  server.starpilot_default_params = [
+    (key, default, value_type, 0)
+    for key, (default, value_type, _) in definitions.items()
+  ]
+  monkeypatch.setattr(server, "_params_raw", raw_params)
+  monkeypatch.setattr(server, "params", FakeParams({"IsOnroad": False, "IsOffroad": True}))
+  monkeypatch.setattr(server, "EXCLUDED_KEYS", set())
+  monkeypatch.setattr(server, "TOGGLE_BACKUPS", tmp_path)
+  update_calls = []
+  monkeypatch.setattr(server, "update_starpilot_toggles", lambda: update_calls.append(True))
+
+  app = server.Flask(
+    "toggle_profile_test",
+    template_folder=str(MODULE_DIR / "templates"),
+    static_folder=str(MODULE_DIR / "assets"),
+  )
+  server.setup(app)
+  client = app.test_client()
+
+  initial = client.get("/api/toggles/profiles").get_json()
+  saved = client.post("/api/toggles/profiles/a/save")
+  assert initial["slots"][0]["saved"] is False
+  assert saved.status_code == 200
+  assert saved.get_json()["profile"]["settingsCount"] == 2
+
+  raw_params.values.update({
+    "EnabledSetting": True,
+    "NumericSetting": 9.0,
+    "SensitiveSetting": "new-secret",
+  })
+  loaded = client.post("/api/toggles/profiles/a/load")
+  assert loaded.status_code == 200
+  assert loaded.get_json()["restoredCount"] == 2
+  assert raw_params.values["EnabledSetting"] is False
+  assert raw_params.values["NumericSetting"] == 2.75
+  assert raw_params.values["SensitiveSetting"] == "new-secret"
+  assert update_calls == [True]
+
+  missing = client.post("/api/toggles/profiles/b/load")
+  assert missing.status_code == 400
+  assert "has not been saved" in missing.get_json()["message"]
+
+  server.params.values["IsOnroad"] = True
+  onroad = client.post("/api/toggles/profiles/a/load")
+  assert onroad.status_code == 403

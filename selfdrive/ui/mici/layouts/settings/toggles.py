@@ -12,6 +12,7 @@ PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
+    self._personality_seen = None
     self._sync_rhd_toggle()
 
     def rhd_toggle_callback(checked: bool):
@@ -70,12 +71,14 @@ class TogglesLayoutMici(NavScroller):
 
     if ui_state.sm.updated["selfdriveState"]:
       personality = PERSONALITY_TO_INT[ui_state.sm["selfdriveState"].personality]
-      if personality != ui_state.personality and ui_state.started:
+      if ui_state.started and personality != self._personality_seen:
         self._personality_toggle.set_value(self._personality_toggle._options[personality])
+        self._personality_seen = personality
       ui_state.personality = personality
 
   def show_event(self):
     super().show_event()
+    self._personality_seen = None
     self._update_toggles()
 
   def _update_toggles(self):
@@ -94,9 +97,9 @@ class TogglesLayoutMici(NavScroller):
 
     # CP gating for experimental mode
     if ui_state.CP is not None:
-      if ui_state.has_longitudinal_control:
+      if ui_state.experimental_mode_available:
         self._experimental_btn.set_visible(True)
-        self._personality_toggle.set_visible(True)
+        self._personality_toggle.set_visible(ui_state.has_longitudinal_control)
       else:
         # no long for now
         self._experimental_btn.set_visible(False)

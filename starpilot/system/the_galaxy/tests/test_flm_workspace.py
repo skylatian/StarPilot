@@ -232,11 +232,21 @@ def test_segment_ranges_limit_resolved_route_sources(tmp_path, monkeypatch):
   sources, warnings = module.resolve_route_sources(
     [route],
     [str(tmp_path)],
-    {route: {"start": 4, "end": 9}},
+    {route: {"start": 4, "end": 8}},
   )
 
-  assert [source.segment_num for source in sources] == [4, 5, 6, 7, 8, 9]
+  assert [source.segment_num for source in sources] == [4, 5, 6, 7, 8]
   assert warnings == []
+
+
+def test_segment_limit_rejects_more_than_five_selected_segments(tmp_path, monkeypatch):
+  module, _ = _load_flm_workspace_module(tmp_path)
+  route = "00000001--abcdef1234"
+  segment_names = [f"{route}--{segment}" for segment in range(12)]
+  monkeypatch.setattr(module.utilities, "get_segments_in_route", lambda *_args: segment_names)
+
+  with pytest.raises(ValueError, match="limited to 5 segments"):
+    module.enforce_segment_limit([route], [str(tmp_path)], {route: {"start": 4, "end": 9}})
 
 
 def test_segment_range_rejects_reversed_bounds(tmp_path):
@@ -270,6 +280,24 @@ def test_analysis_is_rejected_while_onroad(tmp_path):
   with pytest.raises(module.FLMAnalysisCancelled, match="went onroad"):
     module._require_flm_offroad()
   assert module.start_flm_background_analysis(["route"], [str(tmp_path)]) is False
+
+
+def test_analysis_requires_lane_centering_off(tmp_path):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  fake_params_cls._store = {"LaneCentering": True}
+
+  with pytest.raises(module.FLMAnalysisCancelled, match="Lane Centering"):
+    module._require_flm_lane_centering_off()
+  assert module.start_flm_background_analysis(["route"], [str(tmp_path)]) is False
+
+
+def test_init_param_enabled_accepts_boolean_values(tmp_path):
+  module, _ = _load_flm_workspace_module(tmp_path)
+
+  assert module._init_param_enabled({"LaneCentering": "1"}, "LaneCentering")
+  assert module._init_param_enabled({"LaneCentering": "true"}, "LaneCentering")
+  assert not module._init_param_enabled({"LaneCentering": "0"}, "LaneCentering")
+  assert not module._init_param_enabled({}, "LaneCentering")
 
 
 def test_segment_analysis_stops_on_mid_run_onroad_transition(tmp_path, monkeypatch):

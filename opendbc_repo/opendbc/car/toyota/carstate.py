@@ -9,7 +9,7 @@ from opendbc.car.interfaces import CarStateBase
 from openpilot.common.params import Params
 from opendbc.car.toyota.values import ToyotaFlags, ToyotaStarPilotFlags, CAR, DBC, STEER_THRESHOLD, NO_STOP_TIMER_CAR, \
                                                   TSS2_CAR, RADAR_ACC_CAR, EPS_SCALE, UNSUPPORTED_DSU_CAR, \
-                                                  SECOC_CAR
+                                                  SECOC_CAR, LEGACY_PRIUS_CAR
 
 ButtonType = structs.CarState.ButtonEvent.Type
 SteerControlType = structs.CarParams.SteerControlType
@@ -24,7 +24,8 @@ TEMP_STEER_FAULTS = (9, 11, 21, 25)
 # - lka/lta msg drop out: 3 (recoverable)
 # - prolonged high driver torque: 17 (permanent)
 PERM_STEER_FAULTS = (3, 17)
-LKAS_BUTTON_CAR = TSS2_CAR | {CAR.TOYOTA_PRIUS}
+LKAS_BUTTON_CAR = TSS2_CAR | LEGACY_PRIUS_CAR
+DISTANCE_BUTTON_CAR = {CAR.TOYOTA_SIENNA_4TH_GEN}
 
 
 # Traffic signals for Speed Limit Controller - Credit goes to the DragonPilot team!
@@ -75,6 +76,7 @@ class CarState(CarStateBase):
     self.distance_button = 0
 
     self.pcm_follow_distance = 0
+    self.pcm_acc_status = 0
 
     self.acc_type = 1
     self.lkas_hud = {}
@@ -90,8 +92,6 @@ class CarState(CarStateBase):
     self.has_SDSU = self.FPCP.flags & ToyotaStarPilotFlags.SMART_DSU.value
     self.has_ZSS = self.FPCP.flags & ToyotaStarPilotFlags.ZSS.value
     self.param_store = Params()
-    self.auto_brake_hold = bool(self.CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD.value)
-    self.pre_collision_2 = {}
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -213,6 +213,7 @@ class CarState(CarStateBase):
       if self.CP.openpilotLongitudinalControl:
         ret.accFaulted = ret.accFaulted or cp.vl["PCM_CRUISE_2"]["LOW_SPEED_LOCKOUT"] == 2
 
+    prev_pcm_acc_status = self.pcm_acc_status
     self.pcm_acc_status = cp.vl["PCM_CRUISE"]["CRUISE_STATE"]
     if self.CP.carFingerprint not in (NO_STOP_TIMER_CAR - TSS2_CAR):
       # ignore standstill state in certain vehicles, since pcm allows to restart with just an acceleration request
@@ -229,9 +230,6 @@ class CarState(CarStateBase):
 
     if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V and cp_cam is not None:
       self.lkas_hud = copy.copy(cp_cam.vl["LKAS_HUD"])
-
-    if self.auto_brake_hold:
-      self.pre_collision_2 = copy.copy(cp_cam.vl["PRE_COLLISION_2"])
 
     if self.CP.carFingerprint not in UNSUPPORTED_DSU_CAR:
       self.pcm_follow_distance = cp.vl["PCM_CRUISE_2"]["PCM_FOLLOW_DISTANCE"]
@@ -250,6 +248,16 @@ class CarState(CarStateBase):
 
         buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
 
+    if self.CP.carFingerprint in LEGACY_PRIUS_CAR and not self.has_SDSU:
+      prev_distance_button = self.distance_button
+      self.distance_button = cp_acc.vl["ACC_CONTROL"]["DISTANCE"]
+      buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+
+    if self.CP.carFingerprint in DISTANCE_BUTTON_CAR:
+      prev_distance_button = self.distance_button
+      self.distance_button = cp.vl["PCM_CRUISE_4"]["DISTANCE"]
+      buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+
     fp_ret = custom.StarPilotCarState.new_message()
 
     if self.has_SDSU and not self.has_can_filter:
@@ -259,8 +267,8 @@ class CarState(CarStateBase):
       buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
 
     buttonEvents += [
-      *create_button_events(self.pcm_acc_status == 9, False, {1: ButtonType.accelCruise}),
-      *create_button_events(self.pcm_acc_status == 10, False, {1: ButtonType.decelCruise}),
+      *create_button_events(self.pcm_acc_status == 9, prev_pcm_acc_status == 9, {1: ButtonType.accelCruise}),
+      *create_button_events(self.pcm_acc_status == 10, prev_pcm_acc_status == 10, {1: ButtonType.decelCruise}),
     ]
 
     fp_ret.dashboardSpeedLimit = calculate_speed_limit(cp_cam) if cp_cam is not None else 0
@@ -294,15 +302,27 @@ class CarState(CarStateBase):
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),
     ]
+    cam_messages = []
 
     if CP.enableGasInterceptorDEPRECATED:
       pt_messages.append(("GAS_SENSOR", 50))
+
+    if CP.carFingerprint in LEGACY_PRIUS_CAR:
+      pt_messages.append(("ACC_CONTROL", float('nan')))
+      if CP.flags & ToyotaFlags.DSU_BYPASS.value:
+        cam_messages.append(("ACC_CONTROL", float('nan')))
+
+    if CP.carFingerprint in DISTANCE_BUTTON_CAR:
+      pt_messages.append(("PCM_CRUISE_4", 1))
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
     }
 
-    if CP.carFingerprint in TSS2_CAR:
-      parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2)
+    # Retrofit (COROLLA_RETROFIT) has no camera on bus 2 (the panda mirrors bus 0 there), so an
+    # empty cam parser would lazy-load LKAS_HUD/RSA1 on first access, time out, and kill canValid.
+    # Every other platform keeps upstream's cam parser (TSS2 ACC, DSU_BYPASS ACC_CONTROL, HUD).
+    if CP.carFingerprint != CAR.TOYOTA_COROLLA_RETROFIT:
+      parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2)
 
     return parsers

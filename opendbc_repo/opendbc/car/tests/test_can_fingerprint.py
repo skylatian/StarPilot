@@ -2,9 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 from opendbc.car.can_definitions import CanData
-from opendbc.car.car_helpers import FRAME_FINGERPRINT, _apply_starpilot_access_policy, _get_gm_stored_candidate_fallback, can_fingerprint
+from opendbc.car.car_helpers import FRAME_FINGERPRINT, _apply_starpilot_access_policy, _get_gm_stored_candidate_fallback, _normalize_gm_suburban_camera_candidate, can_fingerprint
 from opendbc.car.fingerprints import _FINGERPRINTS as FINGERPRINTS
 from opendbc.car.gm.values import CAR as GM
+from opendbc.car.toyota.values import CAR as TOYOTA
 
 
 class TestCanFingerprint:
@@ -26,7 +27,10 @@ class TestCanFingerprint:
       fingerprint_iter = iter([can])
       car_fingerprint, finger = can_fingerprint(lambda **kwargs: [next(fingerprint_iter, [])])  # noqa: B023
 
-      if car_fingerprint is None and str(car_model).startswith(("BUICK_", "CADILLAC_", "CHEVROLET_", "GMC_", "HOLDEN_")):
+      if car_model == TOYOTA.TOYOTA_PRIUS_RETROFIT:
+        assert fingerprint == {}
+        assert car_fingerprint is None
+      elif car_fingerprint is None and str(car_model).startswith(("BUICK_", "CADILLAC_", "CHEVROLET_", "GMC_", "HOLDEN_")):
         assert _get_gm_stored_candidate_fallback(finger, str(car_model), None) is not None
       else:
         assert car_fingerprint == car_model
@@ -112,3 +116,14 @@ class TestCanFingerprint:
     candidate = _apply_starpilot_access_policy("CHEVROLET_VOLT_CC", SimpleNamespace(block_user=True))
 
     assert candidate == "CHEVROLET_VOLT_CC"
+
+  def test_gm_suburban_camera_variant_uses_vin_and_camera_bus_signature(self):
+    fingerprints = {
+      0: {190: 6, 201: 8, 209: 7, 211: 2, 241: 6, 304: 1, 320: 3},
+      2: {0x24b: 8, 0x64b: 8},
+    }
+
+    assert _normalize_gm_suburban_camera_candidate(None, fingerprints, "1GNSKJKJXKR148371") == "CHEVROLET_SUBURBAN_CAMERA"
+    assert _normalize_gm_suburban_camera_candidate("GMC_YUKON", fingerprints, "1GNSKJKJXKR148371") == "CHEVROLET_SUBURBAN_CAMERA"
+    assert _normalize_gm_suburban_camera_candidate(None, fingerprints, "1GNSKCKC5KR255194") is None
+    assert _normalize_gm_suburban_camera_candidate(None, {0: fingerprints[0], 2: {0x320: 3}}, "1GNSKJKJXKR148371") is None

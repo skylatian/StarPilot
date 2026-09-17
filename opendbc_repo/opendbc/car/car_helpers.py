@@ -10,6 +10,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.structs import CarParams, CarParamsT
 from opendbc.car.fingerprints import eliminate_incompatible_cars, all_legacy_fingerprint_cars
 from opendbc.car.fw_versions import ObdCallback, get_fw_versions_ordered, get_present_ecus, match_fw_to_car
+from opendbc.car.hyundai.values import kia_ray_ev_vin
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.toyota.values import ToyotaSafetyFlags
 from opendbc.car.values import BRANDS
@@ -55,6 +56,20 @@ GM_CANDIDATE_PREFIXES = ("CHEVROLET_", "GMC_", "CADILLAC_", "BUICK_", "HOLDEN_")
 GM_CORE_FINGERPRINT_MSGS = frozenset((190, 201, 209, 211, 241))
 GM_CAMERA_BUS = 2
 GM_VOLT_CAMERA_MSG = 0x320
+GM_SUBURBAN_CAMERA_VIN_PREFIX = "1GNSKJKJ"
+GM_SUBURBAN_CAMERA_PT_SIGNATURE = {
+  190: 6,
+  201: 8,
+  209: 7,
+  211: 2,
+  241: 6,
+  304: 1,
+  320: 3,
+}
+GM_CAMERA_DIAGNOSTIC_MESSAGES = {
+  0x24b: 8,
+  0x64b: 8,
+}
 
 
 def _normalize_forced_candidate(candidate: str | None) -> str | None:
@@ -66,7 +81,7 @@ def _normalize_forced_candidate(candidate: str | None) -> str | None:
   return LEGACY_FORCED_CANDIDATE_MAP.get(candidate, candidate)
 
 
-def _normalize_gm_bolt_candidate(candidate: str | None, fingerprints: dict[int, dict]) -> str | None:
+def _normalize_gm_bolt_candidate(candidate: str | None, fingerprints: dict[int, dict], vin: str | None = None) -> str | None:
   """
   Normalize ambiguous/mismatched Bolt candidates using robust PT message signatures.
   This guards against occasional wrong variant selection causing persistent canError.
@@ -79,7 +94,22 @@ def _normalize_gm_bolt_candidate(candidate: str | None, fingerprints: dict[int, 
   msg_304_len = pt.get(304)  # 8 on 2017 Gen1, 1 on 2018-2021 Gen1
   has_pedal = 513 in pt
 
+  # The 2022-23 Bolt ACC, pedal, and CC variants share the same FPv1
+  # fingerprint. Recover an ambiguous match when the observed traffic
+  # matches the Bolt family and the VIN confirms model year 2022/2023.
+  bolt_2022_2023_signature = (
+    pt.get(190) == 7 and
+    msg_211_len == 3 and
+    pt.get(566) == 8 and
+    pt.get(458) == 5
+  )
+  vin_year = vin[9] if isinstance(vin, str) and len(vin) > 9 else None
+
+  # VIN model-year codes: N=2022, P=2023.
+  if candidate is None and bolt_2022_2023_signature and vin_year in ("N", "P"):
+    return "CHEVROLET_BOLT_ACC_2022_2023_PEDAL" if has_pedal else "CHEVROLET_BOLT_ACC_2022_2023"
   # If detection failed entirely but the signature is clearly Bolt, recover to a sane default.
+
   if candidate is None and 170 in pt and 188 in pt and msg_211_len in (2, 3):
     if msg_211_len == 3:
       return "CHEVROLET_BOLT_ACC_2022_2023_PEDAL" if has_pedal else "CHEVROLET_BOLT_ACC_2022_2023"
@@ -134,6 +164,24 @@ def _normalize_gm_volt_candidate(candidate: str | None, fingerprints: dict[int, 
     return "CHEVROLET_VOLT_CAMERA"
 
   return candidate
+
+
+def _normalize_gm_suburban_camera_candidate(candidate: str | None, fingerprints: dict[int, dict], vin: str | None) -> str | None:
+  """Resolve the 2019 Suburban camera-harness variant when CAN is shared with Yukon."""
+  if candidate not in (None, "GMC_YUKON", "GMC_YUKON_CC"):
+    return candidate
+
+  if not isinstance(vin, str) or not vin.startswith(GM_SUBURBAN_CAMERA_VIN_PREFIX):
+    return candidate
+
+  powertrain = fingerprints.get(0, {})
+  camera = fingerprints.get(GM_CAMERA_BUS, {})
+  if not all(powertrain.get(address) == length for address, length in GM_SUBURBAN_CAMERA_PT_SIGNATURE.items()):
+    return candidate
+  if not all(camera.get(address) == length for address, length in GM_CAMERA_DIAGNOSTIC_MESSAGES.items()):
+    return candidate
+
+  return "CHEVROLET_SUBURBAN_CAMERA"
 
 
 def _is_gm_candidate(candidate: str | None) -> bool:
@@ -231,8 +279,13 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
       set_obd_multiplexing(True)
       # VIN query only reliably works through OBDII
       vin_rx_addr, vin_rx_bus, vin = get_vin(can_recv, can_send, (0, 1))
-      ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing, num_pandas=num_pandas)
-      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs, num_pandas=num_pandas)
+      skip_fw_buses = {1} if kia_ray_ev_vin(vin) else set()
+      if skip_fw_buses:
+        carlog.warning("Kia Ray EV: skipping CAN1 firmware queries")
+      ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing,
+                                      num_pandas=num_pandas, skip_buses=skip_fw_buses)
+      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs,
+                                       num_pandas=num_pandas, skip_buses=skip_fw_buses)
       cached = False
 
     exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin)
@@ -279,12 +332,16 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
 def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback, alpha_long_allowed: bool,
             is_release: bool, params: Params, num_pandas: int = 1, cached_params: CarParamsT | None = None, starpilot_toggles: SimpleNamespace = None):
   candidate, fingerprints, vin, car_fw, source, exact_match = fingerprint(can_recv, can_send, set_obd_multiplexing, num_pandas, cached_params)
-  candidate = _normalize_gm_bolt_candidate(candidate, fingerprints)
+  candidate = _normalize_gm_bolt_candidate(candidate, fingerprints, vin)
   candidate = _normalize_gm_volt_candidate(candidate, fingerprints)
   candidate = _normalize_forced_candidate(candidate)
   fingerprinted_candidate = candidate
   stored_candidate = _normalize_forced_candidate(params.get("CarModel"))
   cached_candidate = _normalize_forced_candidate(getattr(cached_params, "carFingerprint", None))
+
+  if candidate is None and stored_candidate is None and cached_candidate is None:
+    candidate = _normalize_gm_suburban_camera_candidate(candidate, fingerprints, vin)
+    fingerprinted_candidate = candidate
 
   if candidate is None:
     gm_fallback_candidate = _get_gm_stored_candidate_fallback(fingerprints, stored_candidate, cached_candidate)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -9,6 +11,14 @@ from openpilot.starpilot.common.experimental_state import (
   next_manual_ce_status,
   sync_manual_ce_state,
 )
+
+
+BRAKE_WHEEL_COLOR = rl.Color(255, 0, 0, 255)
+
+
+def get_wheel_tint(brake_pressed: bool, mode_tint: rl.Color | None, brake_status_enabled: bool,
+                   brake_lights: bool = False) -> rl.Color | None:
+  return BRAKE_WHEEL_COLOR if brake_status_enabled and (brake_pressed or brake_lights) else mode_tint
 
 
 class ExpButton(Widget):
@@ -25,6 +35,7 @@ class ExpButton(Widget):
 
     self._white_color: rl.Color = rl.Color(255, 255, 255, 255)
     self._black_bg: rl.Color = rl.Color(0, 0, 0, 166)
+    self.wheel_tint: rl.Color | None = None
     self._txt_wheel: rl.Texture = gui_app.texture('icons/chffr_wheel.png', icon_size, icon_size)
     self._txt_exp: rl.Texture = gui_app.texture('icons/experimental.png', icon_size, icon_size)
     self._rect = rl.Rectangle(0, 0, button_size, button_size)
@@ -97,17 +108,38 @@ class ExpButton(Widget):
 
     self._white_color.a = 180 if self.is_pressed or not self._engageable else 255
 
-    texture = self._txt_exp if self._held_or_actual_mode() else self._txt_wheel
+    exp_mode = self._held_or_actual_mode()
+    texture = self._txt_exp if exp_mode else self._txt_wheel
+    color = self._white_color
+    tint = None
+    starpilot_car_state = ui_state.sm["starpilotCarState"] if getattr(ui_state.sm, "valid", {}).get("starpilotCarState", False) else None
+    wheel_tint = get_wheel_tint(
+      getattr(ui_state.sm["carState"], "brakePressed", False),
+      self.wheel_tint,
+      self._params.get_bool("ShowBrakeStatus"),
+      getattr(starpilot_car_state, "brakeLights", False),
+    )
+    if wheel_tint is not None:
+      tint = rl.Color(wheel_tint.r, wheel_tint.g, wheel_tint.b, self._white_color.a)
+
     rl.draw_circle(center_x, center_y, self._rect.width / 2, self._bg_color)
+    if tint is not None:
+      if exp_mode:
+        # The experimental icon is already colored, so show the lateral mode
+        # around it instead of obscuring the icon with a texture tint.
+        radius = self._rect.width / 2
+        rl.draw_ring(rl.Vector2(center_x, center_y), radius - 8, radius, 0, 360, 0, tint)
+      else:
+        color = tint
 
     rotating_wheel = ui_state.starpilot_toggles.get("rotating_wheel", False) or self._params.get_bool("RotatingWheel")
     if texture == self._txt_wheel and rotating_wheel:
       source_rect = rl.Rectangle(0, 0, texture.width, texture.height)
       dest_rect = rl.Rectangle(center_x, center_y, texture.width, texture.height)
       origin = rl.Vector2(texture.width / 2, texture.height / 2)
-      rl.draw_texture_pro(texture, source_rect, dest_rect, origin, -self._steer_angle_filter.x, self._white_color)
+      rl.draw_texture_pro(texture, source_rect, dest_rect, origin, -self._steer_angle_filter.x, color)
     else:
-      rl.draw_texture_ex(texture, rl.Vector2(center_x - texture.width / 2, center_y - texture.height / 2), 0.0, 1.0, self._white_color)
+      rl.draw_texture_ex(texture, rl.Vector2(center_x - texture.width / 2, center_y - texture.height / 2), 0.0, 1.0, color)
 
   def _held_or_actual_mode(self):
     now = time.monotonic()
@@ -127,4 +159,4 @@ class ExpButton(Widget):
       return False
 
     # Mirror exp mode toggle using persistent car params
-    return ui_state.has_longitudinal_control
+    return ui_state.experimental_mode_available

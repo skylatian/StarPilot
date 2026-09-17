@@ -3,6 +3,7 @@ import numpy as np
 from opendbc.car.gm.values import CAR, GMFlags
 from opendbc.car.subaru.values import CAR as SUBARU_CAR
 from opendbc.car.toyota.values import CAR as TOYOTA_CAR
+from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN_CAR
 from openpilot.common.realtime import DT_CTRL
 from openpilot.starpilot.common.testing_grounds import testing_ground
 
@@ -27,15 +28,19 @@ GM_TRUCK_TARGET_FILTER_DROP_BYPASS = 0.45
 TOYOTA_SIENNA_TARGET_FILTER_MIN_SPEED = 12.0
 TOYOTA_SIENNA_TARGET_FILTER_UP_TAU = 0.32
 TOYOTA_SIENNA_TARGET_FILTER_DOWN_TAU = 0.24
-TOYOTA_SIENNA_LOW_SPEED_ACCEL_UP_TAU = 0.35
+TOYOTA_SIENNA_LOW_SPEED_ACCEL_UP_TAU = 0.50
 TOYOTA_SIENNA_TARGET_FILTER_BRAKE_BYPASS = -0.75
 TOYOTA_SIENNA_TARGET_FILTER_DROP_BYPASS = 0.65
-TOYOTA_SIENNA_COMFORT_FILTER_MIN_SPEED = 5.0
-TOYOTA_SIENNA_COMFORT_FILTER_MIN_DISTANCE = 10.0
+TOYOTA_SIENNA_COMFORT_FILTER_MIN_SPEED = 1.0
+TOYOTA_SIENNA_COMFORT_FILTER_MIN_DISTANCE = 7.0
 TOYOTA_SIENNA_COMFORT_FILTER_MIN_TTC = 4.5
 TOYOTA_SIENNA_COMFORT_FILTER_MAX_CLOSING_SPEED = 4.0
 TOYOTA_SIENNA_COMFORT_FILTER_MAX_LEAD_BRAKE = 2.5
 TOYOTA_SIENNA_COMFORT_FILTER_BRAKE_BYPASS = -2.5
+TOYOTA_SIENNA_LEAD_DEPARTURE_MAX_SPEED = 8.0
+TOYOTA_SIENNA_LEAD_DEPARTURE_MIN_SPEED_DELTA = 0.25
+TOYOTA_SIENNA_LEAD_DEPARTURE_ACCEL_CAP_BP = [0.0, 1.0, 3.0, 6.0, TOYOTA_SIENNA_LEAD_DEPARTURE_MAX_SPEED]
+TOYOTA_SIENNA_LEAD_DEPARTURE_ACCEL_CAP_V = [1.0, 1.15, 1.35, 1.55, 1.70]
 TOYOTA_COROLLA_TARGET_FILTER_MAX_SPEED = 3.0
 TOYOTA_COROLLA_TARGET_FILTER_UP_TAU = 0.30
 TOYOTA_COROLLA_TARGET_FILTER_DOWN_TAU = 0.18
@@ -52,6 +57,19 @@ HYUNDAI_ELANTRA_STOPPED_LEAD_MAX_EGO_SPEED = 2.0
 HYUNDAI_ELANTRA_STOPPED_LEAD_MAX_SPEED = 0.5
 HYUNDAI_ELANTRA_STOPPED_LEAD_MIN_CLOSING_SPEED = 0.25
 HYUNDAI_ELANTRA_STOPPED_LEAD_MAX_CREEP_ACCEL = 0.05
+HYUNDAI_ELANTRA_FINAL_STOP_MAX_SPEED = 1.0
+HYUNDAI_ELANTRA_FINAL_STOP_CAP_BP = [0.0, 0.2, 0.5, HYUNDAI_ELANTRA_FINAL_STOP_MAX_SPEED]
+HYUNDAI_ELANTRA_FINAL_STOP_CAP_V = [-0.20, -0.25, -0.35, -0.55]
+HYUNDAI_ELANTRA_FINAL_STOP_URGENCY_MARGIN = 0.45
+HYUNDAI_SANTA_FE_FINAL_STOP_MAX_SPEED = 1.0
+HYUNDAI_SANTA_FE_FINAL_STOP_CAP_BP = [0.0, 0.2, 0.5, HYUNDAI_SANTA_FE_FINAL_STOP_MAX_SPEED]
+HYUNDAI_SANTA_FE_FINAL_STOP_CAP_V = [-0.25, -0.30, -0.50, -0.90]
+VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_SPEED = 4.5
+VOLKSWAGEN_TAOS_COMFORT_STOP_MIN_DISTANCE = 5.0
+VOLKSWAGEN_TAOS_COMFORT_STOP_MIN_TTC = 4.0
+VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_CLOSING_SPEED = 1.5
+VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_BP = [0.0, 0.5, 1.0, 2.0, 3.5, VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_SPEED]
+VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_V = [-0.45, -0.55, -0.65, -0.80, -0.95, -1.10]
 
 
 def get_bolt_acc_pedal_friction_bias(output_accel, a_target, v_ego):
@@ -116,6 +134,13 @@ class LongControlVehicleTuning:
       getattr(CP, "carFingerprint", None) in (CAR.CHEVROLET_SILVERADO, CAR.CHEVROLET_SILVERADO_CC) and
       not CP.enableGasInterceptorDEPRECATED
     )
+    self.is_toyota_sienna = bool(
+      CP.brand == "toyota" and
+      str(getattr(CP, "carFingerprint", "")) in (
+        str(TOYOTA_CAR.TOYOTA_SIENNA),
+        str(TOYOTA_CAR.TOYOTA_SIENNA_4TH_GEN),
+      )
+    )
     self.is_toyota_sienna_4g = bool(
       CP.brand == "toyota" and
       str(getattr(CP, "carFingerprint", "")) == str(TOYOTA_CAR.TOYOTA_SIENNA_4TH_GEN)
@@ -130,6 +155,13 @@ class LongControlVehicleTuning:
     )
     self.is_hyundai_elantra_2021 = bool(
       CP.brand == "hyundai" and str(getattr(CP, "carFingerprint", "")) == "HYUNDAI_ELANTRA_2021"
+    )
+    self.is_hyundai_santa_fe_2022 = bool(
+      CP.brand == "hyundai" and str(getattr(CP, "carFingerprint", "")) == "HYUNDAI_SANTA_FE_2022"
+    )
+    self.is_volkswagen_taos = bool(
+      CP.brand == "volkswagen" and
+      str(getattr(CP, "carFingerprint", "")) == str(VOLKSWAGEN_CAR.VOLKSWAGEN_TAOS_MK1)
     )
     self.is_bolt_acc_pedal_friction_car = bool(
       CP.brand == "gm" and
@@ -151,8 +183,54 @@ class LongControlVehicleTuning:
     self.bolt_start_handoff_frames = 0
     self.subaru_stop_release_frames = 0
 
-  def shape_stopping_accel(self, output_accel, a_target, should_stop, v_ego, has_lead, stop_accel):
-    """Release a stale hard lead brake once the stop target has eased."""
+  def shape_stopping_accel(self, output_accel, a_target, should_stop, v_ego, has_lead, stop_accel, leads=None):
+    """Shape low-speed stop braking without overriding urgent targets."""
+    if self.is_volkswagen_taos and should_stop and has_lead and v_ego < VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_SPEED:
+      comfort_lead = next((
+        lead for lead in (leads or ())
+        if bool(getattr(lead, "status", False)) and
+        abs(float(getattr(lead, "yRel", 0.0))) <= 1.75 and
+        float(getattr(lead, "dRel", 0.0)) > 0.0
+      ), None)
+      if comfort_lead is not None:
+        lead_distance = float(getattr(comfort_lead, "dRel", 0.0))
+        lead_speed = max(0.0, float(getattr(comfort_lead, "vLead", 0.0)))
+        closing_speed = max(0.0, float(v_ego) - lead_speed)
+        ttc = lead_distance / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
+        if (
+          lead_distance >= VOLKSWAGEN_TAOS_COMFORT_STOP_MIN_DISTANCE and
+          ttc >= VOLKSWAGEN_TAOS_COMFORT_STOP_MIN_TTC and
+          closing_speed <= VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_CLOSING_SPEED
+        ):
+          comfort_cap = float(interp(
+            v_ego,
+            VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_BP,
+            VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_V,
+          ))
+          return max(float(output_accel), comfort_cap)
+
+    if (
+      self.is_hyundai_elantra_2021 and
+      should_stop and
+      v_ego < HYUNDAI_ELANTRA_FINAL_STOP_MAX_SPEED and
+      a_target <= 0.1
+    ):
+      final_stop_cap = float(interp(
+        v_ego,
+        HYUNDAI_ELANTRA_FINAL_STOP_CAP_BP,
+        HYUNDAI_ELANTRA_FINAL_STOP_CAP_V,
+      ))
+      if a_target > final_stop_cap - HYUNDAI_ELANTRA_FINAL_STOP_URGENCY_MARGIN:
+        return max(float(output_accel), final_stop_cap)
+
+    if (
+      self.is_hyundai_santa_fe_2022 and
+      v_ego <= HYUNDAI_SANTA_FE_FINAL_STOP_MAX_SPEED and
+      a_target <= 0.1
+    ):
+      final_stop_cap = float(interp(v_ego, HYUNDAI_SANTA_FE_FINAL_STOP_CAP_BP, HYUNDAI_SANTA_FE_FINAL_STOP_CAP_V))
+      return max(float(output_accel), final_stop_cap)
+
     if (
       not self.is_hyundai_elantra_2021 or
       not has_lead or not should_stop or v_ego > 2.0 or
@@ -250,7 +328,7 @@ class LongControlVehicleTuning:
 
   def shape_toyota_sienna_accel_target(self, a_target, v_ego, should_stop, leads=None):
     """Smooth Sienna lead braking only while there is still comfortable stopping room."""
-    if not self.is_toyota_sienna_4g or should_stop:
+    if not self.is_toyota_sienna or should_stop:
       self.toyota_sienna_target_filter_initialized = False
       return a_target
 
@@ -281,7 +359,9 @@ class LongControlVehicleTuning:
 
     if v_ego < TOYOTA_SIENNA_TARGET_FILTER_MIN_SPEED and not comfort_filter_active:
       if a_target > 0.0:
-        if not self.toyota_sienna_target_filter_initialized or self.toyota_sienna_filtered_a_target < 0.0:
+        if not self.toyota_sienna_target_filter_initialized or (
+          self.toyota_sienna_filtered_a_target < 0.0 and comfort_lead is None
+        ):
           self.toyota_sienna_filtered_a_target = 0.0
           self.toyota_sienna_target_filter_initialized = True
         alpha = DT_CTRL / (TOYOTA_SIENNA_LOW_SPEED_ACCEL_UP_TAU + DT_CTRL)
@@ -289,6 +369,11 @@ class LongControlVehicleTuning:
           float(a_target) - self.toyota_sienna_filtered_a_target
         )
         return self.toyota_sienna_filtered_a_target
+
+      if comfort_lead is not None:
+        self.toyota_sienna_filtered_a_target = float(a_target)
+        self.toyota_sienna_target_filter_initialized = True
+        return float(a_target)
 
       self.toyota_sienna_target_filter_initialized = False
       return a_target
@@ -314,6 +399,33 @@ class LongControlVehicleTuning:
     alpha = DT_CTRL / (tau + DT_CTRL)
     self.toyota_sienna_filtered_a_target += alpha * (float(a_target) - self.toyota_sienna_filtered_a_target)
     return self.toyota_sienna_filtered_a_target
+
+  def cap_toyota_sienna_lead_departure_accel(self, a_target, v_ego, leads=None):
+    """Keep a nearby departing lead from producing a low-speed launch kick."""
+    if (
+      not self.is_toyota_sienna_4g or
+      a_target <= 0.0 or
+      v_ego >= TOYOTA_SIENNA_LEAD_DEPARTURE_MAX_SPEED or
+      not leads
+    ):
+      return a_target
+
+    departing_lead = next((
+      lead for lead in leads
+      if bool(getattr(lead, "status", False)) and
+      abs(float(getattr(lead, "yRel", 0.0))) <= 1.75 and
+      0.0 < float(getattr(lead, "dRel", 0.0)) <= 30.0 and
+      float(getattr(lead, "vLead", 0.0)) > v_ego + TOYOTA_SIENNA_LEAD_DEPARTURE_MIN_SPEED_DELTA
+    ), None)
+    if departing_lead is None:
+      return a_target
+
+    accel_cap = float(interp(
+      v_ego,
+      TOYOTA_SIENNA_LEAD_DEPARTURE_ACCEL_CAP_BP,
+      TOYOTA_SIENNA_LEAD_DEPARTURE_ACCEL_CAP_V,
+    ))
+    return min(float(a_target), accel_cap)
 
   def shape_toyota_corolla_accel_target(self, a_target, v_ego, should_stop, last_output_accel):
     """Smooth low-speed Corolla TSS2 stop releases without delaying hard braking."""

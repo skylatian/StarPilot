@@ -265,6 +265,15 @@ def below_steer_speed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.S
     Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 1.5)
 
 
+def brake_hold_alert(CP, *_args) -> Alert:
+  alert_text = "Car in Auto Hold mode" if CP.brand == "gm" else "Press Resume to Exit Brake Hold"
+  return Alert(
+    alert_text,
+    "",
+    AlertStatus.userPrompt, AlertSize.small,
+    Priority.LOW, VisualAlert.none, AudibleAlert.none, .2)
+
+
 def speed_limit_changed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, starpilot_toggles: SimpleNamespace) -> Alert:
   return Alert(
     "Speed limit changed",
@@ -521,6 +530,17 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.WARNING: longitudinal_maneuver_alert,
     ET.PERMANENT: NormalPermanentAlert("Longitudinal Maneuver Mode",
                                        "Ensure road ahead is clear"),
+  },
+
+  EventName.bigModelLoading: {
+    ET.NO_ENTRY: NoEntryAlert("Big Model Loading"),
+  },
+
+  EventName.bigModelFailed: {
+    ET.SOFT_DISABLE: soft_disable_alert("Big Model Failed"),
+    ET.PERMANENT: NormalPermanentAlert("Big Model Failed",
+                                       "Restart the car to retry,\nsmall model is still available",
+                                       duration=20.),
   },
 
   EventName.selfdriveInitializing: {
@@ -791,11 +811,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.brakeHold: {
-    ET.WARNING: Alert(
-      "Press Resume to Exit Brake Hold",
-      "",
-      AlertStatus.userPrompt, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+    ET.WARNING: brake_hold_alert,
   },
 
   EventName.parkBrake: {

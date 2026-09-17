@@ -33,14 +33,31 @@ from openpilot.starpilot.common.favorite_slots import (
   FAVORITE_ACTION_ACCEL_COUNTER,
   FAVORITE_ACTION_DECEL_COUNTER,
 )
-from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles, update_starpilot_toggles
+from openpilot.starpilot.common.starpilot_variables import always_on_lateral_available, get_starpilot_toggles, update_starpilot_toggles
+from openpilot.starpilot.common.lateral_only_experimental import experimental_mode_available
 from openpilot.starpilot.controls.starpilot_card import StarPilotCard
 
 REPLAY = "REPLAY" in os.environ
 OPENPILOT_LEAD_MIN_DISTANCE = 0.1
 REDNECK_DECREASE_LOOKAHEAD_POINTS = 10
-
+SLC_SOURCE_NONE = "None"
 EventName = log.OnroadEvent.EventName
+
+
+def _build_starpilot_car_control(steering_limit_info: dict[str, bool | float | int] | None, valid: bool):
+  message = messaging.new_message('starpilotCarControl')
+  message.valid = valid
+  if steering_limit_info is not None:
+    info = message.starpilotCarControl.steeringLimitInfo
+    info.valid = bool(steering_limit_info.get("valid", False))
+    info.modelLimitErrorDeg = float(steering_limit_info.get("modelLimitErrorDeg", 0.0))
+    info.resumeLimitErrorDeg = float(steering_limit_info.get("resumeLimitErrorDeg", 0.0))
+    info.cooperativeLimitErrorDeg = float(steering_limit_info.get("cooperativeLimitErrorDeg", 0.0))
+    info.cooperativeOffsetDeg = float(steering_limit_info.get("cooperativeOffsetDeg", 0.0))
+    info.monoTime = int(steering_limit_info.get("monoTime", 0))
+    info.combinedLimitErrorDeg = float(steering_limit_info.get("combinedLimitErrorDeg", 0.0))
+  return message
+
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
@@ -85,15 +102,20 @@ class Car:
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
     self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'radarState', 'longitudinalPlan'])
-    self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks'])
+    self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks', 'starpilotCarControl'])
+    self.gps_pm = None
 
     self.can_rcv_cum_timeout_counter = 0
+    self._last_car_gps_timestamp_nanos = 0
+    self._last_car_gps_received_monotonic = 0.0
+    self._last_car_gps_publish_monotonic = 0.0
 
     self.CC_prev = car.CarControl.new_message()
     self.CS_prev = car.CarState.new_message()
     self.initialized_prev = False
 
     self.last_actuators_output = structs.CarControl.Actuators()
+    self.last_steering_limit_info: dict[str, bool | float | int] | None = None
 
     self.params = Params()
     self.params_memory = Params(memory=True)
@@ -135,7 +157,15 @@ class Car:
       self.CI, self.CP, self.FPCP = CI, CI.CP, CI.FPCP
       self.RI = RI
 
+    car_gps_supported = bool(getattr(self.CI.CS, 'car_gps_supported', False))
+    self.params.put_bool("CarGpsAvailable", car_gps_supported)
+    if car_gps_supported:
+      self.gps_pm = messaging.PubMaster(['gpsLocationExternal'])
+
+    aol_available = always_on_lateral_available(self.CP)
     interface_alternative_experience = self.CP.alternativeExperience
+    if not aol_available:
+      interface_alternative_experience &= ~ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
     self.CP.alternativeExperience = interface_alternative_experience
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle
@@ -190,22 +220,28 @@ class Car:
 
     self.mock_carstate = MockCarState()
     self.v_cruise_helper = VCruiseHelper(self.CP, self.FPCP)
-    self.redneck_cruise = RedneckCruise(self.CP, self.FPCP) if self.CP.brand == "hyundai" and self.FPCP.redneckCruiseAvailable and not self.FPCP.pcmCruiseSpeed else None
+    self.redneck_cruise = RedneckCruise(self.CP, self.FPCP) if self.CP.brand in ("hyundai", "subaru") and \
+      self.FPCP.redneckCruiseAvailable and not self.FPCP.pcmCruiseSpeed else None
 
     self.is_metric = self.params.get_bool("IsMetric")
     self.safe_mode = self.params.get_bool("SafeMode")
-    self.experimental_mode = self.params.get_bool("ExperimentalMode") and not self.safe_mode
+    self.experimental_mode = (
+      self.params.get_bool("ExperimentalMode") and
+      experimental_mode_available(self.CP) and
+      not self.safe_mode
+    )
 
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.resume_prev_button = False
-
     self.starpilot_toggles = get_starpilot_toggles(read_persisted_force_params=True)
 
     self.FPCP.alternativeExperience |= interface_alternative_experience
+    if not aol_available:
+      self.FPCP.alternativeExperience &= ~ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
 
-    if self.starpilot_toggles.always_on_lateral:
+    if self.starpilot_toggles.always_on_lateral and aol_available:
       self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
     if getattr(self.starpilot_toggles, "remap_cancel_to_distance", False):
@@ -220,7 +256,10 @@ class Car:
 
     self.starpilot_card = StarPilotCard(self.CP, self.FPCP)
 
-    self.sm = self.sm.extend(['starpilotOnroadEvents', 'starpilotPlan', 'starpilotSelfdriveState', 'liveCalibration', 'selfdriveState'])
+    starpilot_services = ['starpilotOnroadEvents', 'starpilotPlan', 'starpilotSelfdriveState', 'liveCalibration', 'selfdriveState']
+    if self.CP.brand == "rivian":
+      starpilot_services.append('liveParameters')
+    self.sm = self.sm.extend(starpilot_services)
     self.pm = self.pm.extend(['starpilotCarState'])
 
   def _inject_favorite_virtual_cruise_events(self, CS: car.CarState) -> None:
@@ -275,14 +314,19 @@ class Car:
       self.CP.openpilotLongitudinalControl and not self.CP.pcmCruise
     )
     if not preap_software_cruise:
-      speed_limit_confirmation_pending = is_speed_limit_confirmation_pending(self.sm['starpilotPlan'])
+      starpilot_plan = self.sm['starpilotPlan']
+      speed_limit_confirmation_pending = is_speed_limit_confirmation_pending(starpilot_plan)
+      slc_target_with_offset = 0.0
+      if self.starpilot_toggles.speed_limit_controller and starpilot_plan.slcSpeedLimitSource != SLC_SOURCE_NONE:
+        slc_target_with_offset = starpilot_plan.slcSpeedLimit + starpilot_plan.slcSpeedLimitOffset
       self.v_cruise_helper.update_v_cruise(
         CS,
         self.sm['carControl'].enabled,
         self.is_metric,
         speed_limit_confirmation_pending,
         self.starpilot_toggles,
-        FPCS,
+        starpilot_car_state=FPCS,
+        slc_target_with_offset=slc_target_with_offset,
       )
     else:
       preap_v_cruise_kph = float(CS.cruiseState.speed * CV.MS_TO_KPH)
@@ -320,11 +364,41 @@ class Car:
       self.resume_prev_button = False
 
     FPCS = self.starpilot_card.update(CS, FPCS, self.sm, self.starpilot_toggles)
-
     return CS, RD, FPCS
 
   def state_publish(self, CS: car.CarState, RD: structs.RadarDataT | None, FPCS: custom.StarPilotCarState):
     """carState and carParams publish loop"""
+
+    get_car_gps = getattr(self.CI.CS, 'get_car_gps', None)
+    car_gps = get_car_gps() if get_car_gps is not None else None
+    now = time.monotonic()
+    if car_gps is not None and car_gps['timestamp_nanos'] > self._last_car_gps_timestamp_nanos:
+      self._last_car_gps_timestamp_nanos = car_gps['timestamp_nanos']
+      self._last_car_gps_received_monotonic = now
+
+    if car_gps is not None and self._last_car_gps_received_monotonic > 0.0 and \
+        now - self._last_car_gps_received_monotonic <= 2.5 and \
+        now - self._last_car_gps_publish_monotonic >= 0.2:
+      gps_send = messaging.new_message('gpsLocationExternal', valid=True)
+      gps = gps_send.gpsLocationExternal
+      gps.flags = 0
+      gps.latitude = car_gps['latitude']
+      gps.longitude = car_gps['longitude']
+      gps.altitude = car_gps['altitude']
+      gps.speed = car_gps['speed']
+      gps.bearingDeg = car_gps['bearingDeg']
+      gps.horizontalAccuracy = car_gps['horizontalAccuracy']
+      gps.unixTimestampMillis = car_gps['unixTimestampMillis']
+      gps.source = log.GpsLocationData.SensorSource.car
+      gps.vNED = car_gps['vNED']
+      gps.verticalAccuracy = car_gps['verticalAccuracy']
+      gps.bearingAccuracyDeg = car_gps['bearingAccuracyDeg']
+      gps.speedAccuracy = car_gps['speedAccuracy']
+      gps.hasFix = car_gps['hasFix']
+      gps.satelliteCount = car_gps['satelliteCount']
+      assert self.gps_pm is not None
+      self.gps_pm.send('gpsLocationExternal', gps_send)
+      self._last_car_gps_publish_monotonic = now
 
     # carParams - logged every 50 seconds (> 1 per segment)
     if self.sm.frame % int(50. / DT_CTRL) == 0:
@@ -338,6 +412,12 @@ class Car:
     co_send.valid = self.sm.all_checks(['carControl'])
     co_send.carOutput.actuatorsOutput = self.last_actuators_output
     self.pm.send('carOutput', co_send)
+
+    starpilot_control_send = _build_starpilot_car_control(
+      self.last_steering_limit_info,
+      CS.canValid and self.sm.all_checks(['carControl']),
+    )
+    self.pm.send('starpilotCarControl', starpilot_control_send)
 
     # kick off controlsd step while we actuate the latest carControl packet
     cs_send = messaging.new_message('carState')
@@ -388,15 +468,31 @@ class Car:
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self._update_redneck_cruise(CS, CC)
       self._update_openpilot_lead_state(CC)
+      if self.CP.brand == "rivian" and self.sm.all_checks(['liveParameters']) and hasattr(self.CI.CC, 'update_live_params'):
+        live_params = self.sm['liveParameters']
+        self.CI.CC.update_live_params(live_params.roll, live_params.angleOffsetDeg,
+                                      live_params.stiffnessFactor, live_params.steerRatio)
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, self.starpilot_toggles)
+      get_steering_limit_info = getattr(self.CI.CC, "get_steering_limit_info", None)
+      self.last_steering_limit_info = get_steering_limit_info() if get_steering_limit_info is not None else None
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
 
   def _update_openpilot_lead_state(self, CC: car.CarControl) -> None:
     lead_visible = bool(CC.hudControl.leadVisible)
+    longitudinal_adjustment_active = lead_visible
     lead_distance = 0.0
     lead_rel_speed = 0.0
+
+    if self.sm.seen['starpilotPlan'] and self.sm.valid['starpilotPlan']:
+      longitudinal_adjustment_active = bool(self.sm['starpilotPlan'].trackingLead)
+
+    if self.sm.seen['longitudinalPlan'] and self.sm.valid['longitudinalPlan']:
+      longitudinal_plan = self.sm['longitudinalPlan']
+      longitudinal_adjustment_active |= bool(
+        longitudinal_plan.shouldStop or str(longitudinal_plan.longitudinalPlanSource) != "cruise"
+      )
 
     if self.sm.seen['radarState'] and self.sm.valid['radarState']:
       lead = self.sm['radarState'].leadOne
@@ -412,6 +508,7 @@ class Car:
     self.CI.CS.openpilot_lead_visible = lead_visible
     self.CI.CS.openpilot_lead_distance = lead_distance
     self.CI.CS.openpilot_lead_rel_speed = lead_rel_speed
+    self.CI.CS.openpilot_longitudinal_adjustment_active = longitudinal_adjustment_active
 
   def _update_redneck_cruise(self, CS: car.CarState, CC: car.CarControl) -> None:
     if self.redneck_cruise is None:
@@ -431,10 +528,7 @@ class Car:
       if self.starpilot_toggles.speed_limit_controller:
         overridden_speed = float(starpilot_plan.slcOverriddenSpeed)
         slc_limit = float(starpilot_plan.slcSpeedLimit) + float(starpilot_plan.slcSpeedLimitOffset)
-        allow_lower_override = (
-          getattr(self.starpilot_toggles, "redneck_cruise", False) and
-          getattr(self.starpilot_toggles, "speed_limit_controller_override_set_speed", False)
-        )
+        allow_lower_override = getattr(self.starpilot_toggles, "redneck_cruise", False)
         slc_target_speed = overridden_speed if allow_lower_override and overridden_speed > 0 else max(overridden_speed, slc_limit)
 
     # Use acceleration projection only when SLC has no resolved target.
@@ -496,7 +590,11 @@ class Car:
     while not evt.is_set():
       self.safe_mode = self.params.get_bool("SafeMode")
       self.is_metric = self.params.get_bool("IsMetric")
-      self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl and not self.safe_mode
+      self.experimental_mode = (
+        self.params.get_bool("ExperimentalMode") and
+        experimental_mode_available(self.CP) and
+        not self.safe_mode
+      )
       time.sleep(0.1)
 
   def card_thread(self):

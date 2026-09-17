@@ -1,5 +1,6 @@
 from collections import deque
 import gc
+from types import SimpleNamespace
 import weakref
 
 import numpy as np
@@ -12,17 +13,22 @@ from starpilot.system.speed_limit_vision import DetectorProposal, HistoryEntry, 
 class MemoryParams:
   def __init__(self):
     self.values = {}
+    self.write_count = 0
 
   def put_float(self, key, value):
+    self.write_count += 1
     self.values[key] = value
 
   def put_int(self, key, value):
+    self.write_count += 1
     self.values[key] = value
 
   def put(self, key, value):
+    self.write_count += 1
     self.values[key] = value
 
   def remove(self, key):
+    self.write_count += 1
     self.values.pop(key, None)
 
 
@@ -129,6 +135,11 @@ def test_inference_interval_backs_off_after_expensive_inference():
   assert daemon.last_inference_interval_reason == "processing_cost"
 
 
+def test_runtime_loop_represents_exact_normal_cadences():
+  assert slv.RUNTIME_LOOP_HZ * slv.INFERENCE_INTERVAL == pytest.approx(5.0)
+  assert slv.RUNTIME_LOOP_HZ * slv.FOLLOWUP_INFERENCE_INTERVAL == pytest.approx(3.0)
+
+
 def test_disconnect_camera_releases_client_state():
   daemon = SpeedLimitVisionDaemon.__new__(SpeedLimitVisionDaemon)
   daemon.client = object()
@@ -226,6 +237,121 @@ def test_receive_frame_does_not_retain_vision_buffer(monkeypatch):
 
   assert frame.shape == (3, 2)
   assert buffer_refs[0]() is None
+
+
+def test_run_releases_local_frame_after_offroad_cleanup():
+  class StopLoop(Exception):
+    pass
+
+  class FakeSubMaster:
+    def __init__(self):
+      self.updated = {"userBookmark": False, "livePose": False}
+      self.valid = {"starpilotCarState": True}
+      self.states = {
+        "deviceState": SimpleNamespace(started=False),
+        "mapdOut": SimpleNamespace(roadName=""),
+        "livePose": SimpleNamespace(inputsOK=True),
+        "starpilotCarState": SimpleNamespace(isParked=False),
+      }
+      self.update_count = 0
+
+    def update(self, _timeout):
+      self.update_count += 1
+      self.states["deviceState"].started = self.update_count == 1
+
+    def __getitem__(self, key):
+      return self.states[key]
+
+  class FakeRatekeeper:
+    def __init__(self, frame_ref):
+      self.frame_ref = frame_ref
+      self.keep_count = 0
+      self.frame_alive_at_offroad_keep = None
+
+    def keep_time(self):
+      self.keep_count += 1
+      if self.keep_count == 2:
+        self.frame_alive_at_offroad_keep = self.frame_ref() is not None
+        raise StopLoop
+
+  received_frames = [np.ones((2, 2, 3), dtype=np.uint8)]
+  frame_ref = weakref.ref(received_frames[0])
+  ratekeeper = FakeRatekeeper(frame_ref)
+  daemon = SpeedLimitVisionDaemon.__new__(SpeedLimitVisionDaemon)
+  daemon.use_runtime = True
+  daemon.sm = FakeSubMaster()
+  daemon.Ratekeeper = lambda *_args: ratekeeper
+  daemon.net = object()
+  daemon.last_error = ""
+  daemon.started_prev = False
+  daemon.parked_prev = False
+  daemon.last_road_name = ""
+  daemon.last_inference_at = -float("inf")
+  daemon.stream_name = "road camera"
+  daemon.published_speed_limit_mph = 0
+  daemon.published_confidence = 0.0
+  daemon.pending_auto_bookmark = None
+  daemon.memory_pressure_state = "normal"
+  daemon.last_cpu_busy = False
+  daemon.interval_skip_count = 0
+  daemon.busy_skip_count = 0
+  daemon.camera_unavailable_count = 0
+  daemon.empty_frame_count = 0
+  daemon.loop_count = 0
+  daemon.inference_count = 0
+  daemon.detector_inference_count = 0
+  daemon.detection_count = 0
+  daemon.current_frame_bgr = None
+
+  daemon._update_memory_pressure = lambda: None
+  daemon._start_debug_session = lambda: False
+  daemon._publish_runtime_telemetry = lambda *_args, **_kwargs: None
+  daemon._write_debug_event = lambda *_args, **_kwargs: None
+  daemon._close_debug_session = lambda: None
+  daemon._disconnect_camera = lambda: None
+  daemon._connect_camera = lambda: True
+  daemon._update_coexistence_mode = lambda _now: None
+  daemon._inference_interval = lambda _now: 0.0
+  daemon._track_classification_due = lambda _now: False
+  daemon._detector_interval = lambda _interval: 0.0
+  daemon._receive_frame_bgr = lambda: received_frames.pop()
+  daemon._detect_sign = lambda _frame: None
+  daemon._start_latest_detector_track = lambda *_args: None
+  daemon._clear_published_detection_if_stale = lambda *_args: False
+  daemon._publish_status = lambda *_args, **_kwargs: None
+  daemon._maybe_commit_auto_bookmark = lambda _now: None
+  daemon._maybe_commit_training_capture = lambda _now: None
+  daemon._maybe_capture_map_transition_miss = lambda _now: None
+
+  with pytest.raises(StopLoop):
+    daemon.run()
+
+  assert not ratekeeper.frame_alive_at_offroad_keep
+  assert frame_ref() is None
+
+
+def test_publish_status_only_writes_changed_values():
+  daemon = SpeedLimitVisionDaemon.__new__(SpeedLimitVisionDaemon)
+  daemon.params_memory = MemoryParams()
+  daemon.stream_name = "road camera"
+  daemon.last_logged_status = ""
+  daemon.last_published_stream = None
+  daemon._write_debug_event = lambda *_args, **_kwargs: None
+
+  daemon._publish_status("Scanning road camera")
+  assert daemon.params_memory.write_count == 2
+
+  daemon._publish_status("Scanning road camera")
+  assert daemon.params_memory.write_count == 2
+
+  daemon.stream_name = "wide camera"
+  daemon._publish_status("Scanning road camera")
+  assert daemon.params_memory.write_count == 3
+  assert daemon.params_memory.values["VisionSpeedLimitStream"] == "wide camera"
+
+  daemon._publish_status("Holding 45 mph")
+  assert daemon.params_memory.write_count == 4
+  assert daemon.params_memory.values["VisionSpeedLimitStatus"] == "Holding 45 mph"
 
 
 def test_published_sign_value_uses_configured_units():

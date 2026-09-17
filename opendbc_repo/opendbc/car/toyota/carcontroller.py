@@ -11,7 +11,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.values import CAR, MIN_ACC_SPEED, NO_STOP_TIMER_CAR, PEDAL_TRANSITION, TSS2_CAR, \
                                         CarControllerParams, ToyotaFlags, \
-                                        UNSUPPORTED_DSU_CAR
+                                        UNSUPPORTED_DSU_CAR, LEGACY_PRIUS_CAR, TOYOTA_AUTO_HOLD_CARS
 from opendbc.can import CANPacker
 from openpilot.common.params import Params
 
@@ -38,11 +38,17 @@ TOYOTA_COAST_BRAKE_DISABLE_ACCEL = -0.06  # m/s^2
 TOYOTA_NO_LEAD_COAST_BRAKE_ACCEL = -0.30  # m/s^2
 TOYOTA_INTERCEPTOR_COMFORT_TARGET_ACCEL = 2.0  # m/s^2
 TOYOTA_NO_LEAD_CRUISE_SIGN_FLIP_MIN_SET_SPEED_ERROR = 0.35  # m/s
+TOYOTA_RAV4_LAUNCH_PEDAL_BLEND_SPEED = 5.0  # m/s
+TOYOTA_RAV4_LAUNCH_PEDAL_SCALE = 0.11
+TOYOTA_RAV4_LOW_SPEED_PEDAL_SCALE = 0.23
+TOYOTA_AUTO_HOLD_ACCEL = -1.0
+TOYOTA_AUTO_HOLD_ACTIVATION_FRAMES = 100
 
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
 MAX_STEER_RATE = 100  # deg/s
 MAX_STEER_RATE_FRAMES = 18  # tx control frames needed before torque can be cut
+TOYOTA_COROLLA_TSS2_MAX_STEER_RATE_FRAMES = 8
 
 # EPS allows user torque above threshold for 50 frames before permanently faulting
 MAX_USER_TORQUE = 500
@@ -63,12 +69,37 @@ def is_camry_hybrid(CP) -> bool:
 
 
 def is_ths_hybrid(CP) -> bool:
-  return CP.carFingerprint == CAR.TOYOTA_PRIUS or is_camry_hybrid(CP)
+  return CP.carFingerprint in LEGACY_PRIUS_CAR or is_camry_hybrid(CP)
 
 
-def should_bypass_toyota_long_pid(CP) -> bool:
+def should_bypass_toyota_long_pid(CP, starpilot_toggles=None) -> bool:
+  highlander_sdsu = (
+    CP.carFingerprint == CAR.TOYOTA_HIGHLANDER and
+    bool(getattr(starpilot_toggles, "has_sdsu", False))
+  )
   return bool(CP.enableGasInterceptorDEPRECATED or (
     CP.carFingerprint == CAR.TOYOTA_CAMRY and not is_camry_hybrid(CP)
+  ) or highlander_sdsu)
+
+
+def get_steer_rate_limit_frames(car_fingerprint) -> int:
+  return (TOYOTA_COROLLA_TSS2_MAX_STEER_RATE_FRAMES
+          if car_fingerprint == CAR.TOYOTA_COROLLA_TSS2 else MAX_STEER_RATE_FRAMES)
+
+
+def supports_toyota_auto_hold(CP, auto_hold_enabled: bool) -> bool:
+  return (
+    auto_hold_enabled and
+    CP.carFingerprint in TOYOTA_AUTO_HOLD_CARS and
+    bool(CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD.value)
+  )
+
+
+def get_rav4_interceptor_pedal_scale(v_ego: float) -> float:
+  return float(np.interp(
+    max(float(v_ego), 0.0),
+    [0.0, TOYOTA_RAV4_LAUNCH_PEDAL_BLEND_SPEED, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION],
+    [TOYOTA_RAV4_LAUNCH_PEDAL_SCALE, TOYOTA_RAV4_LOW_SPEED_PEDAL_SCALE, 0.3, 0.0],
   ))
 
 
@@ -80,7 +111,7 @@ def get_long_tune(CP, params):
   if CP.enableGasInterceptorDEPRECATED:
     k_f = 0.0
   elif is_ths_hybrid(CP):
-    k_f = 0.8 if CP.carFingerprint == CAR.TOYOTA_PRIUS else 1.0
+    k_f = 0.8 if CP.carFingerprint in LEGACY_PRIUS_CAR else 1.0
   elif CP.carFingerprint not in TSS2_CAR:
     kiBP = [0., 5., 35.]
     kiV = [3.6, 2.4, 1.5]
@@ -225,6 +256,7 @@ class CarController(CarControllerBase):
     self.standstill_req = False
     self.permit_braking = True
     self.steer_rate_counter = 0
+    self.steer_rate_limit_frames = get_steer_rate_limit_frames(self.CP.carFingerprint)
     self.distance_button = 0
 
     # *** start long control state ***
@@ -246,11 +278,8 @@ class CarController(CarControllerBase):
 
     self.doors_locked = False
     self.param_store = Params()
-    self.auto_brake_hold = bool(self.CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD.value)
     self.brake_hold_active = False
     self._brake_hold_counter = 0
-    self._brake_hold_reset = False
-    self._prev_brake_pressed = False
 
   def _compute_interceptor_gas_cmd(self, CC, CS):
     if not (self.CP.enableGasInterceptorDEPRECATED and self.CP.openpilotLongitudinalControl and CC.longActive):
@@ -262,9 +291,11 @@ class CarController(CarControllerBase):
 
     max_interceptor_gas = 0.5
     if self.CP.carFingerprint == CAR.TOYOTA_RAV4:
-      pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.15, 0.3, 0.0]))
+      pedal_scale = get_rav4_interceptor_pedal_scale(CS.out.vEgo)
     elif self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.3, 0.4, 0.4]))
+    elif self.CP.carFingerprint == CAR.TOYOTA_COROLLA:
+      pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.3, 0.4, 0.0]))
     else:
       pedal_scale = float(np.interp(CS.out.vEgo, [0.0, MIN_ACC_SPEED, MIN_ACC_SPEED + PEDAL_TRANSITION], [0.4, 0.5, 0.0]))
 
@@ -302,26 +333,24 @@ class CarController(CarControllerBase):
 
     self.last_standstill = CS.out.standstill
 
-  def create_auto_brake_hold_messages(self, CS: structs.CarState, brake_hold_allowed_timer: int = 100):
-    can_sends = []
-    brake_hold_allowed = (CS.out.standstill and CS.out.cruiseState.available and
+  def update_auto_hold_state(self, CS: structs.CarState, cancel_requested: bool = False,
+                             activation_frames: int = TOYOTA_AUTO_HOLD_ACTIVATION_FRAMES):
+    brake_hold_allowed = (not cancel_requested and CS.out.standstill and CS.out.cruiseState.available and
                           not CS.out.gasPressed and not CS.out.cruiseState.enabled and
                           CS.out.gearShifter not in (PARK, REVERSE))
 
-    if brake_hold_allowed:
+    if brake_hold_allowed and not self.brake_hold_active and CS.out.brakePressed:
       self._brake_hold_counter += 1
-      self.brake_hold_active = self._brake_hold_counter > brake_hold_allowed_timer and not self._brake_hold_reset
-      self._brake_hold_reset = not self._prev_brake_pressed and CS.out.brakePressed and not self._brake_hold_reset
-    else:
+      self.brake_hold_active = self._brake_hold_counter > activation_frames
+    elif not brake_hold_allowed:
       self._brake_hold_counter = 0
       self.brake_hold_active = False
-      self._brake_hold_reset = False
-    self._prev_brake_pressed = CS.out.brakePressed
 
-    if self.frame % 2 == 0:
-      can_sends.append(toyotacan.create_brake_hold_command(self.packer, self.frame, CS.pre_collision_2, self.brake_hold_active))
+    return self.brake_hold_active
 
-    return can_sends
+  def reset_auto_hold_state(self):
+    self._brake_hold_counter = 0
+    self.brake_hold_active = False
 
   def update(self, CC, CS, now_nanos, starpilot_toggles):
     actuators = CC.actuators
@@ -358,8 +387,10 @@ class CarController(CarControllerBase):
     apply_torque = apply_meas_steer_torque_limits(new_torque, self.last_torque, CS.out.steeringTorqueEps, self.params)
 
     # >100 degree/sec steering fault prevention
-    self.steer_rate_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringRateDeg) >= MAX_STEER_RATE, lat_active,
-                                                                      self.steer_rate_counter, MAX_STEER_RATE_FRAMES)
+    self.steer_rate_counter, apply_steer_req = common_fault_avoidance(
+      abs(CS.out.steeringRateDeg) >= MAX_STEER_RATE, lat_active,
+      self.steer_rate_counter, self.steer_rate_limit_frames,
+    )
 
     if not lat_active:
       apply_torque = 0
@@ -420,8 +451,10 @@ class CarController(CarControllerBase):
     # *** gas and brake ***
 
     self._update_standstill_request(CC, CS, actuators, starpilot_toggles)
-    if self.auto_brake_hold:
-      can_sends.extend(self.create_auto_brake_hold_messages(CS))
+    if supports_toyota_auto_hold(self.CP, getattr(starpilot_toggles, "toyota_auto_hold", False)):
+      self.update_auto_hold_state(CS, pcm_cancel_cmd)
+    else:
+      self.reset_auto_hold_state()
 
     interceptor_gas_cmd = self._compute_interceptor_gas_cmd(CC, CS)
 
@@ -471,7 +504,7 @@ class CarController(CarControllerBase):
         a_ego_future = a_ego_blended + j_ego * future_t
 
         if CC.longActive:
-          if should_bypass_toyota_long_pid(self.CP):
+          if should_bypass_toyota_long_pid(self.CP, starpilot_toggles):
             # Pedal/SDSU Toyotas have shown better behavior when we trust the planner
             # target directly instead of letting the Toyota longitudinal PID swing it
             # around. Keep the shared rate limits above, but bypass the extra
@@ -494,7 +527,7 @@ class CarController(CarControllerBase):
               pcm_accel_cmd += pitch_compensation
 
             feedforward = pcm_accel_cmd
-            if self.CP.carFingerprint == CAR.TOYOTA_PRIUS:
+            if self.CP.carFingerprint in LEGACY_PRIUS_CAR:
               feedforward = get_prius_feedforward(feedforward, CS.out.vEgo)
             elif is_camry_hybrid(self.CP) and feedforward > 0.0:
               # Preserve the established Camry Hybrid acceleration response while
@@ -524,19 +557,20 @@ class CarController(CarControllerBase):
         else:
           pcm_accel_cmd = limit_no_lead_cruise_sign_flip(pcm_accel_cmd, actuators.accel, stopping, CS.out.vEgo,
                                                          CS.out.cruiseState.speed, bool(hud_control.leadVisible))
-          if self.CP.carFingerprint == CAR.TOYOTA_PRIUS:
+          if self.CP.carFingerprint in LEGACY_PRIUS_CAR:
             pcm_accel_cmd = limit_prius_stopping_accel(pcm_accel_cmd, actuators.accel, stopping, CS.out.vEgo, lead)
 
         pcm_accel_cmd = float(np.clip(pcm_accel_cmd, self.params.ACCEL_MIN, self.params.ACCEL_MAX))
 
+        if self.brake_hold_active:
+          pcm_accel_cmd = TOYOTA_AUTO_HOLD_ACCEL
+          self.permit_braking = True
+          self.standstill_req = True
+
         main_accel_cmd = 0. if self.CP.flags & ToyotaFlags.SECOC.value else pcm_accel_cmd
-        # Toyota's physical distance-button hold can collide with StarPilot's wheel-button
-        # actions and trip a temporary EPS fault. Suppress native long-press handling while
-        # the physical gap button is held so ACC only sees the hold as a plain button press.
-        allow_long_press = 0 if bool(getattr(CS, "distance_button", False)) else None
         can_sends.append(toyotacan.create_accel_command(self.packer, main_accel_cmd, pcm_cancel_cmd, self.permit_braking, self.standstill_req, lead,
-                                                        CS.acc_type, fcw_alert, self.distance_button, starpilot_toggles.reverse_cruise_increase,
-                                                        allow_long_press))
+                                                        CS.acc_type, fcw_alert, self.distance_button,
+                                                        getattr(starpilot_toggles, "reverse_cruise_increase", False)))
         if self.CP.flags & ToyotaFlags.SECOC.value:
           acc_cmd_2 = toyotacan.create_accel_command_2(self.packer, pcm_accel_cmd)
           acc_cmd_2 = add_mac(self.secoc_key,
@@ -555,9 +589,9 @@ class CarController(CarControllerBase):
         if self.CP.carFingerprint in UNSUPPORTED_DSU_CAR:
           can_sends.append(toyotacan.create_acc_cancel_command(self.packer))
         else:
-          allow_long_press = 0 if bool(getattr(CS, "distance_button", False)) else None
           can_sends.append(toyotacan.create_accel_command(self.packer, 0, pcm_cancel_cmd, True, False, lead, CS.acc_type, False,
-                                                          self.distance_button, starpilot_toggles.reverse_cruise_increase, allow_long_press))
+                                                          self.distance_button,
+                                                          getattr(starpilot_toggles, "reverse_cruise_increase", False)))
 
     # *** hud ui ***
     if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V:

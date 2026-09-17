@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 
 import importlib
 import math
 import numbers
 import os
+import platform
 import sys
+import sysconfig
 import tarfile
 
+import io
 from io import BytesIO
 from pathlib import Path
 
@@ -37,10 +41,12 @@ from opendbc.car.gm.values import GMFlags
 from opendbc.car.toyota.carcontroller import LOCK_CMD, UNLOCK_CMD
 from opendbc.car.toyota.values import ToyotaStarPilotFlags
 from openpilot.common.constants import CV
+from openpilot.common.file_chunker import file_chunked_exists, get_chunk_name, get_manifest_path
 from openpilot.common.params import ParamKeyFlag, ParamKeyType, Params
 from openpilot.common.realtime import DT_HW
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
+from openpilot.selfdrive.pandad.panda_firmware import firmware_flags_conflict, supports_tesla_can_wake, validate_tesla_can_wake_firmware
 from openpilot.system.hardware import HARDWARE, PC
 from openpilot.system.hardware.hw import Paths
 from openpilot.system.loggerd.deleter import PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE, PRESERVE_COUNT
@@ -48,14 +54,51 @@ from openpilot.system.version import get_build_metadata
 from openpilot.tools.longitudinal_maneuvers.capabilities import get_longitudinal_maneuver_support
 from panda import Panda
 
-from openpilot.starpilot.assets.model_manager import canonical_model_key, is_builtin_model_key, model_key_aliases
+from openpilot.starpilot.assets.model_manager import (
+  MODEL_LAB_DOWNLOAD_PARAM,
+  canonical_model_key,
+  disable_big_model_profile,
+  external_gpu_available,
+  get_model_profile,
+  is_builtin_model_key,
+  model_accelerator_artifact_filename,
+  model_key_aliases,
+  model_uses_external_gpu,
+  set_model_profile,
+)
+from openpilot.starpilot.common.model_lab import (
+  MODEL_LAB_CONFIG_PARAM,
+  MODEL_LAB_RUNTIME_PARAM,
+  is_small_model_metadata,
+  model_lab_manifest_eligible,
+  model_lab_pair_display_name,
+  normalize_model_lab_config,
+  validate_model_lab_selection,
+)
 from openpilot.starpilot.assets.theme_manager import HOLIDAY_THEME_PATH, THEME_COMPONENT_PARAMS
+from openpilot.starpilot.common import param_profiles
+from openpilot.starpilot.system.the_galaxy import version_history, version_install
 from openpilot.starpilot.common.accel_profile import (
+  A_CRUISE_MAX_BP_CUSTOM,
+  CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS,
+  CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY,
+  CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS,
+  CUSTOM_ACCEL_PROFILE_DEFAULT_BREAKPOINTS_MPH,
+  CUSTOM_ACCEL_PROFILE_DEFAULT_POINT_COUNT,
   CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY,
   CUSTOM_ACCEL_PROFILE_PARAM_KEYS,
+  CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY,
+  CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS,
+  CUSTOM_ACCEL_PROFILE_VALUE_MAX,
+  CUSTOM_ACCEL_PROFILE_VALUE_MIN,
   build_custom_accel_profile_defaults,
   custom_accel_profile_is_initialized,
+  get_accel_profile_curve_values,
+  get_custom_accel_profile_curve_defaults,
+  interpolate_accel_profile,
   normalize_acceleration_profile,
+  normalize_deceleration_profile,
+  parse_custom_accel_profile_curve,
 )
 from openpilot.starpilot.common.maps_catalog import (
   MAPS_CATALOG,
@@ -65,18 +108,57 @@ from openpilot.starpilot.common.maps_catalog import (
   schedule_label,
   schedule_param_value,
 )
-from openpilot.starpilot.common.maps_download_progress import load_size_cache, nonnegative_int, selection_key
+from openpilot.starpilot.common.maps_download_progress import (
+  MAPS_STORAGE_CACHE_PARAM,
+  load_maps_storage_cache,
+  nonnegative_int,
+  selection_key,
+)
 from openpilot.starpilot.common.experimental_state import sync_persist_chill_state, sync_persist_experimental_state
+from openpilot.starpilot.system.the_galaxy.longitudinal_mode import (
+  MODE_KEYS as LONGITUDINAL_MODE_KEYS, ModeError, WRITE_LOCK as LONGITUDINAL_MODE_LOCK,
+  set_mode as set_longitudinal_mode, snapshot as longitudinal_mode_snapshot,
+)
 from openpilot.starpilot.common.favorite_slots import (
-  FAVORITE_ACTION_OPTIONS,
   FAVORITE_SLOTS_PARAM,
+  SETTINGS_CATALOG_PATH,
+  build_favorite_slot_options,
+  filter_favorite_slot_options,
+  get_favorite_values,
   is_favorite_action_key,
+  load_settings_catalog,
   normalize_favorite_slots,
   trigger_favorite_action,
 )
 from openpilot.starpilot.common.lateral_delay import full_lateral_delay
+from openpilot.starpilot.common.longitudinal_personality_profiles import (
+  ACCELERATION_PRESETS,
+  ACCELERATION_SPEEDS_MPH,
+  BRAKING_PRESETS,
+  BRAKING_SPEEDS_MPH,
+  CURVE_BOUNDS,
+  FOLLOWING_PRESETS,
+  FOLLOWING_SPEEDS_MPH,
+  PERSONALITY_PROFILES_PARAM,
+  PERSONALITY_ADVANCED_PARAM_KEYS,
+  PERSONALITY_FOLLOW_PARAM_KEYS,
+  PERSONALITY_PARKED_PARAM_KEYS,
+  PERSONALITY_PROFILE_ENABLE_PARAM_KEYS,
+  PROFILE_SCHEMA_VERSION,
+  default_personality_profiles,
+  is_unconfigured_profile_document,
+  initial_custom_curve,
+  is_truck_fingerprint,
+  migrate_profile_document,
+  profile_document,
+  strict_profile_document,
+  synchronise_profile_document_enabled,
+  update_personality_profile,
+  validate_personality_advanced_value,
+  validate_personality_follow_value,
+)
 from openpilot.starpilot.common.starpilot_utilities import delete_file, get_lock_status, run_cmd
-from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH, ERROR_LOGS_PATH, EXCLUDED_KEYS, LEGACY_STARPILOT_PARAM_RENAMES, MAPS_PATH, MODELS_PATH, RESOURCES_REPO, SCREEN_RECORDINGS_PATH, STOCK_THEME_PATH, THEME_SAVE_PATH,\
+from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH, BUTTON_FUNCTIONS, ERROR_LOGS_PATH, EXCLUDED_KEYS, LEGACY_STARPILOT_PARAM_RENAMES, MAPS_PATH, MODELS_PATH, RESOURCES_REPO, SCREEN_RECORDINGS_PATH, STOCK_THEME_PATH, THEME_SAVE_PATH, TOGGLE_BACKUPS,\
                                                            default_ev_tuning_enabled, migrate_cancel_button_controls, update_starpilot_toggles
 from openpilot.starpilot.common.testing_grounds import (
   DEFAULT_TESTING_GROUND_VARIANT as SHARED_DEFAULT_TESTING_GROUND_VARIANT,
@@ -86,29 +168,87 @@ from openpilot.starpilot.common.testing_grounds import (
   TESTING_GROUNDS_SLOT_DEFINITIONS as SHARED_TESTING_GROUNDS_SLOT_DEFINITIONS,
   TESTING_GROUNDS_STATE_PATH as SHARED_TESTING_GROUNDS_STATE_PATH,
 )
-from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, update_recent_destinations
+from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, routing_configured, update_recent_destinations
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
 from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
+from openpilot.starpilot.system.bluetooth import BluetoothClient
+from openpilot.starpilot.system.wheel_controls import (
+  CONTROLLER_ACTION_OPTIONS,
+  CONTROLLER_ACTION_SET_SPEED,
+  CONTROLLER_ACTION_SLOT_COUNT,
+  FAVORITE_SLOT_COUNT,
+  cancel_learning as cancel_wheel_control_learning,
+  clear_mappings as clear_wheel_control_mappings,
+  controller_speed_bounds,
+  delete_mapping as delete_wheel_control_mapping,
+  load_controller_action_slots,
+  public_status as wheel_control_status,
+  set_controller_action_slot,
+  set_joystick_device,
+  start_learning as start_wheel_control_learning,
+  start_testing as start_wheel_control_testing,
+  stop_testing as stop_wheel_control_testing,
+)
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# Keep Galaxy independent of opendbc's generated car bindings while matching RivianFlags.ANGLE_HARNESS.
+RIVIAN_ANGLE_HARNESS_FLAG = 1 << 0
 
 GITLAB_API = "https://gitlab.com/api/v4"
 GITLAB_SUBMISSIONS_PROJECT_ID = "71992109"
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", "")
 LEGACY_LATERAL_METHOD_API_PREFIX = "/api/" + "".join(("f", "t", "m"))
 VASM_CONFIGURATION_KEYS = {"VASMEnabled", "VASMConfidenceThreshold", "VASMSmoothSeconds", "VASMAnnotationConfig"}
-PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM"}
+PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM", "PIPPreviewInvert"}
 MODEL_SMOOTHING_KEYS = {"LatSmoothSeconds", "LongSmoothSeconds"}
+GALAXY_DEVELOPER_ONLY_KEYS = {"TurnSteeringLimitMuteSpeed"}
+PULSE_GLIDE_BUTTON_KEYS = {
+  "CancelButtonControl", "DistanceButtonControl",
+  "LongCancelButtonControl", "LongDistanceButtonControl",
+  "VeryLongCancelButtonControl", "VeryLongDistanceButtonControl",
+  "LKASButtonControl", "ModeButtonControl", "LongModeButtonControl", "VeryLongModeButtonControl",
+  "StarButtonControl", "LongStarButtonControl", "VeryLongStarButtonControl",
+}
+SENTRY_NUMERIC_PARAM_BOUNDS = {
+  "SentryModeSensitivity": (0.005, 1.0),
+  "SentryModeWarningTime": (0.1, 10.0),
+}
+SENTRY_NOTIFICATION_RATE_LIMIT_SECONDS = 180.0
 
 GALAXY_DEPS_PATH = "/data/galaxy_deps"
 LEGACY_GALAXY_DEPS_PATH = "/data/" + "".join(chr(code) for code in (112, 111, 110, 100)) + "_deps"
 GALAXY_DEPS_PATHS = (GALAXY_DEPS_PATH, LEGACY_GALAXY_DEPS_PATH)
+
+
+def _galaxy_runtime_dependency_paths() -> tuple[str, ...]:
+  """Return existing dependency locations used by Galaxy on-device and in builds."""
+  repo_root = REPO_THIRD_PARTY_PATH.parent.parent
+  candidates = [
+    sysconfig.get_paths().get("purelib", ""),
+    "/usr/local/venv/lib/python3.12/site-packages",
+  ]
+
+  is_arm = platform.machine().lower() in ("aarch64", "arm64")
+  venv_names = (".venv-linux-arm64", ".venv") if is_arm else (".venv",)
+  for venv_name in venv_names:
+    venv_path = repo_root / venv_name / "lib"
+    if venv_path.is_dir():
+      candidates.extend(str(path) for path in venv_path.glob("python*/site-packages"))
+
+  return tuple(dict.fromkeys(path for path in candidates if path and os.path.isdir(path)))
+
+
+REPO_THIRD_PARTY_PATH = Path(__file__).resolve().parents[2] / "third_party"
+GALAXY_RUNTIME_DEPENDENCY_PATHS = _galaxy_runtime_dependency_paths()
 for deps_path in GALAXY_DEPS_PATHS:
   if os.path.isdir(deps_path) and deps_path not in sys.path:
     sys.path.insert(0, deps_path)
 
-REPO_THIRD_PARTY_PATH = Path(__file__).resolve().parents[2] / "third_party"
+for deps_path in GALAXY_RUNTIME_DEPENDENCY_PATHS:
+  if os.path.isdir(deps_path) and deps_path not in sys.path:
+    sys.path.append(deps_path)
+
 if REPO_THIRD_PARTY_PATH.is_dir() and str(REPO_THIRD_PARTY_PATH) not in sys.path:
   sys.path.insert(0, str(REPO_THIRD_PARTY_PATH))
 
@@ -129,7 +269,7 @@ _TESTING_GROUND_CUSTOM_RESERVED_INTERVAL_S = 15.0
 _TESTING_GROUND_CUSTOM_RESERVED_PM = None
 _TESTING_GROUND_CUSTOM_RESERVED_LOCK = threading.Lock()
 _TESTING_GROUND_CUSTOM_RESERVED_LAST_PUBLISH_MONO = 0.0
-PANDA_FIRMWARE_TOGGLE_KEYS = {"IgnoreIgnitionLine", "RemoteStartBootsComma", "HKGRemoteStartBootsComma"}
+PANDA_FIRMWARE_TOGGLE_KEYS = {"IgnoreIgnitionLine", "RemoteStartBootsComma", "HKGRemoteStartBootsComma", "TeslaWakeOnCAN"}
 PANDA_FIRMWARE_CONFIRMATION_FIELD = "confirmedPandaFirmwareFlash"
 _PANDA_FLASH_REBOOT_LOCK = threading.Lock()
 
@@ -159,13 +299,6 @@ def _is_comma_device_runtime() -> bool:
     with open(model_path) as f:
       model = f.read().strip("\x00").lower()
     return "comma " in model
-  except Exception:
-    return False
-
-
-def _raylib_ui_toggle_affects_device() -> bool:
-  try:
-    return HARDWARE.get_device_type() in ("tici", "tizi")
   except Exception:
     return False
 
@@ -510,6 +643,116 @@ def _sentry_event_roots() -> tuple[Path, ...]:
   return tuple(root.resolve() for root in roots)
 
 
+_SENTRY_EVENT_INDEX_NAME = "events.json"
+_SENTRY_EVENT_INDEX_LOCK = threading.Lock()
+
+
+def _sentry_event_index_path() -> Path:
+  return _sentry_event_roots()[0] / _SENTRY_EVENT_INDEX_NAME
+
+
+def _load_sentry_event_catalog_unlocked() -> list[dict]:
+  index_path = _sentry_event_index_path()
+  try:
+    raw_events = json.loads(index_path.read_text())
+  except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    return []
+
+  if not isinstance(raw_events, list):
+    return []
+
+  events = []
+  for raw_event in raw_events:
+    event = _normalize_sentry_event(raw_event)
+    if event is not None:
+      events.append(event)
+  return events
+
+
+def _save_sentry_event_catalog_unlocked(events: list[dict]) -> None:
+  index_path = _sentry_event_index_path()
+  index_path.parent.mkdir(parents=True, exist_ok=True)
+  temporary_path = index_path.with_suffix(".tmp")
+  temporary_path.write_text(json.dumps(events, separators=(",", ":")))
+  temporary_path.chmod(0o600)
+  temporary_path.replace(index_path)
+
+
+def _stored_sentry_event() -> dict | None:
+  raw_event = params.get("SentryModeLastEvent", encoding="utf-8") or "{}"
+  try:
+    payload = raw_event if isinstance(raw_event, dict) else json.loads(raw_event)
+  except (TypeError, ValueError, json.JSONDecodeError):
+    return None
+  return _normalize_sentry_event(payload)
+
+
+def _discover_legacy_sentry_events(known_event_ids: set[str]) -> list[dict]:
+  discovered = []
+  for root in _sentry_event_roots():
+    try:
+      directories = sorted(
+        (path for path in root.iterdir() if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+      )
+    except OSError:
+      continue
+
+    for directory in directories:
+      event_id = directory.name
+      if event_id == _SENTRY_LIVE_EVENT_ID or event_id in known_event_ids or len(event_id) > 96:
+        continue
+
+      image_paths = [
+        str(path) for path in (directory / "wide.jpg", directory / "driver.jpg")
+        if path.is_file()
+      ]
+      if not image_paths:
+        continue
+
+      try:
+        detected_at = datetime.fromtimestamp(directory.stat().st_mtime, timezone.utc).isoformat()
+      except OSError:
+        detected_at = ""
+      is_test = event_id.startswith("test-")
+      discovered.append({
+        "eventId": event_id,
+        "kind": "alarm" if is_test else "warning",
+        "detectedAt": detected_at,
+        "message": "Test sentry event." if is_test else "Movement detected while parked.",
+        "imagePaths": image_paths,
+      })
+      known_event_ids.add(event_id)
+  return discovered
+
+
+def _sentry_event_catalog() -> list[dict]:
+  with _SENTRY_EVENT_INDEX_LOCK:
+    events = _load_sentry_event_catalog_unlocked()
+    known_event_ids = {event["eventId"] for event in events}
+    legacy_events = _discover_legacy_sentry_events(known_event_ids)
+    if legacy_events:
+      events.extend(legacy_events)
+    latest_event = _stored_sentry_event()
+    if latest_event is not None and latest_event["eventId"] not in known_event_ids:
+      events.insert(0, latest_event)
+      _save_sentry_event_catalog_unlocked(events)
+    elif legacy_events:
+      _save_sentry_event_catalog_unlocked(events)
+    return events
+
+
+def _record_sentry_event(event: dict) -> None:
+  with _SENTRY_EVENT_INDEX_LOCK:
+    events = _load_sentry_event_catalog_unlocked()
+    known_event_ids = {existing["eventId"] for existing in events}
+    events.extend(_discover_legacy_sentry_events(known_event_ids))
+    events = [existing for existing in events if existing.get("eventId") != event["eventId"]]
+    events.insert(0, event)
+    _save_sentry_event_catalog_unlocked(events)
+
+
 def _safe_sentry_image_paths(raw_paths) -> list[str]:
   if not isinstance(raw_paths, list):
     return []
@@ -532,19 +775,418 @@ def _normalize_sentry_event(payload) -> dict | None:
 
   event_id = str(payload.get("eventId") or "").strip()
   kind = str(payload.get("kind") or "").strip().lower()
-  if not event_id or kind not in {"warning", "alarm"}:
+  if not event_id or kind not in {"warning", "alarm", "power_off", "selfie"}:
     return None
 
-  return {
+  event = {
     "eventId": event_id[:96],
     "kind": kind,
     "detectedAt": str(payload.get("detectedAt") or ""),
     "message": str(payload.get("message") or "Movement detected while parked.")[:500],
     "imagePaths": _safe_sentry_image_paths(payload.get("imagePaths")),
   }
+  reason = str(payload.get("reason") or "").strip()
+  if reason:
+    event["reason"] = reason[:96]
+  return event
 
 
-def _dispatch_sentry_event(event: dict) -> None:
+def _sentry_image_path(event_id: str, filename: str) -> Path | None:
+  if not event_id or Path(event_id).name != event_id:
+    return None
+  if filename not in {"wide.jpg", "driver.jpg"} or Path(filename).name != filename:
+    return None
+
+  for root in _sentry_event_roots():
+    path = (root / event_id / filename).resolve()
+    if root in path.parents and path.is_file():
+      return path
+  return None
+
+
+def _public_sentry_event(event: dict) -> dict:
+  public_event = dict(event)
+  public_event.pop("imagePaths", None)
+  public_event["imageUrls"] = []
+  event_id = str(public_event.get("eventId") or "")
+  for raw_path in event.get("imagePaths", []):
+    path = Path(str(raw_path)).resolve()
+    if path.parent.name != event_id:
+      continue
+    if _sentry_image_path(event_id, path.name) == path:
+      public_event["imageUrls"].append(
+        f"/api/sentry/images/{quote(event_id, safe='')}/{quote(path.name, safe='')}"
+      )
+  return public_event
+
+
+def _capture_sentry_test_images(event_id: str) -> list[str]:
+  from openpilot.system.camerad.snapshot import jpeg_write, snapshot
+
+  params.put_bool("SentryModeCapture", True)
+  try:
+    rear, front = snapshot(allow_existing=True)
+  except Exception:
+    cloudlog.exception("Galaxy: sentry test snapshot failed")
+    return []
+  finally:
+    params.put_bool("SentryModeCapture", False)
+
+  if rear is None and front is None:
+    return []
+
+  directory = _sentry_event_roots()[0] / event_id
+  directory.mkdir(parents=True, exist_ok=True)
+  paths = []
+  if rear is not None:
+    path = directory / "wide.jpg"
+    jpeg_write(str(path), rear)
+    paths.append(str(path))
+  if front is not None:
+    path = directory / "driver.jpg"
+    jpeg_write(str(path), front)
+    paths.append(str(path))
+  return paths
+
+
+_SENTRY_LIVE_CAPTURE_LOCK = threading.Lock()
+_SENTRY_LIVE_EVENT_ID = "live"
+
+
+def _capture_sentry_live_images() -> list[str]:
+  from openpilot.system.camerad.snapshot import jpeg_write, snapshot
+
+  params.put_bool("SentryModeCapture", True)
+  try:
+    rear, front = snapshot(allow_existing=True, include_front=True)
+  except Exception:
+    cloudlog.exception("Galaxy: live Sentry snapshot failed")
+    return []
+  finally:
+    params.put_bool("SentryModeCapture", False)
+
+  if rear is None and front is None:
+    return []
+
+  directory = _sentry_event_roots()[0] / _SENTRY_LIVE_EVENT_ID
+  directory.mkdir(parents=True, exist_ok=True)
+  paths = []
+  if rear is not None:
+    path = directory / "wide.jpg"
+    jpeg_write(str(path), rear)
+    paths.append(str(path))
+  if front is not None:
+    path = directory / "driver.jpg"
+    jpeg_write(str(path), front)
+    paths.append(str(path))
+  return paths
+
+
+def _get_live_driver_jpeg():
+  from openpilot.system.manager.process_config import managed_processes
+  started = False
+  try:
+    try:
+      subprocess.check_call(["pgrep", "camerad"])
+    except subprocess.CalledProcessError:
+      managed_processes['camerad'].start()
+      started = True
+
+    client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_DRIVER, True)
+    if not client.connect(True):
+      return None
+
+    if started:
+      settle_deadline = time.monotonic() + 4.0
+      while time.monotonic() < settle_deadline:
+        client.recv(timeout_ms=100)
+
+    buf = client.recv(timeout_ms=5000)
+    if buf is None:
+      return None
+
+    y = np.array(buf.data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
+    u = np.array(buf.data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
+    v = np.array(buf.data[buf.uv_offset + 1::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
+
+    ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+    vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+
+    yuv = np.dstack((y, ul, vl)).astype(np.int16)
+    yuv[:, :, 1:] -= 128
+
+    m = np.array([
+      [1.00000, 1.00000, 1.00000],
+      [0.00000, -0.39465, 2.03211],
+      [1.13983, -0.58060, 0.00000],
+    ])
+    rgb = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
+
+    img = Image.fromarray(rgb)
+    buf_io = BytesIO()
+    img.save(buf_io, format="JPEG", quality=85)
+    return buf_io.getvalue()
+  except Exception:
+    return None
+  finally:
+    if started:
+      managed_processes['camerad'].stop()
+
+
+_SENTRY_PUSH_LOCK = threading.Lock()
+_SENTRY_NOTIFICATION_RATE_LIMIT_LOCK = threading.Lock()
+_SENTRY_NOTIFICATION_LAST_AT: float | None = None
+_SENTRY_PUSH_PRIVATE_KEY_NAME = "sentry_vapid_private.pem"
+_SENTRY_PUSH_SUBSCRIPTIONS_NAME = "sentry_push_subscriptions.json"
+_SENTRY_PUSH_SUBJECT = os.getenv("STARPILOT_VAPID_SUBJECT", "mailto:galaxy@firestar.link")
+
+
+def _sentry_push_paths() -> tuple[Path, Path]:
+  galaxy_dir = _get_galaxy_dir()
+  return galaxy_dir / _SENTRY_PUSH_PRIVATE_KEY_NAME, galaxy_dir / _SENTRY_PUSH_SUBSCRIPTIONS_NAME
+
+
+def _load_sentry_push_subscriptions() -> list[dict]:
+  _, subscriptions_path = _sentry_push_paths()
+  try:
+    payload = json.loads(subscriptions_path.read_text())
+  except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    return []
+
+  if not isinstance(payload, list):
+    return []
+  return [subscription for subscription in payload if isinstance(subscription, dict)]
+
+
+def _save_sentry_push_subscriptions(subscriptions: list[dict]) -> None:
+  _, subscriptions_path = _sentry_push_paths()
+  subscriptions_path.parent.mkdir(parents=True, exist_ok=True)
+  temporary_path = subscriptions_path.with_suffix(".tmp")
+  temporary_path.write_text(json.dumps(subscriptions, separators=(",", ":")))
+  temporary_path.chmod(0o600)
+  temporary_path.replace(subscriptions_path)
+
+
+def _normalize_sentry_push_subscription(payload) -> dict | None:
+  if not isinstance(payload, dict):
+    return None
+
+  subscription = payload.get("subscription", payload)
+  if not isinstance(subscription, dict):
+    return None
+
+  endpoint = str(subscription.get("endpoint") or "").strip()
+  keys = subscription.get("keys")
+  if not endpoint.startswith("https://") or len(endpoint) > 4096 or not isinstance(keys, dict):
+    return None
+
+  p256dh = str(keys.get("p256dh") or "").strip()
+  auth = str(keys.get("auth") or "").strip()
+  if not p256dh or not auth or len(p256dh) > 512 or len(auth) > 512:
+    return None
+
+  return {
+    "endpoint": endpoint,
+    "expirationTime": subscription.get("expirationTime"),
+    "keys": {"p256dh": p256dh, "auth": auth},
+  }
+
+
+def _get_sentry_vapid():
+  try:
+    from py_vapid import Vapid
+  except ModuleNotFoundError as error:
+    raise RuntimeError("pywebpush is not installed") from error
+
+  with _SENTRY_PUSH_LOCK:
+    private_key_path, _ = _sentry_push_paths()
+    private_key_path.parent.mkdir(parents=True, exist_ok=True)
+    if private_key_path.is_file():
+      try:
+        if private_key_path.stat().st_size > 0:
+          return Vapid.from_file(str(private_key_path))
+      except Exception as error:
+        cloudlog.warning("Galaxy: Existing Sentry VAPID private key was invalid, regenerating: %s", error)
+
+    vapid = Vapid()
+    vapid.generate_keys()
+    temporary_path = private_key_path.with_suffix(".tmp")
+    vapid.save_key(str(temporary_path))
+    temporary_path.chmod(0o600)
+    temporary_path.replace(private_key_path)
+    return vapid
+
+
+def _sentry_vapid_public_key(vapid) -> str:
+  from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+  raw_key = vapid.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+  return base64.urlsafe_b64encode(raw_key).rstrip(b"=").decode("ascii")
+
+
+def _sentry_push_subscription_count() -> int:
+  with _SENTRY_PUSH_LOCK:
+    return len(_load_sentry_push_subscriptions())
+
+
+def _sentry_public_base_url() -> str:
+  configured_url = os.getenv("STARPILOT_GALAXY_PUBLIC_URL", "").strip().rstrip("/")
+  if configured_url:
+    return configured_url
+
+  slug = _read_galaxy_text(_get_galaxy_dir() / "glxyslug")
+  return f"https://galaxy.firestar.link/{slug}" if slug else ""
+
+
+def _sentry_external_image_urls(event: dict) -> list[str]:
+  base_url = _sentry_public_base_url()
+  if not base_url:
+    return []
+
+  public_event = _public_sentry_event(event)
+  return [f"{base_url}{image_url}" for image_url in public_event["imageUrls"]]
+
+
+def _sentry_first_image(event: dict) -> tuple[str, bytes] | None:
+  for raw_path in event.get("imagePaths", []):
+    path = Path(str(raw_path))
+    try:
+      return path.name, path.read_bytes()
+    except OSError:
+      continue
+  return None
+
+
+def _sentry_notification_channels() -> dict[str, bool]:
+  return {
+    "webPush": _sentry_push_subscription_count() > 0,
+    "webhook": bool((params.get("SentryModeWebhook", encoding="utf-8") or "").strip()),
+    "ntfy": bool((params.get("SentryModeNtfyUrl", encoding="utf-8") or "").strip()),
+  }
+
+
+def _sentry_notification_rate_limit_path() -> Path:
+  return _get_galaxy_dir() / "sentry_notification_rate_limit.json"
+
+
+def _load_sentry_notification_last_at() -> float | None:
+  try:
+    payload = json.loads(_sentry_notification_rate_limit_path().read_text())
+    value = float(payload.get("lastNotificationAt")) if isinstance(payload, dict) else None
+  except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    return None
+  return value if value is not None and math.isfinite(value) else None
+
+
+def _claim_sentry_notification_slot(event: dict) -> bool:
+  """Reserve the shared notification slot for a real Sentry event."""
+  global _SENTRY_NOTIFICATION_LAST_AT
+
+  now = time.time()
+  with _SENTRY_NOTIFICATION_RATE_LIMIT_LOCK:
+    persisted_last_at = _load_sentry_notification_last_at()
+    last_at = max(
+      (value for value in (_SENTRY_NOTIFICATION_LAST_AT, persisted_last_at) if value is not None),
+      default=None,
+    )
+    if last_at is not None:
+      elapsed = max(0.0, now - last_at)
+      if elapsed < SENTRY_NOTIFICATION_RATE_LIMIT_SECONDS:
+        remaining = SENTRY_NOTIFICATION_RATE_LIMIT_SECONDS - elapsed
+        cloudlog.info(
+          "Galaxy: Sentry notification suppressed by rate limit (%.0f seconds remaining; event=%s)",
+          remaining,
+          event.get("eventId", ""),
+        )
+        return False
+
+    _SENTRY_NOTIFICATION_LAST_AT = now
+    rate_limit_path = _sentry_notification_rate_limit_path()
+    temporary_path = rate_limit_path.with_suffix(".tmp")
+    try:
+      rate_limit_path.parent.mkdir(parents=True, exist_ok=True)
+      temporary_path.write_text(json.dumps({
+        "lastNotificationAt": now,
+        "eventId": str(event.get("eventId") or ""),
+      }, separators=(",", ":")))
+      temporary_path.chmod(0o600)
+      temporary_path.replace(rate_limit_path)
+    except OSError:
+      cloudlog.warning("Galaxy: unable to persist Sentry notification rate-limit state")
+      try:
+        temporary_path.unlink(missing_ok=True)
+      except OSError:
+        pass
+    return True
+
+
+def _sentry_test_notification_event() -> dict:
+  return {
+    "eventId": f"notification-test-{int(time.time())}-{secrets.token_hex(4)}",
+    "kind": "warning",
+    "detectedAt": datetime.now(timezone.utc).isoformat(),
+    "message": "This is a test StarPilot Sentry notification.",
+    "imagePaths": [],
+  }
+
+
+def _dispatch_sentry_push(event: dict) -> None:
+  try:
+    from openpilot.starpilot.system.the_galaxy.web_push import webpush
+
+    vapid = _get_sentry_vapid()
+  except Exception:
+    cloudlog.exception("Galaxy: Sentry Web Push is unavailable")
+    return
+
+  event_id = str(event.get("eventId") or "")
+  payload = {
+    "title": "StarPilot Sentry Mode",
+    "body": str(event.get("message") or "Movement detected while parked."),
+    "eventId": event_id,
+    "url": f"/sentry?event={quote(event_id, safe='')}",
+  }
+  image_urls = _sentry_external_image_urls(event)
+  if image_urls:
+    payload["image"] = image_urls[0]
+
+  with _SENTRY_PUSH_LOCK:
+    subscriptions = _load_sentry_push_subscriptions()
+
+  expired_endpoints = set()
+  for subscription in subscriptions:
+    endpoint = subscription.get("endpoint")
+    try:
+      webpush(
+        subscription_info=subscription,
+        data=json.dumps(payload, separators=(",", ":")),
+        vapid_private_key=vapid,
+        vapid_claims={"sub": _SENTRY_PUSH_SUBJECT},
+        ttl=300,
+        timeout=10,
+      )
+    except Exception as error:
+      response = getattr(error, "response", None)
+      if getattr(response, "status_code", None) in {404, 410}:
+        expired_endpoints.add(endpoint)
+      cloudlog.warning("Galaxy: Sentry Web Push delivery failed: %s", error)
+
+  if expired_endpoints:
+    with _SENTRY_PUSH_LOCK:
+      current = _load_sentry_push_subscriptions()
+      _save_sentry_push_subscriptions([
+        subscription for subscription in current
+        if subscription.get("endpoint") not in expired_endpoints
+      ])
+
+
+def _dispatch_sentry_event(event: dict, *, bypass_rate_limit: bool = False) -> None:
+  if not any(_sentry_notification_channels().values()):
+    return
+  if not bypass_rate_limit and not _claim_sentry_notification_slot(event):
+    return
+
+  _dispatch_sentry_push(event)
   message = f"🚨 StarPilot Sentry Mode: {event['message']}"
   webhook = (params.get("SentryModeWebhook", encoding="utf-8") or "").strip()
   if webhook:
@@ -571,12 +1213,18 @@ def _dispatch_sentry_event(event: dict) -> None:
   ntfy_url = (params.get("SentryModeNtfyUrl", encoding="utf-8") or "").strip()
   if ntfy_url:
     try:
-      response = requests.post(
-        ntfy_url,
-        data=message.encode("utf-8"),
-        headers={"Title": "StarPilot Sentry Mode", "Priority": "urgent", "Tags": "warning,car"},
-        timeout=10,
-      )
+      headers = {"Title": "StarPilot Sentry Mode", "Priority": "urgent", "Tags": "warning,car"}
+      image = _sentry_first_image(event)
+      if image is None:
+        response = requests.post(ntfy_url, data=message.encode("utf-8"), headers=headers, timeout=10)
+      else:
+        filename, image_data = image
+        headers.update({
+          "Content-Type": "image/jpeg",
+          "Filename": filename,
+          "Message": f"StarPilot Sentry Mode: {event['message']}",
+        })
+        response = requests.put(ntfy_url, data=image_data, headers=headers, timeout=10)
       response.raise_for_status()
     except Exception:
       cloudlog.exception("Galaxy: ntfy notification failed")
@@ -584,20 +1232,7 @@ def _dispatch_sentry_event(event: dict) -> None:
 TOGGLE_BACKUP_FORMAT = "starpilot-toggle-backup"
 TOGGLE_BACKUP_VERSION = 1
 TOGGLE_BACKUP_MAX_ENCODED_BYTES = 2_000_000
-TOGGLE_BACKUP_NO_DEFAULT_KEYS = {
-  "AdbEnabled",
-  "AlphaLongitudinalEnabled",
-  "AlwaysOnDM",
-  "ExperimentalMode",
-  "ExperimentalModeConfirmed",
-  "IsLdwEnabled",
-  "IsMetric",
-  "IsRHD",
-  "IsRHDOverride",
-  "RecordAudio",
-  "RecordFront",
-  "SshEnabled",
-}
+TOGGLE_BACKUP_NO_DEFAULT_KEYS = param_profiles.PROFILE_NO_DEFAULT_KEYS
 
 
 def _get_toggle_backup_keys():
@@ -619,6 +1254,28 @@ def _get_toggle_backup_keys():
     keys.add(key)
 
   return keys
+
+
+def _route_log_files(name):
+  """Full logs for a route as [(segment, filename, path, size)], oldest segment first."""
+  if not utilities.ROUTE_RE.fullmatch(str(name or "")):
+    return []
+
+  for footage_path in FOOTAGE_PATHS:
+    logs = []
+    try:
+      segments = utilities.get_segments_in_route(name, footage_path)
+    except OSError:
+      continue
+    for segment in sorted(segments, key=lambda s: int(s.rsplit("--", 1)[1])):
+      for filename in ROUTE_LOG_CANDIDATES:
+        path = os.path.join(footage_path, segment, filename)
+        if os.path.isfile(path):
+          logs.append((segment, filename, path, os.path.getsize(path)))
+          break
+    if logs:
+      return logs
+  return []
 
 
 def _coerce_toggle_restore_value(key, value):
@@ -682,6 +1339,7 @@ _STATS_RESPONSE_CACHE = {
   "updated_at": 0.0,
   "payload": None,
 }
+_STATS_RESPONSE_LOCK = threading.Lock()
 
 try:
   FOOTAGE_PATHS = [
@@ -695,6 +1353,206 @@ except TypeError:
     "/data/media/0/realdata_konik/",
     str(Paths.log_root()),
   ]
+
+# Full drive logs, newest format first. comma only accepts qlog/qcamera uploads, so these come off the device directly.
+ROUTE_LOG_CANDIDATES = ("rlog.zst", "rlog.bz2", "rlog")
+ROUTE_METADATA_WORKERS = 4
+ROUTE_METADATA_BATCH_SIZE = 8
+ROUTE_THUMBNAIL_CACHE_SECONDS = 7 * 24 * 60 * 60
+# Browsers only allow a handful of connections per origin, so a request must never
+# park on the preview queue: give up and let the card fall back, the job keeps running.
+ROUTE_THUMBNAIL_WAIT_SECONDS = 25
+# One minute per segment, matching loggerd's segment length.
+SEGMENT_DURATION_SECONDS = 60
+# Only ever remux one segment at a time; the driving stack needs the headroom. The
+# subprocess timeout is the hard bound, with a small allowance for executor handoff.
+VIDEO_REMUX_WAIT_SECONDS = utilities.VIDEO_REMUX_TIMEOUT_SECONDS + 5
+# Segment media never changes once loggerd has closed it, so let the browser keep it.
+VIDEO_CACHE_SECONDS = 7 * 24 * 60 * 60
+_VIDEO_REMUX_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video-remux")
+_VIDEO_REMUX_FUTURES = {}
+_VIDEO_REMUX_LOCK = threading.Lock()
+_ROUTE_THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="route-thumbnail")
+_ROUTE_THUMBNAIL_FUTURES = {}
+_ROUTE_THUMBNAIL_LOCK = threading.Lock()
+
+
+def _route_scan_entries(footage_paths):
+  """Route scan entries in footage-root priority order, deduplicated by route id."""
+  entries = []
+  seen_names = set()
+  for footage_path in footage_paths:
+    try:
+      route_details = utilities.get_routes_with_segment_details(footage_path)
+    except OSError:
+      continue
+    for name, details in route_details:
+      if name in seen_names:
+        continue
+      seen_names.add(name)
+      entries.append((
+        footage_path,
+        name,
+        max(0, int(details.get("segmentCount", 0))),
+        max(0, int(details.get("firstSegmentNum", 0))),
+      ))
+  return entries
+
+
+def _route_metadata_events(entries, connect_dongle_id="", process_route=None):
+  """Yield SSE payloads while keeping queued metadata work cancellable."""
+  route_processor = process_route or utilities.process_route
+  total = len(entries)
+  yield {"routes": [], "progress": 0, "total": total, "connectDongleId": connect_dongle_id}
+  if total == 0:
+    return
+
+  executor = ThreadPoolExecutor(max_workers=ROUTE_METADATA_WORKERS, thread_name_prefix="route-metadata")
+  futures = []
+  try:
+    futures = [
+      executor.submit(route_processor, path, name, segment_count, first_segment_num)
+      for path, name, segment_count, first_segment_num in entries
+    ]
+    batch = []
+    for processed, future in enumerate(as_completed(futures), start=1):
+      try:
+        batch.append(future.result())
+      except Exception as exception:
+        print(f"Error processing route: {exception}")
+
+      if len(batch) >= ROUTE_METADATA_BATCH_SIZE or processed == total:
+        yield {"routes": batch, "progress": processed, "total": total}
+        batch = []
+  finally:
+    for future in futures:
+      future.cancel()
+    executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _route_first_segment_path(name, footage_path):
+  """Oldest surviving segment of a route. loggerd ages out --0 first, so it is not always --0."""
+  try:
+    segments = utilities.get_segments_in_route(name, footage_path)
+  except OSError:
+    return None
+  return os.path.join(footage_path, segments[0]) if segments else None
+
+
+def _resolve_route_thumbnail(file_path, footage_paths=None):
+  """Resolve only <segment>/preview.png below a configured footage root."""
+  parts = Path(str(file_path or "")).parts
+  if len(parts) != 2 or parts[1] != "preview.png" or not utilities.SEGMENT_RE.fullmatch(parts[0]):
+    return None
+
+  for footage_path in footage_paths if footage_paths is not None else FOOTAGE_PATHS:
+    footage_root = Path(footage_path).resolve()
+    segment_path = (footage_root / parts[0]).resolve()
+    if segment_path.parent != footage_root or not segment_path.is_dir():
+      continue
+    preview_path = segment_path / "preview.png"
+    if preview_path.is_symlink():
+      continue
+    if preview_path.exists():
+      resolved_preview = preview_path.resolve()
+      if resolved_preview.parent != segment_path:
+        continue
+      return resolved_preview
+    return preview_path
+  return None
+
+
+def _generate_route_thumbnail(preview_path):
+  if preview_path.is_file():
+    return preview_path
+
+  for filename in ("qcamera.ts", "fcamera.hevc"):
+    source_path = preview_path.parent / filename
+    if source_path.resolve().parent == preview_path.parent and source_path.is_file() and utilities.video_to_png(source_path, preview_path) and preview_path.is_file():
+      return preview_path
+  return None
+
+
+def _remove_video_remux_future(key, future):
+  with _VIDEO_REMUX_LOCK:
+    if _VIDEO_REMUX_FUTURES.get(key) is future:
+      _VIDEO_REMUX_FUTURES.pop(key, None)
+
+
+def _get_or_create_segment_mp4(source_path):
+  """Remuxed mp4 for one segment, or None if it is not ready in time.
+
+  Concurrent requests share one ffmpeg run instead of racing to write the same file.
+  """
+  key = str(source_path)
+  created = False
+  with _VIDEO_REMUX_LOCK:
+    future = _VIDEO_REMUX_FUTURES.get(key)
+    if future is None:
+      future = _VIDEO_REMUX_EXECUTOR.submit(utilities.ffmpeg_mp4_wrap_to_path, source_path)
+      _VIDEO_REMUX_FUTURES[key] = future
+      created = True
+
+  if created:
+    future.add_done_callback(lambda completed: _remove_video_remux_future(key, completed))
+
+  try:
+    return future.result(timeout=VIDEO_REMUX_WAIT_SECONDS)
+  except TimeoutError:
+    # The callback keeps the running job deduplicated, then evicts it when done.
+    return None
+
+
+def _remove_route_thumbnail_future(key, future):
+  with _ROUTE_THUMBNAIL_LOCK:
+    if _ROUTE_THUMBNAIL_FUTURES.get(key) is future:
+      _ROUTE_THUMBNAIL_FUTURES.pop(key, None)
+
+
+def _get_or_create_route_thumbnail(file_path, footage_paths=None):
+  preview_path = _resolve_route_thumbnail(file_path, footage_paths)
+  if preview_path is None:
+    return None
+  if preview_path.is_file():
+    return preview_path
+
+  key = str(preview_path)
+  created = False
+  with _ROUTE_THUMBNAIL_LOCK:
+    future = _ROUTE_THUMBNAIL_FUTURES.get(key)
+    if future is None:
+      future = _ROUTE_THUMBNAIL_EXECUTOR.submit(_generate_route_thumbnail, preview_path)
+      _ROUTE_THUMBNAIL_FUTURES[key] = future
+      created = True
+
+  if created:
+    future.add_done_callback(lambda completed: _remove_route_thumbnail_future(key, completed))
+
+  try:
+    return future.result(timeout=ROUTE_THUMBNAIL_WAIT_SECONDS)
+  except TimeoutError:
+    # The completion callback keeps the running job deduplicated, then evicts it when done.
+    return None
+
+
+class _TarBuffer(io.RawIOBase):
+  """Collects tarfile output so a route archive can be streamed out instead of built on disk."""
+
+  def __init__(self):
+    self._chunks = []
+
+  def writable(self):
+    return True
+
+  def write(self, data):
+    self._chunks.append(bytes(data))
+    return len(data)
+
+  def pop(self):
+    data = b"".join(self._chunks)
+    self._chunks.clear()
+    return data
+
 
 KEYS = {
   "amap1": ("amap1", "", "AMapKey1", "AMap / Gaode key #1", 39),
@@ -714,6 +1572,7 @@ TMUX_LOGS_PATH = Path("/data/tmux_logs")
 
 MODEL_DOWNLOAD_PARAM = "ModelToDownload"
 MODEL_DOWNLOAD_ALL_PARAM = "DownloadAllModels"
+ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM = "AllowGpuModelDownloadWithoutGpu"
 MODEL_DOWNLOAD_PROGRESS_PARAM = "ModelDownloadProgress"
 MODEL_CANCEL_DOWNLOAD_PARAM = "CancelModelDownload"
 MODEL_SORT_MODE_PARAM = "ModelSortMode"
@@ -722,7 +1581,7 @@ MODEL_USER_FAVORITES_PARAM = "UserFavorites"
 MAPS_DOWNLOAD_PARAM = "DownloadMaps"
 MAPS_CANCEL_DOWNLOAD_PARAM = "CancelDownloadMaps"
 MAPS_DOWNLOAD_PROGRESS_PARAM = "MapsDownloadProgress"
-MAPS_DOWNLOAD_SIZE_CACHE_PARAM = "MapsDownloadSizeCache"
+MAPS_DOWNLOAD_SIZE_CACHE_PARAM = MAPS_STORAGE_CACHE_PARAM
 
 
 def _get_galaxy_dir():
@@ -1065,6 +1924,9 @@ _TROUBLESHOOT_ADVANCED_LONGITUDINAL_KEYS = [
   "TrailerLoad",
   "CustomAccelProfile",
   *CUSTOM_ACCEL_PROFILE_PARAM_KEYS,
+  CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY,
+  *CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS,
+  *CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS,
   "LongitudinalActuatorDelay",
   "StartAccel",
   "VEgoStarting",
@@ -1095,22 +1957,22 @@ _RUNTIME_DEFAULT_ZERO_OK_KEYS = {
 _TROUBLESHOOT_SECTION_DEFINITIONS = [
   {
     "id": "personality_settings",
-    "title": "Personality Profile Settings",
+    "title": "Longitudinal (Speed & Following) › Driving Personalities",
     "keys": _TROUBLESHOOT_PERSONALITY_KEYS,
   },
   {
     "id": "cem_settings",
-    "title": "CEM Settings",
+    "title": "Longitudinal (Speed & Following) › Longitudinal control mode",
     "keys": _TROUBLESHOOT_CEM_KEYS,
   },
   {
     "id": "advanced_lateral_tuning",
-    "title": "Advanced Lateral Tuning",
+    "title": "Lateral (Steering) › Advanced Lateral Tuning",
     "keys": _TROUBLESHOOT_ADVANCED_LATERAL_KEYS,
   },
   {
     "id": "advanced_longitudinal_tuning",
-    "title": "Advanced Longitudinal Tuning",
+    "title": "Longitudinal (Speed & Following) › Advanced Longitudinal Tuning",
     "keys": _TROUBLESHOOT_ADVANCED_LONGITUDINAL_KEYS,
   },
 ]
@@ -1843,6 +2705,18 @@ def _git_stdout(repo_path, args, timeout=15):
     raise RuntimeError(stderr)
   return (result.stdout or "").strip()
 
+def _clear_generated_build_state(repo_path):
+  """Drop ignored build metadata that is unsafe to carry across revisions."""
+  root = Path(repo_path)
+  for path in (root / ".sconsign.dblite", root / "cereal" / "gen"):
+    try:
+      if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+      else:
+        path.unlink(missing_ok=True)
+    except OSError as exception:
+      raise RuntimeError(f"Unable to clear stale build state at {path}: {exception}") from exception
+
 def _git_config_get(repo_path, key):
   try:
     return _git_stdout(repo_path, ["config", "--local", "--get", key], timeout=10)
@@ -2140,6 +3014,66 @@ def _collect_fast_update_info(include_remote=True):
     **rollback_data,
   }
 
+def _version_install_worker(branch, selection):
+  """Resolve, back up and install one immutable revision after explicit confirmation."""
+  repo_path = str(_get_openpilot_root())
+  installed = None
+  try:
+    version_install.require_parked()
+    if selection == "latest":
+      # Preserve the existing branch updater, including boot-time AGNOS handling.
+      # Historical compatibility and GitHub-history restrictions apply only to
+      # exact revisions, never to an ordinary update to the latest branch head.
+      _branch_switch_worker(branch)
+      return
+    _set_fast_update_progress(1, "Resolving selected version", 10.0, branch)
+    target = version_history.resolve_version(repo_path, branch, selection)
+    version_install.require_parked()
+    # The normal updater owns staging for its whole lifetime. Pause only that
+    # daemon and its children, then refuse any still-held Git locks.
+    with version_install.suspend_updater() as updater:
+      version_install.require_parked()
+      version_install.check_repository_idle(repo_path)
+      rc, detail = _run_git_with_progress(
+        repo_path, _build_shallow_fetch_commit_args(target["commit"]),
+        timeout=240, step=1, label="Fetching selected version",
+      )
+      if rc:
+        raise version_install.InstallError(detail or "Unable to fetch the selected revision")
+      if _git_stdout(repo_path, ["rev-parse", "FETCH_HEAD^{commit}"]) != target["commit"]:
+        raise version_install.InstallError("Fetched revision does not match the selected version")
+      version_install.require_parked()
+      previous_branch = _git_stdout(repo_path, ["branch", "--show-current"])
+      previous_commit = _git_stdout(repo_path, ["rev-parse", "HEAD"])
+      result = version_install.install(
+        repo_path, target, check_parked=version_install.require_parked,
+        progress=_set_fast_update_progress,
+      )
+      installed = result
+      updater.restart_after_install()
+      _save_rollback_target(repo_path, previous_branch, previous_commit)
+      update_starpilot_toggles()
+      version_install.require_parked()
+      _set_fast_update_progress(5, "Rebooting device", 100.0, "Selected revision installed. Automatic updates remain paused.")
+      # Keep the action locked until shutdown. Another request must not start
+      # during the reboot notice, or if the hardware reboot call returns.
+      _set_fast_update_state(
+        running=True, stage="rebooting", finishedAt=time.time(),
+        message=f"Installed {branch} @ {target['commit'][:10]}. Rebooting now.",
+        recoveryBackup=result["backup"],
+      )
+      time.sleep(_FAST_UPDATE_REBOOT_NOTICE_SECONDS)
+      version_install.require_parked()
+      HARDWARE.reboot()
+  except Exception as exception:
+    if installed is not None:
+      _set_fast_update_error_state(
+        "The selected version is installed, but the device could not finish restarting. Park and reboot to activate it.", exception,
+      )
+      _set_fast_update_state(recoveryBackup=installed["backup"])
+    else:
+      _set_fast_update_error_state("Selected version installation failed.", exception)
+
 def _fast_update_worker():
   started_at = time.time()
   repo_path = str(_get_openpilot_root())
@@ -2179,6 +3113,7 @@ def _fast_update_worker():
     reset = _run_git(repo_path, ["reset", "--hard", "FETCH_HEAD"], timeout=120)
     if reset.returncode != 0:
       raise RuntimeError((reset.stderr or reset.stdout or "git reset failed").strip())
+    _clear_generated_build_state(repo_path)
     _set_fast_update_progress(3, "Applying fetched commit", 100.0, "Repository reset complete.")
 
     _run_submodule_update_if_needed(repo_path, step=4)
@@ -2231,11 +3166,13 @@ def _branch_switch_worker(target_branch):
     reset = _run_git(repo_path, ["reset", "--hard", "FETCH_HEAD"], timeout=120)
     if reset.returncode != 0:
       raise RuntimeError((reset.stderr or reset.stdout or "git reset failed").strip())
+    _clear_generated_build_state(repo_path)
 
     _run_git(repo_path, ["branch", "--set-upstream-to", f"origin/{target_branch}", target_branch], timeout=30)
     _set_fast_update_progress(3, "Switching branch", 100.0, f"Now on '{target_branch}'.")
 
     _run_submodule_update_if_needed(repo_path, step=4)
+    version_install.clear_pin()
     _finish_update_and_reboot(
       f"Switched to '{target_branch}'. Device is rebooting now. Please wait for reconnection."
     )
@@ -2299,11 +3236,13 @@ def _rollback_worker():
     reset = _run_git(repo_path, ["reset", "--hard", target_commit], timeout=120)
     if reset.returncode != 0:
       raise RuntimeError((reset.stderr or reset.stdout or "git reset failed").strip())
+    _clear_generated_build_state(repo_path)
 
     _run_git(repo_path, ["branch", "--set-upstream-to", f"origin/{target_branch}", target_branch], timeout=30)
     _set_fast_update_progress(3, "Applying rollback target", 100.0, f"Now on {target_branch} @ {short_commit}.")
 
     _run_submodule_update_if_needed(repo_path, step=4)
+    version_install.clear_pin()
     try:
       _clear_rollback_target(repo_path)
     except Exception as exception:
@@ -2451,18 +3390,16 @@ _favorite_slot_options = None
 def _get_layout_param_metadata():
   global _layout_param_metadata
   if _layout_param_metadata is None:
-    try:
-      layout_path = os.path.join(os.path.dirname(__file__), "assets", "components", "tools", "device_settings_layout.json")
-      with open(layout_path) as f:
-        layout_data = json.load(f)
+    layout_data = load_settings_catalog()
+    if layout_data is None:
+      _layout_param_metadata = {}
+    else:
       _layout_param_metadata = {
         p["key"]: p
         for section in layout_data
         for p in section.get("params", [])
-        if "key" in p
+        if isinstance(p, dict) and "key" in p
       }
-    except Exception:
-      _layout_param_metadata = {}
   return _layout_param_metadata
 
 def _get_layout_type_overrides():
@@ -2481,55 +3418,29 @@ def _get_favorite_slot_options():
   if _favorite_slot_options is not None:
     return _favorite_slot_options
 
-  allowed_keys, value_types = _get_param_type_info()
-  options = []
-  options.extend(dict(option) for option in FAVORITE_ACTION_OPTIONS)
-  try:
-    layout_path = os.path.join(os.path.dirname(__file__), "assets", "components", "tools", "device_settings_layout.json")
-    with open(layout_path) as f:
-      layout_data = json.load(f)
-
-    seen = set()
-    for section in layout_data:
-      section_name = section.get("name", "")
-      for param_data in section.get("params", []):
-        key = str(param_data.get("key") or "").strip()
-        if not key or key in seen:
-          continue
-        if key not in allowed_keys or value_types.get(key) is not bool:
-          continue
-        if param_data.get("ui_type") != "toggle" or param_data.get("data_type") != "bool":
-          continue
-        if key == "AlphaLongitudinalEnabled" and not _get_alpha_longitudinal_available():
-          continue
-
-        seen.add(key)
-        options.append({
-          "key": key,
-          "label": str(param_data.get("label") or key),
-          "description": str(param_data.get("description") or ""),
-          "section": section_name,
-        })
-  except Exception:
-    options = []
-
-  options.sort(key=lambda option: (str(option.get("label") or option.get("key") or "").casefold(), str(option.get("key") or "").casefold()))
-  _favorite_slot_options = options
+  allowed_keys, _value_types = _get_param_type_info()
+  _favorite_slot_options = build_favorite_slot_options(
+    lambda key: key in allowed_keys,
+    alpha_longitudinal_available=_get_alpha_longitudinal_available(),
+  )
   return _favorite_slot_options
 
+def _get_available_favorite_slot_options():
+  return filter_favorite_slot_options(
+    _get_favorite_slot_options(),
+    {"HasRivianAngleHarness": _get_has_rivian_angle_harness()},
+  )
+
+
+def _get_available_controller_action_options():
+  return _get_available_favorite_slot_options()
+
+
 def _favorite_slot_values(options):
-  return {
-    option["key"]: _safe_params_get_bool(option["key"])
-    for option in options
-    if option.get("key") and not is_favorite_action_key(option.get("key"))
-  }
+  return get_favorite_values(options, params)
 
 def _configured_favorite_slot_values(slots):
-  return {
-    slot["key"]: _safe_params_get_bool(slot["key"])
-    for slot in slots
-    if slot.get("key") and not is_favorite_action_key(slot.get("key"))
-  }
+  return get_favorite_values(slots, params)
 
 _cached_allowed_keys = None
 _cached_param_types = None
@@ -2648,6 +3559,30 @@ def _safe_params_get_bool(key, default=False):
   except Exception:
     return bool(default)
 
+def _personality_settings_write_locked():
+  return _safe_params_get_bool("IsOnroad", default=True) or not _safe_params_get_bool("IsOffroad", default=False)
+
+def _personality_editor_write_locked():
+  def road_state(value):
+    if isinstance(value, bytes):
+      value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+      normalized = value.strip().lower()
+      if normalized in ("1", "true"):
+        return True
+      if normalized in ("0", "false"):
+        return False
+      return None
+    if isinstance(value, bool):
+      return value
+    if isinstance(value, int) and value in (0, 1):
+      return bool(value)
+    return None
+
+  is_onroad = road_state(_safe_params_get_live_raw("IsOnroad"))
+  is_offroad = road_state(_safe_params_get_live_raw("IsOffroad"))
+  return is_onroad is None or is_offroad is None or is_onroad == is_offroad
+
 def _normalize_vasm_config(data):
   if not isinstance(data, dict):
     raise ValueError("Configuration must be a JSON object.")
@@ -2756,18 +3691,6 @@ def _is_blank_param_raw(raw_value):
     return len(raw_value.strip()) == 0
   return False
 
-def _get_use_old_ui_enabled():
-  if not _raylib_ui_toggle_affects_device():
-    return False
-
-  raw_value = _safe_params_get_live_raw("UseOldUI")
-  if _is_blank_param_raw(raw_value):
-    legacy_raw_value = _safe_params_get_live_raw("TryRaylibUI")
-    if not _is_blank_param_raw(legacy_raw_value):
-      return not _coerce_param_value(legacy_raw_value, bool)
-
-  return _coerce_param_value(raw_value, bool)
-
 def _has_runtime_default_value(key, raw_value):
   if _is_blank_param_raw(raw_value):
     return False
@@ -2783,6 +3706,156 @@ def _has_runtime_default_value(key, raw_value):
     return numeric_value != 0.0
   except Exception:
     return True
+
+_PERSONALITY_PROFILES_WRITE_LOCK = threading.Lock()
+
+
+def _serialize_personality_profile_writes(view):
+  @wraps(view)
+  def wrapped(*args, **kwargs):
+    if request.method not in ("PUT", "POST"):
+      return view(*args, **kwargs)
+    with _PERSONALITY_PROFILES_WRITE_LOCK:
+      return view(*args, **kwargs)
+  return wrapped
+
+
+def _get_detected_ev_tuning():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return default_ev_tuning_enabled(cp)
+  except Exception:
+    return False
+
+
+def _get_detected_truck_tuning():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return is_truck_fingerprint(cp.carFingerprint)
+  except Exception:
+    return False
+
+
+def _get_effective_legacy_custom_accel_curve(
+  ev_tuning: bool, truck_tuning: bool, *, acceleration_profile=None, custom_enabled: bool | None = None,
+) -> list[float]:
+  target_axis = np.array(ACCELERATION_SPEEDS_MPH, dtype=float) * 0.44704
+
+  def sample(values, breakpoints):
+    return [round(interpolate_accel_profile(float(speed), values, breakpoints), 4) for speed in target_axis]
+
+  preset_curve = get_accel_profile_curve_values(
+    normalize_acceleration_profile(_safe_params_get_live_raw("AccelerationProfile") if acceleration_profile is None else acceleration_profile),
+    ev_tuning,
+    truck_tuning,
+  )
+  if not (_safe_params_get_bool("CustomAccelProfile") if custom_enabled is None else custom_enabled):
+    return sample(preset_curve, A_CRUISE_MAX_BP_CUSTOM)
+
+  raw_legacy = {key: _safe_params_get_live_raw(key) for key in CUSTOM_ACCEL_PROFILE_PARAM_KEYS}
+  if custom_accel_profile_is_initialized(_safe_params_get_live_raw(CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY), raw_legacy):
+    try:
+      legacy_values = [float(raw_legacy[key]) for key in CUSTOM_ACCEL_PROFILE_PARAM_KEYS]
+      if all(math.isfinite(value) and CUSTOM_ACCEL_PROFILE_VALUE_MIN <= value <= CUSTOM_ACCEL_PROFILE_VALUE_MAX for value in legacy_values):
+        preset_curve = legacy_values
+    except (TypeError, ValueError):
+      pass
+
+  if _get_custom_accel_profile_breakpoints_initialized():
+    try:
+      breakpoints, values = parse_custom_accel_profile_curve(
+        _safe_params_get_live_raw(CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY),
+        [_safe_params_get_live_raw(key) for key in CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS],
+        [_safe_params_get_live_raw(key) for key in CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS],
+      )
+      return sample(values, breakpoints)
+    except (TypeError, ValueError):
+      pass
+  return sample(preset_curve, A_CRUISE_MAX_BP_CUSTOM)
+
+
+def _get_effective_legacy_following_curve(profile_id: str) -> list[float]:
+  builtin_follow = {
+    "aggressive": 1.25,
+    "standard": 1.45,
+    "relaxed": 1.75,
+  }
+  if profile_id in builtin_follow and not _safe_params_get_bool("CustomPersonalities"):
+    return [builtin_follow[profile_id]] * len(FOLLOWING_SPEEDS_MPH)
+
+  defaults = {
+    "TrafficFollow": 0.75,
+    "AggressiveFollow": 1.25,
+    "AggressiveFollowHigh": 1.0,
+    "StandardFollow": 1.45,
+    "StandardFollowHigh": 1.2,
+    "RelaxedFollow": 1.6,
+    "RelaxedFollowHigh": 1.4,
+  }
+
+  def follow_value(key: str) -> float:
+    try:
+      parsed = float(_safe_params_get_live_raw(key, defaults[key]) if _safe_params_get_bool("CustomPersonalities") else defaults[key])
+    except (TypeError, ValueError):
+      parsed = defaults[key]
+    if not math.isfinite(parsed):
+      parsed = defaults[key]
+    return float(np.clip(parsed, 0.5 if key == "TrafficFollow" else CURVE_BOUNDS["following"][0], CURVE_BOUNDS["following"][1]))
+
+  if profile_id == "traffic":
+    breakpoints = (0.0, 25.0 / CV.MPH_TO_MS)
+    values = (follow_value("TrafficFollow"), follow_value("RelaxedFollow"))
+  elif profile_id in ("aggressive", "standard", "relaxed"):
+    prefix = profile_id.capitalize()
+    breakpoints = (45.0, 70.0)
+    values = (follow_value(f"{prefix}Follow"), follow_value(f"{prefix}FollowHigh"))
+  else:
+    raise ValueError(f"Unknown personality: {profile_id}")
+  return [round(float(point), 4) for point in np.interp(FOLLOWING_SPEEDS_MPH, breakpoints, values)]
+
+
+def _get_dom_personality_reference_curves(ev_tuning: bool) -> dict[str, dict[str, list[float]]]:
+  """Sample Dom's configured base curves, without live driving modifiers.
+
+  Use global powertrain/tuning switches for Dom default, just as the runtime
+  does. Named personality presets have a separate detected-powertrain policy.
+  """
+  from openpilot.starpilot.common.accel_profile import A_CRUISE_MAX_VALS_TRAFFIC_ALL
+
+  truck_tuning = _safe_params_get_bool("TruckTuning")
+  raw_ev = _safe_params_get_live_raw("EVTuning")
+  ev_tuning = (ev_tuning if raw_ev in (None, b"", "") else _safe_params_get_bool("EVTuning")) and not truck_tuning
+  tuning = _safe_params_get_bool("LongitudinalTune")
+  custom_accel = _safe_params_get_bool("AdvancedLongitudinalTune") and _safe_params_get_bool("CustomAccelProfile")
+  acceleration_profile = normalize_acceleration_profile(_safe_params_get_live_raw("AccelerationProfile")) if tuning or custom_accel else 0
+  deceleration_profile = normalize_deceleration_profile(_safe_params_get_live_raw("DecelerationProfile", 1)) if tuning else 1
+  map_gears = _safe_params_get_bool("QOLLongitudinal") and _safe_params_get_bool("MapGears")
+  # A static speed graph uses the normal-gear base; live Eco/Sport, weather and
+  # overspeed/lead modifiers remain on Dom's existing controller paths.
+  if map_gears and _safe_params_get_bool("MapAcceleration") and not custom_accel:
+    acceleration_profile = 0
+  if map_gears and _safe_params_get_bool("MapDeceleration"):
+    deceleration_profile = 0
+  acceleration = _get_effective_legacy_custom_accel_curve(
+    ev_tuning, truck_tuning, acceleration_profile=acceleration_profile, custom_enabled=custom_accel,
+  )
+  traffic_acceleration = [round(interpolate_accel_profile(speed * CV.MPH_TO_MS, A_CRUISE_MAX_VALS_TRAFFIC_ALL), 4)
+                          for speed in ACCELERATION_SPEEDS_MPH]
+  return {
+    profile: {
+      "acceleration": list(traffic_acceleration if profile == "traffic" else acceleration),
+      "braking": [0.35 if profile == "traffic" else {0: 1.0, 1: 0.5, 2: 2.0}[deceleration_profile]] * len(BRAKING_SPEEDS_MPH),
+      "following": _get_effective_legacy_following_curve(profile),
+    }
+    for profile in ("traffic", "aggressive", "standard", "relaxed")
+  }
+
 
 def _get_runtime_default_param_overrides():
   overrides = {}
@@ -2842,17 +3915,15 @@ def _get_runtime_default_param_overrides():
     acceleration_profile_raw if not _is_blank_param_raw(acceleration_profile_raw) else static_defaults.get("AccelerationProfile", "0")
   )
   overrides.update(build_custom_accel_profile_defaults(acceleration_profile, ev_tuning, truck_tuning))
+  overrides.update(get_custom_accel_profile_curve_defaults(acceleration_profile, ev_tuning, truck_tuning))
 
   return overrides
 
 def _get_current_param_value(key, value_type, defaults_lookup=None):
-  if key == "UseOldUI":
-    return _get_use_old_ui_enabled()
-  if key == "TryRaylibUI":
-    return _raylib_ui_toggle_affects_device() and not _get_use_old_ui_enabled()
-
   if key == CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY:
     return _get_custom_accel_profile_initialized()
+  if key == CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY:
+    return _get_custom_accel_profile_breakpoints_initialized()
 
   if key == "LeadIndicator":
     return _get_lead_indicator_enabled(defaults_lookup)
@@ -2864,6 +3935,11 @@ def _get_current_param_value(key, value_type, defaults_lookup=None):
     if defaults_lookup is None:
       defaults_lookup = _get_default_param_values()
     return _coerce_param_value(defaults_lookup.get(key), value_type)
+
+  if key in CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS and not _get_custom_accel_profile_breakpoints_initialized():
+    if defaults_lookup is None:
+      defaults_lookup = _get_default_param_values()
+    return _coerce_param_value(_get_legacy_compatible_curve_value(key, defaults_lookup), value_type)
 
   raw_value = _safe_params_get_live_raw(key)
   if _is_blank_param_raw(raw_value):
@@ -2897,12 +3973,43 @@ def _get_custom_accel_profile_initialized():
     raw_values,
   )
 
+
+def _get_custom_accel_profile_breakpoints_initialized():
+  return _coerce_param_value(_safe_params_get_live_raw(CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY), bool)
+
+
+def _get_legacy_compatible_curve_value(key, defaults_lookup):
+  if key == CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY:
+    return CUSTOM_ACCEL_PROFILE_DEFAULT_POINT_COUNT
+
+  if key in CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS:
+    index = CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS.index(key)
+    return CUSTOM_ACCEL_PROFILE_DEFAULT_BREAKPOINTS_MPH[index]
+
+  if key in CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS:
+    index = CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS.index(key)
+    if index < len(CUSTOM_ACCEL_PROFILE_PARAM_KEYS):
+      legacy_key = CUSTOM_ACCEL_PROFILE_PARAM_KEYS[index]
+      return _get_current_param_value(legacy_key, float, defaults_lookup)
+
+  return defaults_lookup.get(key)
+
+
+def _seed_custom_accel_profile_curve(defaults_lookup):
+  seeded = {}
+  for key in CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS:
+    value = _get_legacy_compatible_curve_value(key, defaults_lookup)
+    params.put(key, _serialize_param_write_value(value))
+    seeded[key] = value
+  params.put_bool(CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY, True)
+  return seeded
+
 def _serialize_param_write_value(raw_value):
   if isinstance(raw_value, bool):
     return "1" if raw_value else "0"
   if isinstance(raw_value, bytes):
     return raw_value.decode("utf-8", errors="replace")
-  return str(raw_value or "")
+  return "" if raw_value is None else str(raw_value)
 
 def _offroad_excessive_actuation_type():
   alert = _safe_params_get_live_raw("Offroad_ExcessiveActuation")
@@ -3311,6 +4418,25 @@ def _get_vehicle_parked():
   except Exception:
     return False
 
+def _get_longitudinal_mode_capable():
+  # Do not authorize from a default or a stale toggle snapshot. Pending disable
+  # also blocks selection until the driving stack has regenerated CarParams.
+  if _safe_params_get_bool("DisableOpenpilotLongitudinal", default=True):
+    return False
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      if cp.alphaLongitudinalAvailable and not _safe_params_get_bool("AlphaLongitudinalEnabled", default=False):
+        return False
+      return bool(cp.openpilotLongitudinalControl)
+  except Exception:
+    return False
+
+def _get_is_tici_or_tizi():
+  return HARDWARE.get_device_type() in ("tici", "tizi")
+
 def _get_alpha_longitudinal_available():
   cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
   if not cp_bytes:
@@ -3319,6 +4445,17 @@ def _get_alpha_longitudinal_available():
   try:
     with car.CarParams.from_bytes(cp_bytes) as cp:
       return bool(getattr(cp, "alphaLongitudinalAvailable", False))
+  except Exception:
+    return False
+
+def _get_has_rivian_angle_harness():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return cp.brand == "rivian" and bool(int(getattr(cp, "flags", 0)) & RIVIAN_ANGLE_HARNESS_FLAG)
   except Exception:
     return False
 
@@ -3501,6 +4638,45 @@ def _build_troubleshoot_payload():
     for section_definition in _TROUBLESHOOT_SECTION_DEFINITIONS
   ]
 
+  shown = {item['key'] for section in sections for item in section['items']}
+  registered = {key for key, *_ in starpilot_default_params}
+  for category in load_settings_catalog() or []:
+    groups = {}
+    for entry in category.get('params', []):
+      key = entry.get('key')
+      if key in shown or key not in registered or key.startswith('LaneCentering') or key == 'LaneCenterOffset':
+        continue
+      if (entry.get("requires_capability") == "HasRivianAngleHarness" and not _get_has_rivian_angle_harness()):
+        continue
+      if key == "TeslaWakeOnCAN" and not supports_tesla_can_wake(params):
+        continue
+      if _params_raw.get_key_flag(key) & ParamKeyFlag.DONT_LOG:
+        continue
+      parent = entry.get('parent_key')
+      title = category['name']
+      if parent:
+        title += ' › ' + str(layout_metadata.get(parent, {}).get('label', parent))
+      groups.setdefault(title, []).append(key)
+      shown.add(key)
+    for title, keys in groups.items():
+      section = _build_troubleshoot_section_payload({'id': 'catalog_' + keys[0], 'title': title, 'keys': keys},
+                                                    value_types, default_values, layout_metadata, learned_values)
+      section['resettable'] = False
+      sections.append(section)
+  for title, keys in [
+      ('Bluetooth Controllers', ['BluetoothEnabled', 'BluetoothDisconnectControllersOffroad', 'WheelControlsEnabled', 'ControllerActionSlots', 'WheelControlMappings']),
+      ('Longitudinal (Speed & Following) › Longitudinal control mode', ['ExperimentalMode', 'ConditionalExperimental', 'ConditionalChill', 'LongitudinalPersonality']),
+      ('Model Manager', ['Model', 'ActiveBigModel', 'ActiveSmallModel', 'ModelSortMode', 'UserFavorites'])]:
+    keys = [key for key in keys if key in registered and key not in shown
+            and not (_params_raw.get_key_flag(key) & ParamKeyFlag.DONT_LOG)]
+    if keys:
+      section = _build_troubleshoot_section_payload({'id': 'extra_' + keys[0], 'title': title, 'keys': keys},
+                                                    value_types, default_values, layout_metadata, learned_values)
+      section['resettable'] = False
+      sections.append(section)
+      shown.update(keys)
+  sections.sort(key=lambda section: section["title"])
+
   return _sanitize_json_value({
     "vehicleStatus": _build_vehicle_fault_status(),
     "snapshot": snapshot_items,
@@ -3516,7 +4692,10 @@ def _reset_troubleshoot_section(section_id):
   allowed_keys, _ = _get_param_type_info()
   default_values = _get_default_param_values()
   is_onroad = params.get_bool("IsOnroad")
-  blocked_onroad_keys = {"Model", "AlwaysOnLateral", "ForceTorqueController", "NNFF", "NNFFLite"}
+  blocked_onroad_keys = {
+    "Model", "AlwaysOnLateral", "ForceTorqueController", "NNFF", "NNFFLite",
+  }
+  personality_writes_locked = _personality_settings_write_locked()
 
   updated_keys = []
   skipped_keys = []
@@ -3530,8 +4709,9 @@ def _reset_troubleshoot_section(section_id):
       skipped_keys.append({"key": key, "reason": "not editable"})
       continue
 
-    if is_onroad and key in blocked_onroad_keys:
-      skipped_keys.append({"key": key, "reason": "blocked while onroad"})
+    if ((is_onroad and key in blocked_onroad_keys) or
+        (personality_writes_locked and key in PERSONALITY_PARKED_PARAM_KEYS)):
+      skipped_keys.append({"key": key, "reason": "blocked until required off-road state is confirmed"})
       continue
 
     if key not in default_values:
@@ -4129,7 +5309,32 @@ def _set_lateral_maneuver_mode(enabled):
 
   return _save_lateral_maneuver_status(status)
 
+
+_SLUG_PREFIX_RE = re.compile(r"^/([A-Za-z0-9]{16})(/.*)?$")
+
+
+class GalaxySlugMiddleware:
+  """WSGI middleware to normalize reverse-proxy requests prefixed with a 16-character tunnel slug."""
+
+  def __init__(self, wsgi_app):
+    self.wsgi_app = wsgi_app
+
+  def __call__(self, environ, start_response):
+    path_info = environ.get("PATH_INFO", "")
+    match = _SLUG_PREFIX_RE.match(path_info)
+    if match:
+      environ["HTTP_X_GALAXY_SLUG"] = match.group(1)
+      remainder = match.group(2)
+      environ["PATH_INFO"] = remainder if remainder else "/"
+    return self.wsgi_app(environ, start_response)
+
+
 def setup(app):
+  from openpilot.starpilot.assets.model_sizes import ModelSizes
+  model_sizes = ModelSizes()
+  if not isinstance(app.wsgi_app, GalaxySlugMiddleware):
+    app.wsgi_app = GalaxySlugMiddleware(app.wsgi_app)
+
   model_status_debug = {
     "last_signature": None,
     "last_log_time": 0.0,
@@ -4141,18 +5346,34 @@ def setup(app):
     if request.path in {
       "/assets/components/router.js",
       "/assets/components/sentry_notifications.js",
+      "/assets/js/utils.js",
+      "/assets/components/settings.js",
       "/assets/components/home/home.js",
       "/assets/components/home/home.css",
+      "/assets/mobile/js/params.js",
       "/assets/components/tools/device_settings.js",
       "/assets/components/tools/device_settings.css",
       "/assets/components/tools/device_settings_layout.json",
       "/assets/components/tools/galaxy.js",
+      "/assets/components/tools/galaxy.css",
+      "/assets/components/tools/sentry.js",
+      "/assets/components/tools/sentry.css",
       "/assets/components/tools/v_asm.js",
       "/assets/components/tools/v_asm.css",
       "/assets/components/tools/pip_sidecam.js",
       "/assets/components/tools/pip_sidecam.css",
       "/assets/components/tools/toggles.js",
+      "/assets/components/tools/model_laboratory.js",
+      "/assets/components/tools/model_laboratory.css",
+      "/assets/components/tools/bluetooth.js",
+      "/assets/components/tools/bluetooth.css",
+      "/assets/components/tools/wheel_controls.js",
+      "/assets/components/tools/wheel_controls.css",
     }:
+      response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+    if request.path == "/api/bluetooth/status" or request.path.startswith("/api/bluetooth/"):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
@@ -4160,19 +5381,281 @@ def setup(app):
 
   @app.errorhandler(404)
   def not_found(_):
+    is_api = (
+      request.path == "/api"
+      or request.path.startswith("/api/")
+      or "/api/" in request.path
+      or request.is_json
+      or (request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html)
+    )
+    if is_api or request.method not in ("GET", "HEAD"):
+      return jsonify({"error": "Not found"}), 404
+
+    if request.path.startswith(("/assets/", "/screen_recordings/", "/thumbnails/", "/video/")):
+      return "Not found", 404
+
     response = make_response(render_template("index.html"))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
 
+  def _no_store_response(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+  def _serve_new_ui():
+    ui_index_path = Path(app.static_folder) / "mobile" / "index.html"
+    if not ui_index_path.is_file():
+      return "Galaxy UI not found", 404
+    return _no_store_response(make_response(send_file(str(ui_index_path))))
+
   @app.route("/", methods=["GET"])
   def index():
+    if params.get_bool("GalaxyMobileDefault"):
+      return _serve_new_ui()
     response = make_response(render_template("index.html"))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+  @app.route("/classic", methods=["GET"])
+  @app.route("/classic/", methods=["GET"])
+  def classic_index():
+    return _no_store_response(make_response(render_template("index.html")))
+
+  @app.route("/mobile", methods=["GET"])
+  @app.route("/mobile/", methods=["GET"])
+  def mobile_index():
+    return _serve_new_ui()
+
+  @app.route("/api/bluetooth/status", methods=["GET"])
+  def bluetooth_status():
+    try:
+      status = BluetoothClient(timeout=10.0).status()
+      return jsonify(BluetoothClient.serialize_status(status)), 200
+    except Exception as error:
+      return jsonify({
+        "available": False,
+        "enabled": params.get_bool("BluetoothEnabled"),
+        "offroad": params.get_bool("IsOffroad"),
+        "selected_audio": params.get("BluetoothAudioAddress", encoding="utf-8") or "",
+        "devices": [],
+        "error": str(error),
+      }), 503
+
+  @app.route("/api/bluetooth/<operation>", methods=["POST"])
+  def bluetooth_operation(operation):
+    commands = {
+      "power": "set_power",
+      "scan": "start_scan",
+      "stop_scan": "stop_scan",
+      "pair": "pair",
+      "connect": "connect",
+      "disconnect": "disconnect",
+      "forget": "forget",
+      "select_audio": "select_audio",
+      "test_audio": "test_audio",
+      "pairing_response": "pairing_response",
+    }
+    command = commands.get(operation)
+    if command is None:
+      return jsonify({"error": "Unknown Bluetooth operation."}), 404
+    offroad_only = {"power", "scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response"}
+    if operation in offroad_only and not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Bluetooth settings can only be changed offroad."}), 409
+
+    data = request.get_json(silent=True) or {}
+    payload = {}
+    if command == "set_power":
+      payload["enabled"] = bool(data.get("enabled", False))
+    elif command == "pairing_response":
+      payload = {
+        "prompt_id": str(data.get("prompt_id", "")),
+        "accepted": bool(data.get("accepted", False)),
+        "value": str(data.get("value", "")),
+      }
+    elif command not in {"start_scan", "stop_scan"}:
+      payload["address"] = str(data.get("address", ""))
+      if not payload["address"] and command != "select_audio":
+        return jsonify({"error": "Bluetooth device address is required."}), 400
+    try:
+      client = BluetoothClient(timeout=10.0)
+      if command == "set_power":
+        client.set_power(payload["enabled"])
+        result = {}
+      else:
+        result = client.call(command, **payload)
+      return jsonify({"message": "Bluetooth operation started.", **result}), 200
+    except Exception as error:
+      return jsonify({"error": str(error)}), 503
+
+  @app.route("/api/wheel-controls/status", methods=["GET"])
+  def wheel_controls_status():
+    status = wheel_control_status(params, params_memory)
+    favorite_options = _get_available_favorite_slot_options()
+    favorite_option_by_key = {option["key"]: option for option in favorite_options}
+    controller_options = _get_available_controller_action_options()
+    controller_option_by_key = {option["key"]: option for option in controller_options}
+    slots = normalize_favorite_slots(
+      params.get(FAVORITE_SLOTS_PARAM),
+      params=params,
+      eligible_keys=set(favorite_option_by_key),
+    )
+    for slot in slots:
+      key = slot.get("key")
+      if key in favorite_option_by_key:
+        slot["label"] = favorite_option_by_key[key]["label"]
+    controller_slots = load_controller_action_slots(params, set(controller_option_by_key))
+    for slot in controller_slots:
+      key = slot.get("key")
+      if key in controller_option_by_key:
+        slot["label"] = controller_option_by_key[key]["label"]
+    status["slots"] = slots
+    status["controller_slots"] = controller_slots
+    status["controller_options"] = controller_options
+    status["disconnect_controllers_offroad"] = params.get_bool("BluetoothDisconnectControllersOffroad")
+    is_metric = params.get_bool("IsMetric")
+    speed_minimum, speed_maximum = controller_speed_bounds(is_metric)
+    status["speed_unit"] = "km/h" if is_metric else "mph"
+    status["speed_minimum"] = speed_minimum
+    status["speed_maximum"] = speed_maximum
+    return jsonify(status), 200
+
+  @app.route("/api/wheel-controls/<operation>", methods=["POST"])
+  def wheel_controls_operation(operation):
+    if operation not in {"action", "learn", "cancel", "delete", "clear", "test", "test-stop", "joystick", "offroad-disconnect"}:
+      return jsonify({"error": "Unknown wheel control operation."}), 404
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Wheel controls can only be configured offroad."}), 409
+
+    data = request.get_json(silent=True) or {}
+    try:
+      if operation == "offroad-disconnect":
+        params.put_bool("BluetoothDisconnectControllersOffroad", bool(data.get("enabled", False)))
+        return jsonify({"message": "Offroad controller disconnect updated."}), 200
+      if operation == "action":
+        slot_index = int(data.get("slot", -1))
+        key = str(data.get("key") or "").strip()
+        options = _get_available_controller_action_options()
+        option_by_key = {option["key"]: option for option in options}
+        if not 0 <= slot_index < CONTROLLER_ACTION_SLOT_COUNT:
+          return jsonify({"error": f"Controller action must be between 1 and {CONTROLLER_ACTION_SLOT_COUNT}."}), 400
+        if key and key not in option_by_key:
+          return jsonify({"error": "That controller action is not available."}), 400
+        value = None
+        if key == CONTROLLER_ACTION_SET_SPEED:
+          try:
+            value = float(data.get("value"))
+          except (TypeError, ValueError):
+            return jsonify({"error": "Enter a valid set speed."}), 400
+          speed_minimum, speed_maximum = controller_speed_bounds(params.get_bool("IsMetric"))
+          if not math.isfinite(value) or not speed_minimum <= value <= speed_maximum:
+            unit = "km/h" if params.get_bool("IsMetric") else "mph"
+            return jsonify({"error": f"Set speed must be between {speed_minimum} and {speed_maximum} {unit}."}), 400
+        cancel_wheel_control_learning(params_memory, params)
+        set_controller_action_slot(
+          slot_index,
+          key or None,
+          str(option_by_key.get(key, {}).get("label") or ""),
+          params,
+          value=value,
+          eligible_keys=set(option_by_key),
+        )
+        return jsonify({"message": f"Controller Action #{slot_index + 1} updated."}), 200
+      if operation == "joystick":
+        device_id = str(data.get("device_id") or "").strip()
+        enabled = bool(data.get("enabled", False))
+        if enabled:
+          devices = wheel_control_status(params, params_memory).get("devices", [])
+          device = next((item for item in devices if item.get("device_id") == device_id), None)
+          if device is None:
+            return jsonify({"error": "Controller is not connected."}), 404
+          if not device.get("joystick_capable"):
+            return jsonify({"error": "This device does not expose joystick axes."}), 400
+        set_joystick_device(device_id, enabled, params)
+        return jsonify({"message": "Joystick controller updated."}), 200
+      if operation == "learn":
+        stop_wheel_control_testing(params_memory)
+        slot_index = int(data.get("slot", -1))
+        favorite_options = _get_available_favorite_slot_options()
+        favorite_eligible_keys = {option["key"] for option in favorite_options}
+        controller_options = _get_available_controller_action_options()
+        controller_eligible_keys = {option["key"] for option in controller_options}
+        slots = normalize_favorite_slots(
+          params.get(FAVORITE_SLOTS_PARAM),
+          params=params,
+          eligible_keys=favorite_eligible_keys,
+        )
+        if 0 <= slot_index < FAVORITE_SLOT_COUNT:
+          target = slots[slot_index]
+          target_name = f"Favorite #{slot_index + 1}"
+        elif FAVORITE_SLOT_COUNT <= slot_index < FAVORITE_SLOT_COUNT + CONTROLLER_ACTION_SLOT_COUNT:
+          controller_index = slot_index - FAVORITE_SLOT_COUNT
+          target = load_controller_action_slots(params, controller_eligible_keys)[controller_index]
+          target_name = f"Controller Action #{controller_index + 1}"
+        else:
+          return jsonify({"error": "Unknown controller mapping target."}), 400
+        if not target.get("enabled") or not target.get("key"):
+          return jsonify({"error": f"Configure {target_name} before learning a button."}), 400
+        start_wheel_control_learning(slot_index, params_memory, params)
+        return jsonify({"message": f"Press a button for {target_name}."}), 200
+      if operation == "cancel":
+        cancel_wheel_control_learning(params_memory, params)
+        return jsonify({"message": "Button learning cancelled."}), 200
+      if operation == "test":
+        cancel_wheel_control_learning(params_memory, params)
+        start_wheel_control_testing(params_memory, params)
+        return jsonify({"message": "Button testing enabled."}), 200
+      if operation == "test-stop":
+        stop_wheel_control_testing(params_memory)
+        return jsonify({"message": "Button testing disabled."}), 200
+      if operation == "clear":
+        clear_wheel_control_mappings(params)
+        cancel_wheel_control_learning(params_memory, params)
+        stop_wheel_control_testing(params_memory)
+        return jsonify({"message": "Wheel control mappings cleared."}), 200
+
+      identifier = str(data.get("id") or "").strip()
+      if not identifier:
+        return jsonify({"error": "Mapping id is required."}), 400
+      if not delete_wheel_control_mapping(identifier, params):
+        return jsonify({"error": "Wheel control mapping was not found."}), 404
+      return jsonify({"message": "Wheel control mapping removed."}), 200
+    except (TypeError, ValueError) as error:
+      return jsonify({"error": str(error)}), 400
+    except Exception as error:
+      return jsonify({"error": str(error)}), 503
+
+  @app.route("/assets/components/tools/device_settings_layout.json", methods=["GET"])
+  def device_settings_layout_asset():
+    if not SETTINGS_CATALOG_PATH.is_file():
+      return "Settings catalog not found", 404
+    return send_file(str(SETTINGS_CATALOG_PATH), mimetype="application/json")
+
+  @app.route("/assets/mobile/manifest.json", methods=["GET"])
+  def mobile_manifest():
+    manifest_path = Path(app.static_folder) / "mobile" / "manifest.json"
+    if not manifest_path.is_file():
+      return jsonify({"error": "Galaxy manifest not found"}), 404
+
+    try:
+      manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+      return jsonify({"error": "Galaxy manifest is invalid"}), 500
+
+    slug = _read_galaxy_text(_get_galaxy_dir() / "glxyslug")
+    if re.fullmatch(r"[A-Za-z0-9]{16}", slug):
+      manifest_data["start_url"] = f"https://galaxy.firestar.link/{slug}"
+    else:
+      manifest_data["start_url"] = "/mobile/"
+
+    response = jsonify(manifest_data)
+    response.mimetype = "application/manifest+json"
+    return _no_store_response(response)
 
   @app.route("/manifest.json", methods=["GET"])
   @app.route("/assets/manifest.json", methods=["GET"])
@@ -4198,50 +5681,51 @@ def setup(app):
     try:
       with car.CarParams.from_bytes(params.get("CarParamsPersistent")) as cp:
         if tool == "doors":
-          return jsonify({"result": HARDWARE.get_device_type() != "tici" and cp.carName == "toyota"})
+          car_brand = getattr(cp, "brand", getattr(cp, "carName", ""))
+          return jsonify({"result": car_brand == "toyota"})
         elif tool == "tsk":
-          return jsonify({"result": cp.secOcRequired})
+          return jsonify({"result": getattr(cp, "secOcRequired", False)})
     except Exception:
       pass
     return jsonify({"result": False})
 
+  def _send_door_command(command, should_be_locked, success_message, action):
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Door controls are unavailable while driving."}), 409
+
+    try:
+      can_parser = CANParser("toyota_nodsu_pt_generated", [("DOOR_LOCKS", 3)], bus=0)
+      can_sock = messaging.sub_sock("can", timeout=100)
+
+      for _ in range(6):
+        if params.get_bool("IsOnroad"):
+          return jsonify({"error": "Door controls are unavailable while driving."}), 409
+        try:
+          with Panda(disable_checks=True) as panda:
+            panda.set_safety_mode(car.CarParams.SafetyModel.toyota)
+            panda.can_send(0x750, command, 0)
+            panda.can_send(0x750, command, 1)
+        except Exception as error:
+          cloudlog.warning("Galaxy door %s attempt failed: %s", action, error)
+          continue
+
+        time.sleep(1)
+
+        lock_status = get_lock_status(can_parser, can_sock)
+        if (lock_status == 0) == should_be_locked:
+          return {"message": success_message}, 200
+    except Exception as error:
+      cloudlog.exception("Galaxy door %s failed: %s", action, error)
+
+    return jsonify({"error": f"Unable to confirm that the doors were {action}ed."}), 502
+
   @app.route("/api/doors/lock", methods=["POST"])
   def lock_doors():
-    can_parser = CANParser("toyota_nodsu_pt_generated", [("DOOR_LOCKS", 3)], bus=0)
-    can_sock = messaging.sub_sock("can", timeout=100)
-
-    while True:
-      with Panda(disable_checks=True) as panda:
-        if not params.get_bool("IsOnroad"):
-          panda.set_safety_mode(panda.SAFETY_TOYOTA)
-        panda.can_send(0x750, LOCK_CMD, 0)
-
-      time.sleep(1)
-
-      lock_status = get_lock_status(can_parser, can_sock)
-      if lock_status == 0:
-        break
-
-    return {"message": "Doors locked!"}
+    return _send_door_command(LOCK_CMD, True, "Doors locked!", "lock")
 
   @app.route("/api/doors/unlock", methods=["POST"])
   def unlock_doors():
-    can_parser = CANParser("toyota_nodsu_pt_generated", [("DOOR_LOCKS", 3)], bus=0)
-    can_sock = messaging.sub_sock("can", timeout=100)
-
-    while True:
-      with Panda(disable_checks=True) as panda:
-        if not params.get_bool("IsOnroad"):
-          panda.set_safety_mode(panda.SAFETY_TOYOTA)
-        panda.can_send(0x750, UNLOCK_CMD, 0)
-
-      time.sleep(1)
-
-      lock_status = get_lock_status(can_parser, can_sock)
-      if lock_status != 0:
-        break
-
-    return {"message": "Doors unlocked!"}
+    return _send_door_command(UNLOCK_CMD, False, "Doors unlocked!", "unlock")
 
   @app.route("/api/error_logs", methods=["GET"])
   def get_error_logs():
@@ -4297,6 +5781,11 @@ def setup(app):
 
   @app.route("/api/navigation", methods=["POST"])
   def set_navigation():
+    if not routing_configured(params):
+      return {
+        "message": "A Mapbox secret key is required to calculate the on-device route and provide navigation turn desires. Add it in App Keys first."
+      }, 400
+
     destination = normalize_destination_payload(request.json)
     if destination is None:
       return {"message": "Invalid destination payload"}, 400
@@ -4456,7 +5945,7 @@ def setup(app):
 
   @app.route("/api/favorites/slots", methods=["GET", "PUT"])
   def favorite_slots():
-    options = _get_favorite_slot_options()
+    options = _get_available_favorite_slot_options()
     option_by_key = {option["key"]: option for option in options}
     eligible_keys = set(option_by_key)
 
@@ -4472,6 +5961,12 @@ def setup(app):
         if not isinstance(raw_slot, dict):
           continue
         key = str(raw_slot.get("key") or "").strip()
+        if key == CONTROLLER_ACTION_SET_SPEED:
+          from openpilot.starpilot.common.controller_actions import controller_speed_bounds
+          minimum, maximum = controller_speed_bounds(params.get_bool("IsMetric"))
+          value = raw_slot.get("value")
+          if type(value) not in (int, float) or not minimum <= value <= maximum:
+            return jsonify(error=f"Favorite #{idx + 1} speed must be between {minimum} and {maximum}."), 400
         if key and key not in eligible_keys:
           return jsonify(error=f"Favorite #{idx + 1} must use a Galaxy-exposed toggle or action."), 400
 
@@ -4490,6 +5985,7 @@ def setup(app):
         "slots": slots,
         "options": options,
         "values": _favorite_slot_values(options),
+        "is_metric": params.get_bool("IsMetric"),
       }), 200
 
     slots = normalize_favorite_slots(params.get(FAVORITE_SLOTS_PARAM), params=params, eligible_keys=eligible_keys)
@@ -4502,11 +5998,12 @@ def setup(app):
       "slots": slots,
       "options": options,
       "values": _favorite_slot_values(options),
+        "is_metric": params.get_bool("IsMetric"),
     }), 200
 
   @app.route("/api/favorites/values", methods=["GET"])
   def favorite_values():
-    options = _get_favorite_slot_options()
+    options = _get_available_favorite_slot_options()
     eligible_keys = {option["key"] for option in options}
     slots = normalize_favorite_slots(params.get(FAVORITE_SLOTS_PARAM), params=params, eligible_keys=eligible_keys)
     return jsonify({"values": _configured_favorite_slot_values(slots)}), 200
@@ -4517,9 +6014,146 @@ def setup(app):
     key = str(data.get("key") or "").strip()
     if not is_favorite_action_key(key):
       return jsonify({"error": "Unknown favorite action."}), 400
-    if not trigger_favorite_action(key, params_memory):
+    if not trigger_favorite_action(key, params_memory, params=params, value=data.get("value")):
       return jsonify({"error": "Favorite action failed."}), 400
     return jsonify({"message": "Favorite action sent."}), 200
+
+  @app.route("/api/personality_profiles/migrate", methods=["POST"])
+  @_serialize_personality_profile_writes
+  def migrate_personality_profiles():
+    if _personality_settings_write_locked():
+      return jsonify({"error": "Longitudinal personality profiles can only be migrated while off-road."}), 403
+
+    raw_profiles = _safe_params_get_live_raw(PERSONALITY_PROFILES_PARAM)
+    if raw_profiles is None:
+      return jsonify({"error": "No stored longitudinal personality profiles require migration."}), 404
+    if strict_profile_document(raw_profiles) is not None:
+      return jsonify({"message": "Longitudinal personality profiles are already current.", "migration_required": False}), 200
+
+    migrated_document = migrate_profile_document(raw_profiles)
+    if migrated_document is None or strict_profile_document(migrated_document) is None:
+      return jsonify({"error": "Stored longitudinal personality profiles are malformed and were not overwritten."}), 409
+
+    params.put(PERSONALITY_PROFILES_PARAM, migrated_document)
+    installed_document = strict_profile_document(_safe_params_get_live_raw(PERSONALITY_PROFILES_PARAM))
+    if installed_document != migrated_document:
+      return jsonify({"error": "Migrated longitudinal personality profiles did not verify after installation."}), 500
+    update_starpilot_toggles()
+    return jsonify({
+      "message": "Longitudinal personality profiles migrated successfully.",
+      "migration_required": False,
+      "schema_version": PROFILE_SCHEMA_VERSION,
+    }), 200
+
+  @app.route("/api/personality_profiles", methods=["GET", "PUT"])
+  @_serialize_personality_profile_writes
+  def personality_profiles():
+    ev_tuning = _get_detected_ev_tuning()
+    truck_tuning = (_get_detected_truck_tuning() or params.get_bool("TruckTuning")) and not ev_tuning
+    raw_profiles = _safe_params_get_live_raw(PERSONALITY_PROFILES_PARAM)
+    current_document = strict_profile_document(raw_profiles)
+    stored_document = migrate_profile_document(raw_profiles)
+    configured = stored_document is not None
+    migration_required = configured and current_document is None
+    enabled = params.get_bool("CustomPersonalities")
+    if not is_unconfigured_profile_document(raw_profiles) and stored_document is None:
+      return jsonify({"error": "Stored longitudinal personality profiles are malformed and were not overwritten."}), 409
+    profiles = stored_document["profiles"] if configured else default_personality_profiles(ev_tuning, truck_tuning)
+
+    if request.method == "PUT":
+      if _personality_editor_write_locked():
+        return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
+      if current_document is None and stored_document is not None:
+        return jsonify({"error": "Stored longitudinal personality profiles require a verified migration before editing."}), 409
+      data = request.get_json(silent=True)
+      required_fields = {"profile", "category", "preset", "curve"}
+      if not isinstance(data, dict) or not required_fields <= set(data) or set(data) - required_fields - {"expected", "reset"}:
+        return jsonify({"error": "Expected profile, category, preset, curve, and optional expected category or reset."}), 400
+      reset = data.get("reset", False)
+      if type(reset) is not bool or (reset and (data["preset"] != "custom" or data["curve"] != [])):
+        return jsonify({"error": "Reset requires Custom and an empty curve; defaults are resolved by the server."}), 400
+
+      try:
+        current_config = profiles[data["profile"]][data["category"]]
+        if "expected" in data and (data["expected"] != current_config or any(
+          isinstance(value, bool) for key in ("curve", "legacyCurve") for value in data["expected"].get(key, [])
+        )):
+          return jsonify({"error": "Saved profile changed. Reload and review it before editing again."}), 409
+        curve = data["curve"]
+        initialize_default = data["preset"] == "custom" and current_config["preset"] == "dom_default" and not current_config["curve"]
+        if reset:
+          curve = _get_dom_personality_reference_curves(ev_tuning)[data["profile"]][data["category"]]
+        elif data["preset"] == "custom" and current_config.get("preset") != "custom":
+          if curve != []:
+            update_personality_profile(
+              profiles, data["profile"], data["category"], "custom", curve, ev_tuning, truck_tuning
+            )
+          legacy_curve = None
+          if current_config.get("preset") == "dom_default" and not current_config.get("curve"):
+            legacy_curve = _get_dom_personality_reference_curves(ev_tuning)[data["profile"]][data["category"]]
+          curve = initial_custom_curve(
+            data["category"], current_config, ev_tuning, truck_tuning, legacy_curve=legacy_curve
+          )
+        elif data["preset"] != "custom":
+          curve = []
+        profiles = update_personality_profile(
+          profiles,
+          data["profile"],
+          data["category"],
+          data["preset"],
+          curve,
+          ev_tuning,
+          truck_tuning,
+          reset=reset or initialize_default,
+        )
+      except (KeyError, TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+
+      if _personality_editor_write_locked():
+        return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
+      params.put(PERSONALITY_PROFILES_PARAM, profile_document(profiles, enabled=enabled))
+      configured = True
+      migration_required = False
+      update_starpilot_toggles()
+
+    return jsonify({
+      "bounds": {key: list(value) for key, value in CURVE_BOUNDS.items()},
+      "configured": configured,
+      "default_profiles": default_personality_profiles(ev_tuning, truck_tuning),
+      "enabled": enabled,
+      "migration_required": migration_required,
+      "options": {
+        "acceleration": list(ACCELERATION_PRESETS),
+        "braking": list(BRAKING_PRESETS),
+        "following": list(FOLLOWING_PRESETS),
+      },
+      "profiles": profiles,
+      "reference_curves": _get_dom_personality_reference_curves(ev_tuning),
+      "schema_version": PROFILE_SCHEMA_VERSION,
+      "speed_breakpoints_mph": {
+        "acceleration": list(ACCELERATION_SPEEDS_MPH),
+        "braking": list(BRAKING_SPEEDS_MPH),
+        "following": list(FOLLOWING_SPEEDS_MPH),
+      },
+    }), 200
+  @app.route("/api/longitudinal_mode", methods=["GET", "PUT"])
+  def longitudinal_mode():
+    with LONGITUDINAL_MODE_LOCK:
+      try:
+        if request.method == "GET":
+          return jsonify(longitudinal_mode_snapshot(params, _get_longitudinal_mode_capable())), 200
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+          return jsonify({"error": "Expected a JSON object."}), 400
+        try:
+          result = set_longitudinal_mode(params, data.get("mode"), data.get("expected"), _get_longitudinal_mode_capable, data.get("acknowledged") is True)
+        finally:
+          update_starpilot_toggles()
+        return jsonify(result), 200
+      except ModeError as error:
+        return jsonify({"error": str(error)}), error.status
+      except Exception:
+        return jsonify({"error": "Longitudinal mode state is unavailable. Refresh before retrying."}), 503
 
   @app.route("/api/params", methods=["GET", "PUT"])
   def get_param():
@@ -4529,6 +6163,33 @@ def setup(app):
         return jsonify({"error": "Missing 'key' or 'value' in request body."}), 400
 
       key = str(data["key"]).strip()
+      if key.lower() == PERSONALITY_PROFILES_PARAM.lower():
+        return jsonify({"error": "Longitudinal personality profiles must be changed with the Driving Personalities editor."}), 403
+      if key in PERSONALITY_PARKED_PARAM_KEYS and _personality_editor_write_locked():
+        return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
+      if key in PERSONALITY_PROFILE_ENABLE_PARAM_KEYS and type(data["value"]) is not bool:
+        return jsonify({"error": f"{key} must be a JSON boolean."}), 400
+      if key in LONGITUDINAL_MODE_KEYS:
+        if type(data["value"]) is not bool:
+          return jsonify({"error": "Mode settings require a JSON boolean."}), 400
+        with LONGITUDINAL_MODE_LOCK:
+          try:
+            before = longitudinal_mode_snapshot(params, _get_longitudinal_mode_capable())
+            candidate = {**before["values"], key: data["value"]}
+            if data["value"] and key in {"ConditionalExperimental", "ConditionalChill"}:
+              candidate["ConditionalChill" if key == "ConditionalExperimental" else "ConditionalExperimental"] = False
+            target = ("conditional_experimental" if candidate["ConditionalExperimental"] else
+                      "conditional_chill" if candidate["ConditionalChill"] else
+                      "experimental" if candidate["ExperimentalMode"] else "chill")
+            try:
+              result = set_longitudinal_mode(params, target, before["values"], _get_longitudinal_mode_capable, data.get("acknowledged") is True)
+            finally:
+              update_starpilot_toggles()
+            return jsonify({"updated": result["values"], "message": "Longitudinal control mode updated."}), 200
+          except ModeError as error:
+            return jsonify({"error": str(error)}), error.status
+          except Exception:
+            return jsonify({"error": "Longitudinal mode state is unavailable."}), 503
       if key.lower() == FAVORITE_SLOTS_PARAM.lower():
         key = FAVORITE_SLOTS_PARAM
         raw_slots = data["value"]
@@ -4537,7 +6198,7 @@ def setup(app):
         if not isinstance(raw_slots, list):
           return jsonify({"error": "Favorite slots must be configured with the Favorites editor."}), 400
 
-        options = _get_favorite_slot_options()
+        options = _get_available_favorite_slot_options()
         option_by_key = {option["key"]: option for option in options}
         eligible_keys = set(option_by_key)
         slots = normalize_favorite_slots(raw_slots, params=params, eligible_keys=eligible_keys)
@@ -4569,6 +6230,16 @@ def setup(app):
         if not math.isfinite(numeric) or numeric < 0.005 or numeric > 2.0:
           return jsonify({"error": f"{key} must be between 0.005 and 2.0 seconds."}), 400
         data["value"] = round(numeric / 0.005) * 0.005
+      if key in PERSONALITY_ADVANCED_PARAM_KEYS:
+        try:
+          data["value"] = validate_personality_advanced_value(data["value"])
+        except ValueError as error:
+          return jsonify({"error": str(error)}), 400
+      elif key in PERSONALITY_FOLLOW_PARAM_KEYS:
+        try:
+          data["value"] = validate_personality_follow_value(data["value"])
+        except ValueError as error:
+          return jsonify({"error": str(error)}), 400
       val = data["value"]
       selected_label_input = str(data.get("label") or "").strip()
 
@@ -4582,23 +6253,95 @@ def setup(app):
       if key not in allowed_keys:
         return jsonify({"error": f"Parameter '{key}' is not editable."}), 403
 
-      if key in {"UseOldUI", "TryRaylibUI"}:
-        enabled = str_val.strip() in ("1", "true", "True")
-        use_old_ui = enabled if key == "UseOldUI" else not enabled
-        updated = {"UseOldUI": use_old_ui, "TryRaylibUI": not use_old_ui}
-        if not _raylib_ui_toggle_affects_device():
-          return jsonify({
-            "message": "Use Old UI is only available on tici/tizi devices.",
-            "updated": {"UseOldUI": False, "TryRaylibUI": False},
-          }), 200
-
-        if params.get_bool("IsOnroad"):
-          return jsonify({"error": "Cannot change Use Old UI while driving."}), 403
-
-        params.put_bool("UseOldUI", use_old_ui)
-        params.put_bool("TryRaylibUI", not use_old_ui)
+      if key == "CustomPersonalities":
+        if type(data["value"]) is not bool:
+          return jsonify({"error": "CustomPersonalities must be a JSON boolean."}), 400
+        enabled = data["value"]
+        with _PERSONALITY_PROFILES_WRITE_LOCK:
+          if _personality_editor_write_locked():
+            return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
+          ev_tuning = _get_detected_ev_tuning()
+          truck_tuning = (_get_detected_truck_tuning() or params.get_bool("TruckTuning")) and not ev_tuning
+          raw_document = _safe_params_get_live_raw(PERSONALITY_PROFILES_PARAM)
+          if not is_unconfigured_profile_document(raw_document) and strict_profile_document(raw_document) is None:
+            return jsonify({"error": "Stored longitudinal personality profiles require a verified migration before changing the master control."}), 409
+          document = synchronise_profile_document_enabled(
+            raw_document, enabled, ev_tuning, truck_tuning,
+          )
+          if _personality_editor_write_locked():
+            return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
+          updated = {"CustomPersonalities": enabled}
+          if enabled:
+            if document is None:
+              return jsonify({"error": "Longitudinal personality profiles could not be prepared for enabling."}), 500
+            params.put(PERSONALITY_PROFILES_PARAM, document)
+            if strict_profile_document(_safe_params_get_live_raw(PERSONALITY_PROFILES_PARAM)) != document:
+              return jsonify({"error": "Longitudinal personality profiles could not be verified after writing."}), 500
+            updated[PERSONALITY_PROFILES_PARAM] = document
+            params.put_bool("CustomPersonalities", True)
+          else:
+            params.put_bool("CustomPersonalities", False)
+            if document is not None:
+              params.put(PERSONALITY_PROFILES_PARAM, document)
+              updated[PERSONALITY_PROFILES_PARAM] = document
+        update_starpilot_toggles()
         return jsonify({
-          "message": f"{'Old' if use_old_ui else 'Raylib'} UI selected. UI will restart shortly.",
+          "message": "Driving personalities updated.",
+          "updated": updated,
+        }), 200
+
+      if key == "PulseGlideSpeedDelta" or (key in PULSE_GLIDE_BUTTON_KEYS and str_val.strip() == str(BUTTON_FUNCTIONS["PULSE_AND_GLIDE"])):
+        if not params.get_bool("GalaxyDeveloperMode"):
+          return jsonify({"error": "Pulse and Glide is available only with Galaxy Developer Mode enabled."}), 403
+
+      if key in GALAXY_DEVELOPER_ONLY_KEYS and not params.get_bool("GalaxyDeveloperMode"):
+        return jsonify({"error": f"{key} is available only with Galaxy Developer Mode enabled."}), 403
+
+      if key in SENTRY_NUMERIC_PARAM_BOUNDS:
+        minimum, maximum = SENTRY_NUMERIC_PARAM_BOUNDS[key]
+        try:
+          numeric = float(data["value"])
+        except (TypeError, ValueError):
+          return jsonify({"error": f"{key} must be numeric."}), 400
+        if not math.isfinite(numeric) or numeric < minimum or numeric > maximum:
+          return jsonify({"error": f"{key} must be between {minimum} and {maximum}."}), 400
+        str_val = str(numeric)
+
+      if key in CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS:
+        try:
+          numeric = float(data["value"])
+          if key == CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY:
+            if not math.isfinite(numeric) or not numeric.is_integer():
+              raise ValueError("Breakpoint count must be a whole number")
+            numeric = int(numeric)
+          elif not math.isfinite(numeric):
+            raise ValueError(f"{key} must be numeric")
+
+          defaults_lookup = _get_default_param_values()
+          initialized = _get_custom_accel_profile_breakpoints_initialized()
+          candidate = {}
+          for curve_key in CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS:
+            if initialized:
+              candidate[curve_key] = _safe_params_get(curve_key, encoding="utf-8")
+            else:
+              candidate[curve_key] = _get_legacy_compatible_curve_value(curve_key, defaults_lookup)
+          candidate[key] = numeric
+
+          parse_custom_accel_profile_curve(
+            candidate[CUSTOM_ACCEL_PROFILE_POINT_COUNT_KEY],
+            [candidate[curve_key] for curve_key in CUSTOM_ACCEL_PROFILE_BREAKPOINT_PARAM_KEYS],
+            [candidate[curve_key] for curve_key in CUSTOM_ACCEL_PROFILE_POINT_VALUE_PARAM_KEYS],
+          )
+        except (TypeError, ValueError) as exc:
+          return jsonify({"error": str(exc)}), 400
+
+        updated = _seed_custom_accel_profile_curve(defaults_lookup) if not initialized else {}
+        params.put(key, _serialize_param_write_value(numeric))
+        params.put_bool(CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY, True)
+        updated.update({key: numeric, CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY: True})
+        update_starpilot_toggles()
+        return jsonify({
+          "message": "Custom acceleration curve updated.",
           "updated": updated,
         }), 200
 
@@ -4618,10 +6361,10 @@ def setup(app):
         }), 200
 
       if key == "ForceOffroad":
-        if not _get_vehicle_parked():
+        enabled = str_val.strip() in ("1", "true", "True")
+        if enabled and not _get_vehicle_parked():
           return jsonify({"error": "Force Offroad is only available while the vehicle is in Park."}), 403
 
-        enabled = str_val.strip() in ("1", "true", "True")
         params.put_bool("ForceOffroad", enabled)
         params.put_bool("ForceOnroad", False)
         update_starpilot_toggles()
@@ -4657,10 +6400,26 @@ def setup(app):
         if params.get_bool("IsOnroad"):
           return jsonify({"error": "Cannot change PiP Side Camera configuration while driving."}), 403
 
+      if key == "TeslaWakeOnCAN" and not supports_tesla_can_wake(params):
+        return jsonify({"error": "Wake on CAN is available only for a detected Tesla Model 3, Y or X."}), 403
+
       if key in PANDA_FIRMWARE_TOGGLE_KEYS and params.get_bool("IsOnroad"):
         return jsonify({"error": "Cannot flash Panda firmware while driving."}), 403
       if key in PANDA_FIRMWARE_TOGGLE_KEYS and data.get(PANDA_FIRMWARE_CONFIRMATION_FIELD) is not True:
         return jsonify({"error": "Panda firmware changes require confirmation before flashing."}), 409
+
+      enabled = str_val.strip() in ("1", "true", "True")
+      if key in PANDA_FIRMWARE_TOGGLE_KEYS and firmware_flags_conflict(params, key, enabled):
+        return jsonify({"error": "Tesla wake cannot be combined with remote-start firmware."}), 409
+
+      if key == "TeslaWakeOnCAN":
+        try:
+          validate_tesla_can_wake_firmware(params, enabled)
+        except RuntimeError as exc:
+          return jsonify({"error": str(exc)}), 409
+
+      if key in PERSONALITY_PARKED_PARAM_KEYS and _personality_editor_write_locked():
+        return jsonify({"error": "Driving state is unavailable or inconsistent. Refresh before editing personalities."}), 403
 
       if key in {"LeadIndicator", "HideLeadMarker"}:
         enabled = str_val.strip() in ("1", "true", "True")
@@ -4721,34 +6480,21 @@ def setup(app):
           "updated": updated,
         }), 200
 
-      if key in {"ConditionalExperimental", "ConditionalChill"}:
-        enabled = str_val.strip() in ("1", "true", "True")
-        params.put_bool(key, enabled)
-
-        updated = {key: enabled}
-        if enabled:
-          other_key = "ConditionalChill" if key == "ConditionalExperimental" else "ConditionalExperimental"
-          params.put_bool(other_key, False)
-          updated[other_key] = False
-
-        update_starpilot_toggles()
-        return jsonify({
-          "message": f"Parameter '{key}' updated successfully.",
-          "updated": updated,
-        }), 200
-
       if key == "CustomAccelProfile":
         enabled = str_val.strip() in ("1", "true", "True")
         params.put_bool(key, enabled)
 
         updated = {key: enabled}
+        defaults_lookup = _get_default_param_values()
         if enabled and not _get_custom_accel_profile_initialized():
-          defaults_lookup = _get_default_param_values()
           for custom_key in CUSTOM_ACCEL_PROFILE_PARAM_KEYS:
             custom_value = defaults_lookup[custom_key]
             params.put(custom_key, _serialize_param_write_value(custom_value))
             updated[custom_key] = float(custom_value)
           params.put_bool(CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY, True)
+        if enabled and not _get_custom_accel_profile_breakpoints_initialized():
+          updated.update(_seed_custom_accel_profile_curve(defaults_lookup))
+          updated[CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY] = True
 
         update_starpilot_toggles()
         return jsonify({
@@ -4856,6 +6602,14 @@ def setup(app):
         selected_model = canonical_model_key(str_val.strip())
         if not selected_model:
           return jsonify({"error": "Driving model cannot be empty."}), 400
+        if model_uses_external_gpu(selected_model) and not external_gpu_available():
+          return jsonify({"error": "This model requires a detected external GPU."}), 409
+
+        lab_config = normalize_model_lab_config(params.get(MODEL_LAB_CONFIG_PARAM, encoding="utf-8") or "")
+        if lab_config["enabled"]:
+          lab_config["enabled"] = False
+          params.put(MODEL_LAB_CONFIG_PARAM, lab_config)
+          params.remove(MODEL_LAB_RUNTIME_PARAM)
 
         params.put("Model", selected_model)
         params.put("DrivingModel", selected_model)
@@ -4900,6 +6654,9 @@ def setup(app):
                   break
           except Exception:
             pass
+
+        profile = "big" if model_uses_external_gpu(selected_model) else "small"
+        set_model_profile(params, profile, selected_model)
       elif key in ("ModelVersion", "DrivingModelVersion"):
         params.put("ModelVersion", str_val)
         params.put("DrivingModelVersion", str_val)
@@ -4918,6 +6675,8 @@ def setup(app):
       update_starpilot_toggles()
 
       response = {"message": f"Parameter '{key}' updated successfully."}
+      if key == "RivianAngleControl":
+        response["message"] = "Rivian steering mode updated. The safe channel handoff is in progress."
       updated = {}
       if key in PANDA_FIRMWARE_TOGGLE_KEYS:
         threading.Thread(target=_flash_panda_then_reboot, daemon=True).start()
@@ -4952,12 +6711,13 @@ def setup(app):
       return _serialize_param_write_value(defaults_lookup.get(request_key)), 200
     if request_key == CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY:
       return _serialize_param_write_value(_get_custom_accel_profile_initialized()), 200
+    if request_key in CUSTOM_ACCEL_PROFILE_CURVE_PARAM_KEYS and not _get_custom_accel_profile_breakpoints_initialized():
+      defaults_lookup = _get_default_param_values()
+      return _serialize_param_write_value(_get_legacy_compatible_curve_value(request_key, defaults_lookup)), 200
+    if request_key == CUSTOM_ACCEL_PROFILE_BREAKPOINTS_INITIALIZED_KEY:
+      return _serialize_param_write_value(_get_custom_accel_profile_breakpoints_initialized()), 200
     if request_key == "LeadIndicator":
       return _serialize_param_write_value(_get_lead_indicator_enabled()), 200
-    if request_key == "UseOldUI":
-      return ("1" if _get_use_old_ui_enabled() else "0"), 200
-    if request_key == "TryRaylibUI":
-      return ("1" if _raylib_ui_toggle_affects_device() and not _get_use_old_ui_enabled() else "0"), 200
     if request_key == "IsRHD" and not params.get_bool("IsRHDOverride"):
       return ("1" if params.get_bool("IsRhdDetected") else "0"), 200
     value = params.get(request_key) or ""
@@ -4975,6 +6735,9 @@ def setup(app):
     params.put("CalibratedLateralAcceleration", 2.0)
     params.remove("CalibrationProgress")
     params.remove("CurvatureData")
+    params_memory.put("CalibratedLateralAcceleration", 2.0)
+    params_memory.put("CalibrationProgress", 0.0)
+    params_memory.remove("CurvatureData")
 
     return jsonify({
       "message": "Curve Speed Controller data reset. Training will restart on the next drive.",
@@ -4998,9 +6761,18 @@ def setup(app):
       except Exception:
         result[key] = None
 
+    result["TeslaCANWakeAvailable"] = supports_tesla_can_wake(params)
     result["HasRadar"] = _get_has_radar()
     result["VehicleParked"] = _get_vehicle_parked()
     result["AlphaLongitudinalAvailable"] = _get_alpha_longitudinal_available()
+    result["HasRivianAngleHarness"] = _get_has_rivian_angle_harness()
+    result["IsTiciOrTizi"] = _get_is_tici_or_tizi()
+
+    for key in ("CalibratedLateralAcceleration", "CalibrationProgress"):
+      try:
+        result[key] = _get_current_param_value(key, float, defaults_lookup)
+      except Exception:
+        result[key] = None
 
     return jsonify(_sanitize_json_value(result)), 200
 
@@ -5015,11 +6787,7 @@ def setup(app):
       default_val = defaults_lookup.get(key)
 
       try:
-        if key == "UseOldUI":
-          result[key] = False
-        elif key == "TryRaylibUI":
-          result[key] = _raylib_ui_toggle_affects_device()
-        elif t == bool:
+        if t == bool:
           if isinstance(default_val, bytes):
             default_str = default_val.decode("utf-8", errors="replace")
           else:
@@ -5038,6 +6806,23 @@ def setup(app):
         result[key] = None
 
     return jsonify(_sanitize_json_value(result)), 200
+
+  @app.route("/api/system/monitor", methods=["GET"])
+  def system_monitor_snapshot():
+    from openpilot.starpilot.system.the_galaxy.system_monitor import monitor
+    try:
+      # Telemetry is an optional companion; process monitoring works on its own.
+      try:
+        from openpilot.starpilot.system.the_galaxy.external_gpu_vitals import external_gpu_vitals
+      except ImportError:
+        vitals = {}
+      else:
+        vitals = external_gpu_vitals(include_onboard=True)
+      response = jsonify({**monitor.sample(), 'vitals': vitals})
+      response.headers['Cache-Control'] = 'no-store'
+      return response
+    except (OSError, ValueError, IndexError):
+      return jsonify({'error': 'System activity is temporarily unavailable.'}), 503
 
   @app.route("/api/troubleshoot", methods=["GET"])
   def get_troubleshoot_data():
@@ -5088,12 +6873,181 @@ def setup(app):
     return jsonify({
       "models": models,
       "currentModel": _current_model_key(),
+      "activeSmallModel": _active_model_key("small"),
+      "activeBigModel": _active_model_key("big"),
       "summary": {
         "installed": sum(1 for model in models if model["installed"]),
         "missing": sum(1 for model in models if not model["installed"]),
         "total": len(models),
       },
     }), 200
+
+  def _model_lab_status_payload():
+    models = get_model_catalog()
+    model_by_key = {model["value"]: model for model in models}
+    config = normalize_model_lab_config(params.get(MODEL_LAB_CONFIG_PARAM, encoding="utf-8") or "")
+    config["lateralModel"] = canonical_model_key(config["lateralModel"])
+    config["longitudinalModel"] = canonical_model_key(config["longitudinalModel"])
+    chestnut_ready = external_gpu_available()
+    runtime = {}
+    try:
+      runtime_value = params.get(MODEL_LAB_RUNTIME_PARAM, encoding="utf-8") or ""
+      runtime = json.loads(runtime_value) if isinstance(runtime_value, str) and runtime_value else runtime_value
+      if not isinstance(runtime, dict):
+        runtime = {}
+    except (TypeError, ValueError):
+      runtime = {}
+
+    eligible_models = [model for model in models if model.get("modelLabEligible")]
+    ready_models = [model for model in eligible_models if model.get("modelLabArtifactInstalled")]
+    lab_model_to_download = params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or ""
+    configuration_error = validate_model_lab_selection(
+      config,
+      model_by_key,
+      chestnut_ready=chestnut_ready,
+      require_installed=True,
+    )
+    return {
+      "chestnutReady": chestnut_ready,
+      "isOnroad": params.get_bool("IsOnroad"),
+      "configuration": config,
+      "configurationError": configuration_error or "",
+      "runtime": runtime,
+      "download": {
+        "model": lab_model_to_download,
+        "progress": params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or "",
+      },
+      "models": eligible_models,
+      "summary": {
+        "eligible": len(eligible_models),
+        "ready": len(ready_models),
+        "published": sum(1 for model in eligible_models if model.get("modelLabArtifactAvailable")),
+        "declaredSize": sum(1 for model in eligible_models if model.get("manifestDeclaredSize")),
+      },
+      "manifest": {
+        "version": params.get("ModelManifestVersion", encoding="utf-8") or "unknown",
+      },
+    }
+
+  def _activate_preferred_model_profile():
+    """Restore the model that the normal small/big profile system would run."""
+    profile = "big" if external_gpu_available() and _active_model_key("big") else "small"
+    model_key, model_name, model_version = get_model_profile(params, profile)
+    if not model_key:
+      model_key, model_name, model_version = _default_model_key(), _default_model_name(), _default_model_version()
+
+    params.put("Model", model_key)
+    params.put("DrivingModel", model_key)
+    params.put("DrivingModelName", model_name or model_key)
+    if model_version:
+      params.put("ModelVersion", model_version)
+      params.put("DrivingModelVersion", model_version)
+    return model_name or model_key
+
+  @app.route("/api/model-laboratory", methods=["GET", "PUT"])
+  def model_laboratory():
+    if request.method == "GET":
+      return jsonify(_model_lab_status_payload()), 200
+
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Model Laboratory can only be configured while parked."}), 403
+
+    data = request.get_json(silent=True) or {}
+    config = normalize_model_lab_config({
+      "enabled": data.get("enabled", False),
+      "lateralModel": canonical_model_key(str(data.get("lateralModel") or "")),
+      "longitudinalModel": canonical_model_key(str(data.get("longitudinalModel") or "")),
+    })
+    models = get_model_catalog()
+    model_by_key = {model["value"]: model for model in models}
+    error = validate_model_lab_selection(
+      config,
+      model_by_key,
+      chestnut_ready=external_gpu_available(),
+      require_installed=True,
+    )
+    if error:
+      return jsonify({"error": error}), 409
+
+    params.put(MODEL_LAB_CONFIG_PARAM, config)
+    params.remove(MODEL_LAB_RUNTIME_PARAM)
+    if config["enabled"]:
+      lateral = model_by_key[config["lateralModel"]]
+      params.put("Model", lateral["value"])
+      params.put("DrivingModel", lateral["value"])
+      longitudinal = model_by_key[config["longitudinalModel"]]
+      params.put("DrivingModelName", model_lab_pair_display_name(lateral["label"], longitudinal["label"]))
+      if lateral.get("version"):
+        params.put("ModelVersion", lateral["version"])
+        params.put("DrivingModelVersion", lateral["version"])
+      message = "Model Laboratory enabled. The pair will load on the next drive."
+    else:
+      restored_model = _activate_preferred_model_profile()
+      message = f"Model Laboratory disabled. {restored_model} will be used next."
+
+    return jsonify({"message": message, **_model_lab_status_payload()}), 200
+
+  @app.route("/api/model-laboratory/download", methods=["POST"])
+  def download_model_laboratory_artifact():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Model Laboratory artifacts can only be downloaded while parked."}), 403
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
+      return jsonify({"error": "A model download is already in progress."}), 409
+
+    data = request.get_json(silent=True) or {}
+    model_key = canonical_model_key(str(data.get("model") or "").strip())
+    model = next((entry for entry in get_model_catalog() if entry["value"] == model_key), None)
+    if model is None:
+      return jsonify({"error": f"Unknown model '{model_key}'."}), 404
+    if not model.get("modelLabEligible"):
+      return jsonify({"error": "Only compatible small models have Model Laboratory eGPU variants."}), 409
+    if not model.get("modelLabArtifactAvailable"):
+      return jsonify({"error": "The manifest does not publish a precompiled AMD artifact for this model."}), 409
+    if model.get("modelLabArtifactInstalled"):
+      return jsonify({"message": f"The eGPU variant for \"{model['label']}\" is already downloaded."}), 200
+
+    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
+    params_memory.put(MODEL_LAB_DOWNLOAD_PARAM, model_key)
+    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Starting eGPU variant download...")
+    return jsonify({"message": f"Started downloading the eGPU variant for \"{model['label']}\"."}), 200
+
+  @app.route("/api/model-laboratory/artifact", methods=["DELETE"])
+  def delete_model_laboratory_artifact():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Model Laboratory eGPU variants can only be deleted while parked."}), 403
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
+      return jsonify({"error": "Cannot delete an eGPU variant while a model download is in progress."}), 409
+
+    data = request.get_json(silent=True) or {}
+    model_key = canonical_model_key(str(data.get("model") or "").strip())
+    model = next((entry for entry in get_model_catalog() if entry["value"] == model_key), None)
+    if model is None:
+      return jsonify({"error": f"Unknown model '{model_key}'."}), 404
+    if not model.get("modelLabArtifactInstalled"):
+      return jsonify({"message": f"No eGPU variant is downloaded for \"{model['label']}\"."}), 200
+
+    config = normalize_model_lab_config(params.get(MODEL_LAB_CONFIG_PARAM, encoding="utf-8") or "")
+    if config["enabled"] and model_key in (config["lateralModel"], config["longitudinalModel"]):
+      return jsonify({"error": "Disable Model Laboratory or choose a different pair before deleting this eGPU variant."}), 409
+
+    artifact_path = MODELS_PATH / model_accelerator_artifact_filename(model_key)
+    try:
+      artifact_path.unlink(missing_ok=True)
+      Path(get_manifest_path(artifact_path)).unlink(missing_ok=True)
+      for chunk_path in artifact_path.parent.glob(f"{artifact_path.name}.chunk*of*"):
+        chunk_path.unlink(missing_ok=True)
+    except Exception as exception:
+      return jsonify({"error": f"Failed deleting the eGPU variant: {exception}"}), 500
+
+    return jsonify({"message": f"Deleted the eGPU variant for \"{model['label']}\".", **_model_lab_status_payload()}), 200
 
   @app.route("/api/models/preferences", methods=["GET", "PUT"])
   def get_or_set_models_preferences():
@@ -5125,16 +7079,74 @@ def setup(app):
 
     return jsonify({"message": f"Updated model {' and '.join(changed)}."}), 200
 
+  @app.route("/api/models/active", methods=["PUT"])
+  def set_active_model_profile():
+    if params.get_bool("IsOnroad"):
+      return jsonify({"error": "Cannot change active models while driving."}), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("model"), str):
+      return jsonify({"error": "An explicit model string is required."}), 400
+    profile = str(data.get("profile") or "").strip().lower()
+    if profile not in ("small", "big"):
+      return jsonify({"error": "Model profile must be 'small' or 'big'."}), 400
+
+    model_key = canonical_model_key(str(data.get("model") or "").strip())
+    if not model_key:
+      if profile != "big":
+        return jsonify({"error": "Active Small cannot be disabled."}), 400
+
+      lab_config = normalize_model_lab_config(params.get(MODEL_LAB_CONFIG_PARAM, encoding="utf-8") or "")
+      if lab_config["enabled"]:
+        lab_config["enabled"] = False
+        params.put(MODEL_LAB_CONFIG_PARAM, lab_config)
+        params.remove(MODEL_LAB_RUNTIME_PARAM)
+
+      disable_big_model_profile(params)
+      restored_model = _activate_preferred_model_profile()
+      return jsonify({
+        "message": f"Active Big disabled. {restored_model} will be used even when Chestnut is connected.",
+        "profile": profile,
+        "model": "",
+      }), 200
+
+    catalog = {model["value"]: model for model in get_model_catalog()}
+    model = catalog.get(model_key)
+    if model is None:
+      return jsonify({"error": f"Unknown model '{model_key}'."}), 404
+    if not model["installed"]:
+      return jsonify({"error": f"Download '{model['label']}' before selecting it."}), 409
+    if bool(model["requiresGpu"]) != (profile == "big"):
+      expected = "an eGPU model" if profile == "big" else "an on-device model"
+      return jsonify({"error": f"Active {profile.title()} must be {expected}."}), 409
+
+    lab_config = normalize_model_lab_config(params.get(MODEL_LAB_CONFIG_PARAM, encoding="utf-8") or "")
+    if lab_config["enabled"]:
+      lab_config["enabled"] = False
+      params.put(MODEL_LAB_CONFIG_PARAM, lab_config)
+      params.remove(MODEL_LAB_RUNTIME_PARAM)
+
+    set_model_profile(params, profile, model_key, model["label"], model["version"])
+    active_model = _activate_preferred_model_profile()
+    return jsonify({
+      "message": f"Active {profile.title()} set to '{model['label']}'. {active_model} will be used next.",
+      "profile": profile,
+      "model": model_key,
+    }), 200
+
   @app.route("/api/models/status", methods=["GET"])
   def get_models_status():
     models = get_model_catalog()
     model_to_download = canonical_model_key(params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    lab_model_to_download = canonical_model_key(params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
     download_all = params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
     progress = params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
     cancelling = params_memory.get_bool(MODEL_CANCEL_DOWNLOAD_PARAM)
 
-    downloading = bool(model_to_download) or download_all
+    downloading = bool(model_to_download or lab_model_to_download) or download_all
     current_model = _current_model_key()
+    active_small_model = _active_model_key("small")
+    active_big_model = _active_model_key("big")
     sort_mode = read_legacy_param_file(MODEL_SORT_MODE_PARAM, DEFAULT_MODEL_SORT_MODE)
     terminal = progress in ("Downloaded!", "All models downloaded!") or bool(re.search(r"cancelled|exists|failed|offline|invalid|error", progress, re.IGNORECASE))
     summary = {
@@ -5149,11 +7161,14 @@ def setup(app):
       summary["installed"],
       summary["missing"],
       model_to_download,
+      lab_model_to_download,
       download_all,
       downloading,
       cancelling,
       progress,
       current_model,
+      active_small_model,
+      active_big_model,
       sort_mode,
       terminal,
       bool(params.get_bool("IsOnroad")),
@@ -5181,6 +7196,7 @@ def setup(app):
 
     return jsonify({
       "modelToDownload": model_to_download,
+      "modelLabModelToDownload": lab_model_to_download,
       "downloadAll": download_all,
       "downloading": downloading,
       "cancelling": cancelling,
@@ -5189,6 +7205,8 @@ def setup(app):
       "terminal": terminal,
       "models": models,
       "currentModel": current_model,
+      "activeSmallModel": active_small_model,
+      "activeBigModel": active_big_model,
       "summary": summary,
       "sortMode": sort_mode,
     }), 200
@@ -5198,7 +7216,11 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot refresh model manifest while driving."}), 403
 
-    if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM) or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""):
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
       return jsonify({"error": "Cannot refresh model manifest while a download is in progress."}), 409
 
     try:
@@ -5217,7 +7239,11 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot download models while driving."}), 403
 
-    if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM) or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""):
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
       return jsonify({"error": "A model download is already in progress."}), 409
 
     data = request.get_json() or {}
@@ -5232,9 +7258,13 @@ def setup(app):
 
     if model["installed"]:
       return jsonify({"message": f"\"{model['label']}\" is already installed."}), 200
+    allow_gpu_without_gpu = data.get("allowGpuWithoutGpu") is True
+    if model["requiresGpu"] and not model["gpuAvailable"] and not allow_gpu_without_gpu:
+      return jsonify({"error": "This model requires a detected external GPU."}), 409
 
     params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
     params_memory.remove(MODEL_DOWNLOAD_ALL_PARAM)
+    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
     params_memory.put(MODEL_DOWNLOAD_PARAM, model_key)
     params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading...")
 
@@ -5245,15 +7275,25 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot download models while driving."}), 403
 
-    if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM) or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""):
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
       return jsonify({"error": "A model download is already in progress."}), 409
 
-    missing_models = [model for model in get_model_catalog() if not model["installed"]]
+    data = request.get_json(silent=True) or {}
+    allow_gpu_without_gpu = data.get("allowGpuWithoutGpu") is True
+    missing_models = [
+      model for model in get_model_catalog()
+      if not model["installed"] and (not model["requiresGpu"] or model["gpuAvailable"] or allow_gpu_without_gpu)
+    ]
     if not missing_models:
       return jsonify({"message": "All models are already installed."}), 200
 
     params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
     params_memory.remove(MODEL_DOWNLOAD_PARAM)
+    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
     params_memory.put_bool(MODEL_DOWNLOAD_ALL_PARAM, True)
     params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading...")
 
@@ -5262,8 +7302,9 @@ def setup(app):
   @app.route("/api/models/cancel", methods=["POST"])
   def cancel_model_download():
     model_to_download = params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""
+    lab_model_to_download = params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or ""
     download_all = params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-    if not model_to_download and not download_all:
+    if not model_to_download and not lab_model_to_download and not download_all:
       return jsonify({"message": "No active model download to cancel."}), 200
 
     params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True)
@@ -5274,7 +7315,11 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot delete model files while driving."}), 403
 
-    if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM) or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""):
+    if (
+      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    ):
       return jsonify({"error": "Cannot delete model files while a download is in progress."}), 409
 
     data = request.get_json() or {}
@@ -5283,7 +7328,8 @@ def setup(app):
       return jsonify({"error": "Missing model key."}), 400
 
     current_model = _current_model_key()
-    if model_key == current_model:
+    active_models = {current_model, _active_model_key("small"), _active_model_key("big")}
+    if model_key in active_models:
       return jsonify({"error": "Cannot delete the currently active model."}), 409
 
     catalog = {model["value"]: model for model in get_model_catalog()}
@@ -5331,13 +7377,10 @@ def setup(app):
 
     selected_entries = get_selected_map_entries(selected_raw)
     selected_locations = [entry["token"] for entry in selected_entries]
-    maps_present = MAPS_PATH.exists() and any(path.is_file() for path in MAPS_PATH.rglob("*"))
-    storage_bytes = 0
-    if MAPS_PATH.exists():
-      try:
-        storage_bytes = sum(path.stat().st_size for path in MAPS_PATH.rglob("*") if path.is_file())
-      except Exception:
-        storage_bytes = 0
+    size_cache = load_maps_storage_cache(params.get(MAPS_DOWNLOAD_SIZE_CACHE_PARAM, encoding="utf-8") or "")
+    storage_known = size_cache.storage_known
+    storage_bytes = size_cache.storage_bytes if storage_known else 0
+    maps_present = bool(size_cache.maps_present)
 
     selected_key = selection_key(selected_locations)
     raw_progress = params_memory.get(MAPS_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
@@ -5348,10 +7391,13 @@ def setup(app):
     if not isinstance(download_progress, dict):
       download_progress = {}
 
+    if params_memory.get_bool(MAPS_DOWNLOAD_PARAM) and "storageBytes" in download_progress:
+      storage_known = bool(download_progress.get("storageKnown", True))
+      storage_bytes = nonnegative_int(download_progress.get("storageBytes", 0)) if storage_known else 0
+      maps_present = storage_bytes > 0 if storage_known else False
+
     if not params_memory.get_bool(MAPS_DOWNLOAD_PARAM) and selected_key and download_progress.get("selectedKey") != selected_key:
-      size_cache = load_size_cache(params.get(MAPS_DOWNLOAD_SIZE_CACHE_PARAM, encoding="utf-8") or "")
-      cached_entry = size_cache.get(selected_key, {})
-      cached_bytes = nonnegative_int(cached_entry.get("downloadBytes", 0)) if isinstance(cached_entry, dict) else 0
+      cached_bytes = size_cache.selection_estimate_bytes(selected_key)
       if cached_bytes > 0:
         download_progress = {
           "active": False,
@@ -5360,7 +7406,7 @@ def setup(app):
           "downloadedBytes": 0,
           "downloadedFiles": 0,
           "estimatedDownloadBytes": cached_bytes,
-          "estimateSource": "previous_download",
+          "estimateSource": "previous_additional_storage",
           "etaSeconds": 0,
           "percent": 0,
           "phase": "idle",
@@ -5368,8 +7414,9 @@ def setup(app):
           "selectedKey": selected_key,
           "selectedLocations": selected_locations,
           "storageBytes": storage_bytes,
-          "totalFiles": nonnegative_int(cached_entry.get("totalFiles", 0)),
-          "updatedAt": cached_entry.get("updatedAt", ""),
+          "storageKnown": storage_known,
+          "totalFiles": size_cache.selection_total_files(selected_key),
+          "updatedAt": size_cache.selection_updated_at(selected_key),
           "bytesPerSecond": 0,
         }
       else:
@@ -5388,6 +7435,7 @@ def setup(app):
           "selectedKey": selected_key,
           "selectedLocations": selected_locations,
           "storageBytes": storage_bytes,
+          "storageKnown": storage_known,
           "totalFiles": 0,
           "updatedAt": "",
           "bytesPerSecond": 0,
@@ -5403,6 +7451,7 @@ def setup(app):
       "isOnroad": params.get_bool("IsOnroad"),
       "lastUpdate": params.get("LastMapsUpdate", encoding="utf-8") or "Never",
       "mapsPresent": maps_present,
+      "storageKnown": storage_known,
       "scheduleLabel": schedule_label(params.get("PreferredSchedule")),
       "scheduleOptions": MAP_SCHEDULE_OPTIONS,
       "scheduleValue": schedule_param_value(params.get("PreferredSchedule")),
@@ -5489,6 +7538,11 @@ def setup(app):
     if MAPS_PATH.exists():
       shutil.rmtree(MAPS_PATH, ignore_errors=True)
 
+    size_cache = load_maps_storage_cache(params.get(MAPS_DOWNLOAD_SIZE_CACHE_PARAM, encoding="utf-8") or "")
+    size_cache.clear()
+    params.put(MAPS_DOWNLOAD_SIZE_CACHE_PARAM, size_cache.to_json())
+    params_memory.remove(MAPS_DOWNLOAD_PROGRESS_PARAM)
+
     return jsonify({"message": "Maps removed.", "status": _get_maps_status_payload()}), 200
 
   @app.route("/api/params_memory", methods=["GET"])
@@ -5517,12 +7571,32 @@ def setup(app):
     current_model = _param_text(params.get("Model", encoding="utf-8") or params.get("DrivingModel", encoding="utf-8"))
     return canonical_model_key(current_model) or _default_model_key()
 
+  def _active_model_key(profile):
+    model_key, _, _ = get_model_profile(params, profile)
+    return canonical_model_key(model_key)
+
   def is_model_installed(model_key, model_version, on_disk_files):
     del model_version
     if is_builtin_model_key(model_key):
       return True
 
-    return f"{model_key}_driving_tinygrad.pkl" in on_disk_files
+    filename = f"{model_key}_driving_tinygrad.pkl"
+    if filename in on_disk_files:
+      return True
+
+    manifest = get_manifest_path(filename)
+    if manifest not in on_disk_files:
+      return False
+
+    try:
+      num_chunks = int((MODELS_PATH / manifest).read_text().strip())
+    except (OSError, ValueError):
+      return False
+
+    return num_chunks > 0 and all(
+      get_chunk_name(filename, index, num_chunks) in on_disk_files
+      for index in range(num_chunks)
+    )
 
   def get_model_catalog():
     available = [model.strip() for model in (params.get("AvailableModels", encoding="utf-8") or "").split(",")]
@@ -5540,6 +7614,13 @@ def setup(app):
     except Exception:
       on_disk_files = set()
 
+    try:
+      metadata_payload = json.loads((MODELS_PATH / ".model_artifacts.json").read_text())
+      artifact_metadata = metadata_payload if isinstance(metadata_payload, dict) else {}
+    except (OSError, TypeError, ValueError):
+      artifact_metadata = {}
+
+    external_gpu_present = external_gpu_available()
     models_by_key = {}
     for i, key in enumerate(available):
       canonical_key = canonical_model_key(key)
@@ -5551,7 +7632,22 @@ def setup(app):
       artifact_format = artifact_formats[i] if i < len(artifact_formats) else ""
       model_series = series[i] if i < len(series) and series[i] else "Custom Series"
       released = released_dates[i] if i < len(released_dates) else ""
-
+      requires_external_gpu = model_uses_external_gpu(canonical_key)
+      gpu_available = not requires_external_gpu or external_gpu_present
+      metadata = artifact_metadata.get(canonical_key, {})
+      metadata = metadata if isinstance(metadata, dict) else {}
+      small_model = is_small_model_metadata({**metadata, "uses_external_gpu": requires_external_gpu})
+      lab_eligible = model_lab_manifest_eligible({**metadata, "uses_external_gpu": requires_external_gpu}, model_version)
+      accelerator_artifacts = metadata.get("accelerator_artifacts", {})
+      accelerator_artifacts = accelerator_artifacts if isinstance(accelerator_artifacts, dict) else {}
+      chestnut_artifact = accelerator_artifacts.get("chestnut", {})
+      chestnut_artifact = chestnut_artifact if isinstance(chestnut_artifact, dict) else {}
+      lab_artifact_available = (
+        bool(chestnut_artifact)
+        and str(chestnut_artifact.get("execution_device") or chestnut_artifact.get("device") or "").strip().upper() == "AMD"
+      )
+      lab_artifact_path = MODELS_PATH / model_accelerator_artifact_filename(canonical_key)
+      lab_artifact_installed = lab_artifact_available and file_chunked_exists(lab_artifact_path)
       existing = models_by_key.get(canonical_key)
       if existing is None:
         models_by_key[canonical_key] = {
@@ -5560,6 +7656,14 @@ def setup(app):
           "series": model_series,
           "version": model_version,
           "artifactFormat": artifact_format,
+          "requiresGpu": requires_external_gpu,
+          "gpuAvailable": gpu_available,
+          "small": small_model,
+          "modelSize": str(metadata.get("model_size") or ("small (inferred)" if small_model else "chestnut (inferred)")),
+          "manifestDeclaredSize": bool(metadata.get("model_size_declared", metadata.get("size_class"))),
+          "modelLabEligible": lab_eligible,
+          "modelLabArtifactAvailable": lab_artifact_available,
+          "modelLabArtifactInstalled": lab_artifact_installed,
           "released": released,
           "builtin": is_builtin_model_key(canonical_key),
           "communityFavorite": canonical_key in community_favorites,
@@ -5580,6 +7684,12 @@ def setup(app):
       existing["builtin"] = existing["builtin"] or is_builtin_model_key(canonical_key)
       existing["communityFavorite"] = existing["communityFavorite"] or canonical_key in community_favorites
       existing["userFavorite"] = existing["userFavorite"] or canonical_key in user_favorites
+      existing["requiresGpu"] = existing["requiresGpu"] or requires_external_gpu
+      existing["gpuAvailable"] = not existing["requiresGpu"] or external_gpu_present
+      existing["small"] = existing["small"] and small_model
+      existing["modelLabEligible"] = existing["modelLabEligible"] and lab_eligible
+      existing["modelLabArtifactAvailable"] = existing["modelLabArtifactAvailable"] and lab_artifact_available
+      existing["modelLabArtifactInstalled"] = existing["modelLabArtifactInstalled"] and lab_artifact_installed
 
     default_key = _default_model_key()
     default_entry = models_by_key.setdefault(default_key, {
@@ -5588,6 +7698,14 @@ def setup(app):
       "series": "Custom Series",
       "version": _default_model_version(),
       "artifactFormat": "tinygrad_single_v1",
+      "requiresGpu": False,
+      "gpuAvailable": True,
+      "small": True,
+      "modelSize": "small (inferred)",
+      "manifestDeclaredSize": False,
+      "modelLabEligible": model_lab_manifest_eligible(artifact_metadata.get(default_key, {}), _default_model_version()),
+      "modelLabArtifactAvailable": False,
+      "modelLabArtifactInstalled": False,
       "released": "",
       "builtin": True,
       "communityFavorite": default_key in community_favorites,
@@ -5610,40 +7728,38 @@ def setup(app):
       })
 
     models.sort(key=lambda model: (model["series"].lower(), model["label"].lower()))
-    return models
+    return model_sizes.annotate(models, MODELS_PATH,
+                                Path(__file__).resolve().parents[3] / "selfdrive/modeld/models/driving_tinygrad.pkl",
+                                artifact_metadata, model_accelerator_artifact_filename)
 
   @app.route("/api/routes", methods=["GET"])
   def list_routes():
     def generate():
-      routes = [
-        (path, name, segment_count)
-        for path in FOOTAGE_PATHS
-        for name, segment_count in utilities.get_routes_with_segment_counts(path)
-      ]
-      total = len(routes)
+      routes = _route_scan_entries(FOOTAGE_PATHS)
       connect_dongle_id = params.get("StockDongleId", encoding="utf-8") or params.get("DongleId", encoding="utf-8") or ""
-      yield f"data: {json.dumps({'progress': 0, 'total': total, 'connectDongleId': connect_dongle_id})}\n\n"
+      for payload in _route_metadata_events(routes, connect_dongle_id):
+        yield f"data: {json.dumps(payload)}\n\n"
 
-      with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {
-          executor.submit(utilities.process_route, path, name, segment_count): (path, name)
-          for path, name, segment_count in routes
-        }
-        for processed, future in enumerate(as_completed(futures), start=1):
-          try:
-            result = future.result()
-            yield f"data: {json.dumps({'routes': [result]})}\n\n"
-          except Exception as exception:
-            print(f"Error processing route: {exception}")
-          yield f"data: {json.dumps({'progress': processed, 'total': total})}\n\n"
+    response = Response(generate(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
-    return Response(generate(), mimetype="text/event-stream")
+  def _valid_route_name(name):
+    return bool(utilities.ROUTE_RE.fullmatch(str(name or "")))
 
   @app.route("/api/routes/<name>", methods=["DELETE"])
   def delete_route(name):
+    if not _valid_route_name(name):
+      return jsonify({"error": "Invalid route name."}), 400
+
+    segment_prefix = f"{name}--"
     for footage_path in FOOTAGE_PATHS:
+      if not os.path.isdir(footage_path):
+        continue
       for segment in os.listdir(footage_path):
-        if segment.startswith(name):
+        if utilities.SEGMENT_RE.fullmatch(segment) and segment.startswith(segment_prefix):
           delete_file(os.path.join(footage_path, segment))
     return {"message": "Route deleted!"}, 200
 
@@ -5657,6 +7773,7 @@ def setup(app):
 
     try:
       utilities.stop_dashboard_background_analysis()
+      include_preserved = request.args.get("include_preserved", "true").strip().lower() not in ("0", "false", "no", "off")
 
       route_paths = []
       seen_paths = set()
@@ -5666,18 +7783,51 @@ def setup(app):
           seen_paths.add(path)
           route_paths.append(path)
 
-      for route_path in route_paths:
-        _run_factory_reset_delete(route_path)
+      preserved_route_names = set()
+      deleted_route_names = set()
+      if include_preserved:
+        for route_path in route_paths:
+          _run_factory_reset_delete(route_path)
+      else:
+        # The preserve xattr lives on one segment, but preservation applies to the
+        # whole route in every footage root.
+        for route_path in route_paths:
+          if not os.path.isdir(route_path):
+            continue
+          for segment in os.listdir(route_path):
+            if utilities.SEGMENT_RE.fullmatch(segment) and utilities.has_preserve_attr(os.path.join(route_path, segment)):
+              preserved_route_names.add(segment.rsplit("--", 1)[0])
 
-      persisted_route_count = utilities.clear_dashboard_route_history(params)
+        for route_path in route_paths:
+          if not os.path.isdir(route_path):
+            continue
+          for segment in os.listdir(route_path):
+            if not utilities.SEGMENT_RE.fullmatch(segment):
+              continue
+            route_name = segment.rsplit("--", 1)[0]
+            if route_name in preserved_route_names:
+              continue
+            delete_file(os.path.join(route_path, segment))
+            deleted_route_names.add(route_name)
+
+      persisted_route_count = utilities.clear_dashboard_route_history(
+        params,
+        retained_route_names=preserved_route_names if not include_preserved else None,
+      )
       _STATS_RESPONSE_CACHE.update({
         "updated_at": 0.0,
         "payload": None,
       })
       return jsonify({
         "success": True,
-        "message": "All local driving routes deleted. Saved personal records were kept.",
-        "deletedPaths": len(route_paths),
+        "message": (
+          "All local driving routes deleted, including preserved routes. Saved personal records were kept."
+          if include_preserved else
+          "All non-preserved local driving routes deleted. Preserved routes were kept."
+        ),
+        "deletedPaths": len(route_paths) if include_preserved else 0,
+        "deletedRoutes": len(deleted_route_names) if not include_preserved else None,
+        "preservedRoutes": len(preserved_route_names) if not include_preserved else 0,
         "clearedDashboardRoutes": persisted_route_count,
       }), 200
     except Exception as exception:
@@ -5687,39 +7837,51 @@ def setup(app):
 
   @app.route("/api/routes/<name>/preserve", methods=["POST"])
   def preserve_route(name):
-    preserved_routes = 0
-    for footage_path in FOOTAGE_PATHS:
-      for segment in os.listdir(footage_path):
-        if segment.endswith("--0"):
-          segment_path = os.path.join(footage_path, segment)
-          if PRESERVE_ATTR_NAME in os.listxattr(segment_path) and os.getxattr(segment_path, PRESERVE_ATTR_NAME) == PRESERVE_ATTR_VALUE:
-            preserved_routes += 1
+    if not _valid_route_name(name):
+      return jsonify({"error": "Invalid route name."}), 400
 
-    if preserved_routes >= PRESERVE_COUNT:
+    preserved_routes = set()
+    for footage_path in FOOTAGE_PATHS:
+      if not os.path.isdir(footage_path):
+        continue
+      for segment in os.listdir(footage_path):
+        if utilities.SEGMENT_RE.fullmatch(segment) and utilities.has_preserve_attr(os.path.join(footage_path, segment)):
+          preserved_routes.add(segment.rsplit("--", 1)[0])
+
+    if name not in preserved_routes and len(preserved_routes) >= PRESERVE_COUNT:
       return {"error": f"Maximum of {PRESERVE_COUNT} preserved routes reached..."}, 400
 
     for footage_path in FOOTAGE_PATHS:
-      route_path = os.path.join(footage_path, f"{name}--0")
-      if os.path.exists(route_path):
-        os.setxattr(route_path, PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE)
+      segment_path = _route_first_segment_path(name, footage_path)
+      if segment_path is not None:
+        os.setxattr(segment_path, PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE)
         return {"message": "Route preserved!!"}, 200
 
     return {"error": "Route not found"}, 404
 
   @app.route("/api/routes/<name>/preserve", methods=["DELETE"])
   def un_preserve_route(name):
+    if not _valid_route_name(name):
+      return jsonify({"error": "Invalid route name."}), 400
+
     for footage_path in FOOTAGE_PATHS:
-      route_path = os.path.join(footage_path, f"{name}--0")
-      if PRESERVE_ATTR_NAME in os.listxattr(route_path):
-        os.removexattr(route_path, PRESERVE_ATTR_NAME)
+      segment_path = _route_first_segment_path(name, footage_path)
+      if segment_path is not None and utilities.has_preserve_attr(segment_path):
+        os.removexattr(segment_path, PRESERVE_ATTR_NAME)
         return {"message": "Route unpreserved!"}, 200
     return {"error": "Route not found"}, 404
 
   @app.route("/video/<name>/combined", methods=["GET"])
   def get_combined_route_video(name):
+    if not _valid_route_name(name):
+      return jsonify({"error": "Invalid route name."}), 400
+
     camera = request.args.get("camera", "forward")
     for footage_path in FOOTAGE_PATHS:
-      segments = utilities.get_segments_in_route(name, footage_path)
+      try:
+        segments = utilities.get_segments_in_route(name, footage_path)
+      except OSError:
+        continue
       if segments:
         cam_file = {
           "forward": "fcamera.hevc",
@@ -5736,38 +7898,100 @@ def setup(app):
         if not input_files:
           return {"error": "No video files found"}, 404
 
-        mp4_file = utilities.ffmpeg_concat_segments_to_mp4(input_files, cache_key=f"{name}-{camera}")
-        return send_file(mp4_file, mimetype="video/mp4")
+        response = Response(utilities.ffmpeg_stream_concatenated_mp4(input_files), mimetype="video/mp4")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     return {"error": "Route not found"}, 404
 
   @app.route("/api/routes/<name>", methods=["GET"])
   def get_route(name):
-    for footage_path in FOOTAGE_PATHS:
-      base_path = f"{footage_path}{name}--0"
-      if os.path.exists(base_path):
-        segments = utilities.get_segments_in_route(name, footage_path)
-        if not segments:
-          break
+    if not _valid_route_name(name):
+      return jsonify({"error": "Invalid route name."}), 400
 
+    for footage_path in FOOTAGE_PATHS:
+      try:
+        segments = utilities.get_segments_in_route(name, footage_path)
+      except OSError:
+        continue
+      if segments:
+        base_path = os.path.join(footage_path, segments[0])
         segment_urls = [f"/video/{segment}" for segment in segments]
-        total_duration = sum(utilities.get_video_duration(f"{footage_path}{name}--{i}/fcamera.hevc") for i in range(len(segment_urls)))
+        # Probing each segment cost an ffprobe before playback could even start,
+        # and segments are a fixed minute anyway.
+        total_duration = len(segments) * SEGMENT_DURATION_SECONDS
         return {
           "name": name,
           "segment_urls": segment_urls,
-          "total_duration": round(total_duration),
+          "total_duration": total_duration,
           "date": utilities.get_route_start_time(base_path),
           "available_cameras": utilities.get_available_cameras(base_path),
         }, 200
     return {"error": "Route not found"}, 404
 
+  @app.route("/api/routes/<name>/logs", methods=["GET"])
+  def list_route_logs(name):
+    logs = _route_log_files(name)
+    if not logs:
+      return jsonify({"error": "No full logs are stored on the device for this route."}), 404
+
+    return jsonify({
+      "name": name,
+      "totalBytes": sum(size for *_, size in logs),
+      "segments": [
+        {
+          "segment": segment,
+          "segmentNum": int(segment.rsplit("--", 1)[1]),
+          "filename": filename,
+          "bytes": size,
+          "url": f"/api/routes/{name}/logs/{int(segment.rsplit('--', 1)[1])}",
+        }
+        for segment, filename, _, size in logs
+      ],
+    }), 200
+
+  @app.route("/api/routes/<name>/logs/<int:segment_num>", methods=["GET"])
+  def download_route_log(name, segment_num):
+    for segment, filename, path, _ in _route_log_files(name):
+      if int(segment.rsplit("--", 1)[1]) == segment_num:
+        return send_file(path, as_attachment=True, download_name=f"{segment}-{filename}")
+    return jsonify({"error": "No full log is stored on the device for this segment."}), 404
+
+  @app.route("/api/routes/<name>/logs/download", methods=["GET"])
+  def download_route_logs_archive(name):
+    logs = _route_log_files(name)
+    if not logs:
+      return jsonify({"error": "No full logs are stored on the device for this route."}), 404
+
+    def generate():
+      buffer = _TarBuffer()
+      # streamed a file at a time so a long route never needs its whole archive in memory
+      with tarfile.open(fileobj=buffer, mode="w|") as archive:
+        for segment, filename, path, _ in logs:
+          try:
+            archive.add(path, arcname=f"{segment}/{filename}")
+          except OSError:
+            continue
+          chunk = buffer.pop()
+          if chunk:
+            yield chunk
+      chunk = buffer.pop()
+      if chunk:
+        yield chunk
+
+    response = Response(generate(), mimetype="application/x-tar")
+    response.headers["Content-Disposition"] = f'attachment; filename="{name}-logs.tar"'
+    return response
+
   @app.route("/api/routes/clear_name", methods=["POST"])
+  @app.route("/api/routes/reset_name", methods=["POST"])
   def clear_route_name():
     data = request.get_json()
     route_name = data.get("name")
 
-    if not route_name:
-      return jsonify({"error": "Missing route name"}), 400
+    if not _valid_route_name(route_name):
+      return jsonify({"error": "Invalid route name"}), 400
 
     cleared = False
     original_timestamp = None
@@ -5782,7 +8006,7 @@ def setup(app):
       for segment in segments_to_process:
         segment_dir = os.path.join(footage_path, segment)
         for item in os.listdir(segment_dir):
-          if not item.endswith((".hevc", ".ts", ".png", ".gif")) and item not in utilities.LOG_CANDIDATES:
+          if utilities.is_route_marker_file(item):
             try:
               os.remove(os.path.join(segment_dir, item))
               cleared = True
@@ -5804,8 +8028,8 @@ def setup(app):
     old_name = data.get("old")
     new_name_raw = data.get("new")
 
-    if not old_name or not new_name_raw:
-      return jsonify({"error": "Missing old or new name"}), 400
+    if not _valid_route_name(old_name) or not new_name_raw:
+      return jsonify({"error": "Missing or invalid route name"}), 400
 
     new_name = utilities.secure_filename(new_name_raw)
     renamed = False
@@ -5821,7 +8045,7 @@ def setup(app):
       for segment in segments_to_process:
         segment_dir = os.path.join(footage_path, segment)
         for item in os.listdir(segment_dir):
-          if not item.endswith((".hevc", ".ts", ".png", ".gif", "rlog")):
+          if utilities.is_route_marker_file(item):
             try:
               os.remove(os.path.join(segment_dir, item))
             except OSError:
@@ -5839,7 +8063,7 @@ def setup(app):
           return jsonify({"error": f"Error creating new name file: {e}"}), 500
 
     if renamed:
-      return jsonify({"message": "Route renamed successfully!"}), 200
+      return jsonify({"message": "Route renamed successfully!", "name": new_name}), 200
     else:
       return jsonify({"error": "Route not found"}), 404
 
@@ -6030,8 +8254,7 @@ def setup(app):
 
     return jsonify({"message": "Speed limit processing started.", "status": "Calculating..."}), 202
 
-  @app.route("/api/stats", methods=["GET"])
-  def get_stats():
+  def _get_stats_locked():
     cache_now = time.monotonic()
     cached_payload = _STATS_RESPONSE_CACHE.get("payload")
     if cached_payload is not None and cache_now - _STATS_RESPONSE_CACHE.get("updated_at", 0.0) < STATS_RESPONSE_CACHE_SECONDS:
@@ -6070,10 +8293,31 @@ def setup(app):
       "dashboard": dashboard_stats,
     }
     _STATS_RESPONSE_CACHE.update({
-      "updated_at": cache_now,
+      "updated_at": time.monotonic(),
       "payload": payload,
     })
     return payload
+
+  @app.route("/api/stats", methods=["GET"])
+  def get_stats():
+    cache_now = time.monotonic()
+    cached_payload = _STATS_RESPONSE_CACHE.get("payload")
+    if cached_payload is not None and cache_now - _STATS_RESPONSE_CACHE.get("updated_at", 0.0) < STATS_RESPONSE_CACHE_SECONDS:
+      return cached_payload
+
+    # Flask serves requests concurrently. Serialize cache misses so a slow
+    # storage scan cannot be multiplied by repeated homepage polling.
+    with _STATS_RESPONSE_LOCK:
+      return _get_stats_locked()
+
+  @app.route("/api/device/status", methods=["GET"])
+  def device_status():
+    return jsonify({
+      "status": "Driving" if params.get_bool("IsOnroad") else "Parked",
+      "online": True,
+      "lanIp": utilities.get_current_lan_ip(),
+      "networkName": utilities.get_current_network_name(),
+    }), 200
 
   @app.route("/api/stats/ignore_drive", methods=["POST"])
   def ignore_drive_stats():
@@ -6220,11 +8464,13 @@ def setup(app):
   @app.route("/api/flm/status", methods=["GET"])
   def get_flm_status():
     is_onroad = params.get_bool("IsOnroad")
+    lane_centering = params.get_bool("LaneCentering")
     if is_onroad:
       flm_workspace.cancel_flm_if_onroad()
     workspace = flm_workspace.list_workspace()
     return jsonify({
       "isOnroad": is_onroad,
+      "laneCentering": lane_centering,
       "status": flm_workspace.read_flm_status(),
       "activeTrial": workspace.get("activeTrial"),
       "reports": workspace.get("reports", [])[:10],
@@ -6236,6 +8482,10 @@ def setup(app):
   def start_flm_analysis():
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "FLM analysis can only run offroad."}), 409
+    if params.get_bool("LaneCentering"):
+      return jsonify({
+        "error": "Turn Lane Centering off before running FLM. Its correction must not be mixed into lateral-tuning analysis."
+      }), 409
 
     data = request.get_json(silent=True) or {}
     route_names = [str(route).strip() for route in data.get("routes", []) if str(route).strip()]
@@ -6247,7 +8497,10 @@ def setup(app):
     except (TypeError, ValueError) as error:
       return jsonify({"error": str(error)}), 400
 
-    started = flm_workspace.start_flm_background_analysis(route_names, FOOTAGE_PATHS, segment_ranges)
+    try:
+      started = flm_workspace.start_flm_background_analysis(route_names, FOOTAGE_PATHS, segment_ranges)
+    except (TypeError, ValueError) as error:
+      return jsonify({"error": str(error)}), 400
     if not started:
       return jsonify({"error": "Failed to start FLM analysis."}), 500
 
@@ -6437,6 +8690,7 @@ def setup(app):
       **git_data,
       "isOnroad": _safe_params_get_bool("IsOnroad"),
       "automaticUpdates": _safe_params_get_bool("AutomaticUpdates"),
+      "versionPin": version_install.read_pin(repo_path),
       "interruptedUpdateRecovery": _get_interrupted_update_recovery(repo_path, state_data),
       "warning": "Fast update skips backup creation and finalization safeguards.",
     }), 200
@@ -6504,6 +8758,61 @@ def setup(app):
       "running": state_data.get("running", False),
     }), 200
 
+  @app.route("/api/update/versions", methods=["GET"])
+  def get_update_versions():
+    branch = request.args.get("branch", "")
+    repo_path = str(_get_openpilot_root())
+    if not branch or len(branch) > 255 or not _is_valid_git_branch_name(repo_path, branch):
+      return jsonify({"error": "Choose a valid branch to browse its versions."}), 400
+    try:
+      page = int(request.args.get("page", "1"))
+    except (TypeError, ValueError):
+      return jsonify({"error": "Invalid history page."}), 400
+    head = request.args.get("head") or None
+    if page < 1 or (head is not None and not re.fullmatch(r"[0-9a-f]{40}", head)) or (page > 1 and head is None):
+      return jsonify({"error": "Invalid history page or history revision."}), 400
+    if not _remote_git_check_allowed():
+      return jsonify({"error": "Version history will be available once the device clock is synchronized."}), 503
+    try:
+      return jsonify(version_history.list_versions(repo_path, branch, page=page, head=head)), 200
+    except version_history.VersionHistoryError as exception:
+      return jsonify({"error": str(exception)}), 422
+    except Exception:
+      return jsonify({"error": "Unable to load version history. Please try again."}), 503
+
+  @app.route("/api/update/version", methods=["POST"])
+  def run_version_install():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get("confirmed") is not True:
+      return jsonify({"error": "Confirm the selected version before installing."}), 400
+    branch, commit = payload.get("branch"), payload.get("commit")
+    repo_path = str(_get_openpilot_root())
+    if not isinstance(branch, str) or not branch or len(branch) > 255 or not _is_valid_git_branch_name(repo_path, branch):
+      return jsonify({"error": "Invalid branch name."}), 400
+    if not isinstance(commit, str) or (commit != "latest" and not re.fullmatch(r"[0-9a-f]{40}", commit)):
+      return jsonify({"error": "Choose Latest or an exact version from this branch's history."}), 400
+    try:
+      version_install.require_parked()
+    except version_install.InstallError as exception:
+      return jsonify({"error": str(exception)}), 409
+    with _fast_update_lock:
+      if _fast_update_state.get("running"):
+        return jsonify({"error": "Another update action is already in progress."}), 409
+      _fast_update_state.update({
+        "running": True, "stage": "starting", "message": "Preparing selected version...",
+        "lastError": "", "lastBranch": branch, "lastMode": "version-install",
+        "startedAt": time.time(), "finishedAt": 0.0,
+        "progressStep": 1, "progressTotalSteps": _FAST_UPDATE_TOTAL_STEPS,
+        "progressStepPercent": 0.0, "progressPercent": 0.0,
+        "progressLabel": "Preparing selected version", "progressDetail": "Checking branch history and compatibility...",
+      })
+    try:
+      threading.Thread(target=_version_install_worker, args=(branch, commit), daemon=True).start()
+    except Exception as exception:
+      _set_fast_update_error_state("Unable to start version installation.", exception)
+      return jsonify({"error": "Unable to start version installation."}), 503
+    return jsonify({"message": "Version installation started. The device will reboot when complete."}), 202
+
   @app.route("/api/update/agnos_status", methods=["GET"])
   def get_agnos_update_status():
     state_data = _get_fast_update_state()
@@ -6553,6 +8862,8 @@ def setup(app):
   def run_fast_update():
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot run a fast update while driving."}), 409
+    if version_install.read_pin(str(_get_openpilot_root())):
+      return jsonify({"error": "A historical version is installed. Choose Latest in the version selector to update."}), 409
 
     with _fast_update_lock:
       if _fast_update_state.get("running"):
@@ -6698,24 +9009,245 @@ def setup(app):
       "warning": "This wipes local params, backups, themes, models, maps, and route data.",
     }), 202
 
+  @app.route("/service-worker.js", methods=["GET"])
+  def sentry_service_worker():
+    response = send_from_directory(app.static_folder, "service-worker.js", mimetype="application/javascript")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
+  @app.route("/api/sentry/push/config", methods=["GET"])
+  def sentry_push_config():
+    try:
+      public_key = _sentry_vapid_public_key(_get_sentry_vapid())
+    except (RuntimeError, ModuleNotFoundError) as error:
+      cloudlog.warning("Galaxy: Sentry Web Push dependencies unavailable: %s", error)
+      return jsonify({"enabled": False, "error": "Web Push dependencies are unavailable."}), 503
+    except Exception as error:
+      cloudlog.exception("Galaxy: Failed to initialize Sentry Web Push: %s", error)
+      return jsonify({"enabled": False, "error": f"Push notification service error: {error}"}), 500
+
+    return jsonify({
+      "enabled": True,
+      "publicKey": public_key,
+      "subscriptionCount": _sentry_push_subscription_count(),
+    })
+
+  @app.route("/api/sentry/push/subscribe", methods=["POST"])
+  def sentry_push_subscribe():
+    subscription = _normalize_sentry_push_subscription(request.get_json(silent=True))
+    if subscription is None:
+      return jsonify({"error": "Invalid browser push subscription."}), 400
+
+    try:
+      _get_sentry_vapid()
+    except (RuntimeError, ModuleNotFoundError) as error:
+      cloudlog.warning("Galaxy: Sentry Web Push dependencies unavailable: %s", error)
+      return jsonify({"error": "Web Push dependencies are unavailable."}), 503
+    except Exception as error:
+      cloudlog.exception("Galaxy: Failed to initialize Sentry Web Push for subscription: %s", error)
+      return jsonify({"error": f"Push notification service error: {error}"}), 500
+
+    with _SENTRY_PUSH_LOCK:
+      subscriptions = _load_sentry_push_subscriptions()
+      subscriptions = [
+        existing for existing in subscriptions
+        if existing.get("endpoint") != subscription["endpoint"]
+      ]
+      subscriptions.append(subscription)
+      _save_sentry_push_subscriptions(subscriptions)
+
+    return jsonify({"subscribed": True, "subscriptionCount": len(subscriptions)})
+
+  @app.route("/api/sentry/push/unsubscribe", methods=["POST"])
+  def sentry_push_unsubscribe():
+    payload = request.get_json(silent=True) or {}
+    endpoint = str(payload.get("endpoint") or "").strip()
+    if not endpoint:
+      return jsonify({"error": "Missing browser push endpoint."}), 400
+
+    with _SENTRY_PUSH_LOCK:
+      subscriptions = [
+        subscription for subscription in _load_sentry_push_subscriptions()
+        if subscription.get("endpoint") != endpoint
+      ]
+      _save_sentry_push_subscriptions(subscriptions)
+
+    return jsonify({"unsubscribed": True, "subscriptionCount": len(subscriptions)})
+
+  @app.route("/api/sentry/push/test", methods=["POST"])
+  def sentry_push_test():
+    if _sentry_push_subscription_count() == 0:
+      return jsonify({"error": "Enable browser notifications first."}), 409
+
+    event = _sentry_test_notification_event()
+    threading.Thread(target=_dispatch_sentry_push, args=(event,), name="galaxy-sentry-push-test", daemon=True).start()
+    return jsonify({"accepted": True, "eventId": event["eventId"]}), 202
+
+  @app.route("/api/sentry/test-notification", methods=["POST"])
+  def sentry_test_notification():
+    channels = _sentry_notification_channels()
+    if not any(channels.values()):
+      return jsonify({
+        "error": "Configure browser notifications, ntfy, or a webhook before sending a test notification.",
+        "channels": channels,
+      }), 409
+
+    event = _sentry_test_notification_event()
+    threading.Thread(
+      target=_dispatch_sentry_event,
+      args=(event,),
+      kwargs={"bypass_rate_limit": True},
+      name="galaxy-sentry-notification-test",
+      daemon=True,
+    ).start()
+    return jsonify({
+      "accepted": True,
+      "eventId": event["eventId"],
+      "channels": channels,
+    }), 202
+
   @app.route("/api/sentry/status", methods=["GET"])
   def sentry_status():
-    raw_event = params.get("SentryModeLastEvent", encoding="utf-8") or "{}"
     raw_status = params.get("SentryModeStatus", encoding="utf-8") or "{}"
-    try:
-      last_event = json.loads(raw_event)
-    except (TypeError, ValueError, json.JSONDecodeError):
-      last_event = {}
     try:
       status = json.loads(raw_status)
     except (TypeError, ValueError, json.JSONDecodeError):
       status = {}
 
+    events = _sentry_event_catalog()
+    last_event = events[0] if events else {}
+
     return jsonify({
       "enabled": params.get_bool("SentryModeEnabled"),
       "status": status if isinstance(status, dict) else {},
-      "lastEvent": last_event if isinstance(last_event, dict) else {},
+      "lastEvent": _public_sentry_event(last_event),
     })
+
+  @app.route("/api/sentry/events", methods=["GET"])
+  def get_sentry_events():
+    return jsonify({
+      "events": [_public_sentry_event(event) for event in _sentry_event_catalog()],
+    })
+
+  @app.route("/api/sentry/events/<event_id>", methods=["DELETE"])
+  def delete_sentry_event(event_id):
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Sentry events can only be deleted while parked."}), 409
+    if not event_id or event_id in {".", ".."} or Path(event_id).name != event_id:
+      return jsonify({"error": "Invalid Sentry event ID."}), 400
+
+    _sentry_event_catalog()
+
+    deleted_storage = False
+    for root in _sentry_event_roots():
+      directory = (root / event_id).resolve()
+      if root not in directory.parents or not directory.is_dir():
+        continue
+      shutil.rmtree(directory)
+      deleted_storage = True
+
+    current_event = _stored_sentry_event()
+    current_event_deleted = current_event is not None and current_event.get("eventId") == event_id
+    with _SENTRY_EVENT_INDEX_LOCK:
+      events = _load_sentry_event_catalog_unlocked()
+      retained_events = [event for event in events if event.get("eventId") != event_id]
+      catalog_deleted = len(retained_events) != len(events)
+      if catalog_deleted:
+        _save_sentry_event_catalog_unlocked(retained_events)
+
+    if not deleted_storage and not catalog_deleted:
+      return jsonify({"error": "Sentry event not found."}), 404
+
+    if current_event_deleted:
+      if retained_events:
+        params.put("SentryModeLastEvent", json.dumps(retained_events[0], separators=(",", ":")))
+      else:
+        params.remove("SentryModeLastEvent")
+
+    return jsonify({"deleted": True, "eventId": event_id})
+
+  @app.route("/api/sentry/images/<event_id>/<filename>", methods=["GET"])
+  def sentry_image(event_id, filename):
+    image_path = _sentry_image_path(event_id, filename)
+    if image_path is None:
+      return jsonify({"error": "Sentry image not found."}), 404
+    return send_file(image_path, mimetype="image/jpeg", max_age=0)
+
+  @app.route("/api/sentry/live", methods=["GET"])
+  def sentry_live():
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Live Sentry view is only available while parked."}), 409
+
+    with _SENTRY_LIVE_CAPTURE_LOCK:
+      image_paths = _capture_sentry_live_images()
+    if not image_paths:
+      return jsonify({"error": "Unable to capture the Sentry cameras."}), 503
+
+    captured_at = datetime.now(timezone.utc).isoformat()
+    event = _public_sentry_event({
+      "eventId": _SENTRY_LIVE_EVENT_ID,
+      "imagePaths": image_paths,
+    })
+    return jsonify({"capturedAt": captured_at, "imageUrls": event["imageUrls"]})
+
+  @app.route("/api/sentry/selfie", methods=["POST"])
+  def sentry_selfie():
+    if request.remote_addr not in {None, "127.0.0.1", "::1"}:
+      return jsonify({"error": "Comma Selfies must originate on the device."}), 403
+
+    with _SENTRY_LIVE_CAPTURE_LOCK:
+      jpeg = _get_live_driver_jpeg()
+    if jpeg is None:
+      return jsonify({"error": "Unable to capture the driver camera."}), 503
+
+    captured_at = datetime.now(timezone.utc).isoformat()
+    event_id = f"selfie-{int(time.time())}-{secrets.token_hex(4)}"
+    directory = _sentry_event_roots()[0] / event_id
+    directory.mkdir(parents=True, exist_ok=True)
+    image_path = directory / "driver.jpg"
+    image_path.write_bytes(jpeg)
+    event = {
+      "eventId": event_id,
+      "kind": "selfie",
+      "detectedAt": captured_at,
+      "imagePaths": [str(image_path)],
+      "message": "Comma Selfie",
+    }
+    _record_sentry_event(event)
+    params.put("SentryModeLastEvent", json.dumps(event, separators=(",", ":")))
+    return jsonify({"accepted": True, "capturedAt": captured_at, "eventId": event_id}), 201
+
+  @app.route("/api/sentry/test", methods=["POST"])
+  def sentry_test():
+    if request.remote_addr not in {None, "127.0.0.1", "::1"}:
+      return jsonify({"error": "Sentry tests must originate on the device."}), 403
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Sentry tests are only available while parked."}), 409
+
+    event_id = f"test-{int(time.time())}-{secrets.token_hex(4)}"
+    event = {
+      "eventId": event_id,
+      "kind": "alarm",
+      "detectedAt": datetime.now(timezone.utc).isoformat(),
+      "imagePaths": [],
+      "message": "Test sentry event.",
+    }
+
+    def capture_and_publish():
+      event["imagePaths"] = _capture_sentry_test_images(event_id)
+      _record_sentry_event(event)
+      params.put("SentryModeLastEvent", json.dumps(event, separators=(",", ":")))
+      threading.Thread(
+        target=_dispatch_sentry_event,
+        args=(event,),
+        kwargs={"bypass_rate_limit": True},
+        name="galaxy-sentry-test-notify",
+        daemon=True,
+      ).start()
+
+    threading.Thread(target=capture_and_publish, name="galaxy-sentry-test-capture", daemon=True).start()
+    return jsonify({"accepted": True, "eventId": event_id}), 202
 
   @app.route("/api/sentry/events", methods=["POST"])
   def sentry_event():
@@ -6726,8 +9258,12 @@ def setup(app):
     if event is None:
       return jsonify({"error": "Invalid sentry event."}), 400
 
+    _record_sentry_event(event)
     params.put("SentryModeLastEvent", json.dumps(event, separators=(",", ":")))
-    threading.Thread(target=_dispatch_sentry_event, args=(event,), name="galaxy-sentry-notify", daemon=True).start()
+    if request.args.get("blocking") == "1":
+      _dispatch_sentry_event(event)
+    else:
+      threading.Thread(target=_dispatch_sentry_event, args=(event,), name="galaxy-sentry-notify", daemon=True).start()
     return jsonify({"accepted": True, "eventId": event["eventId"]}), 202
 
   # ── Galaxy pairing (mirrors settings.cc L262-282) ──────────────────
@@ -7782,29 +10318,119 @@ def setup(app):
     if not isinstance(toggle_values, dict):
       return jsonify({"success": False, "message": "Toggle backup does not contain settings."}), 400
 
+    return _restore_toggle_values(toggle_values)
+
+  def _restore_toggle_values(toggle_values, *, profile=None):
+    parked_personality_keys = {
+      LEGACY_STARPILOT_PARAM_RENAMES.get(key, key)
+      for key in toggle_values
+      if isinstance(key, str)
+    } & PERSONALITY_PARKED_PARAM_KEYS
+    if parked_personality_keys and _personality_settings_write_locked():
+      return jsonify({
+        "success": False,
+        "message": "Driving personality settings can only be restored while parked with off-road state confirmed.",
+      }), 403
+
     allowed_keys = _get_toggle_backup_keys()
-    restored_count = 0
-    skipped_count = 0
+    validated_personality_values = {}
     for key, value in toggle_values.items():
       if not isinstance(key, str):
-        skipped_count += 1
         continue
-
       mapped_key = LEGACY_STARPILOT_PARAM_RENAMES.get(key, key)
-      if mapped_key not in allowed_keys:
-        skipped_count += 1
+      if mapped_key not in allowed_keys or mapped_key not in PERSONALITY_PARKED_PARAM_KEYS:
         continue
-
       try:
-        _params_raw.put(mapped_key, _coerce_toggle_restore_value(mapped_key, value))
-        restored_count += 1
+        if mapped_key in PERSONALITY_PROFILE_ENABLE_PARAM_KEYS or mapped_key == "CustomPersonalities":
+          if type(value) is not bool:
+            raise ValueError(f"{mapped_key} must be a JSON boolean")
+        coerced_value = _coerce_toggle_restore_value(mapped_key, value)
+        if mapped_key in PERSONALITY_ADVANCED_PARAM_KEYS:
+          coerced_value = validate_personality_advanced_value(coerced_value)
+        elif mapped_key in PERSONALITY_FOLLOW_PARAM_KEYS:
+          coerced_value = validate_personality_follow_value(coerced_value)
+        validated_personality_values[key] = coerced_value
       except (TypeError, ValueError, json.JSONDecodeError):
-        skipped_count += 1
+        return jsonify({
+          "success": False,
+          "message": f"Invalid driving personality setting in backup: {mapped_key}.",
+        }), 400
+
+    restored_count = 0
+    skipped_count = profile["skippedCount"] if profile is not None else 0
+    master_restore_requested = any(
+      LEGACY_STARPILOT_PARAM_RENAMES.get(key, key) == "CustomPersonalities"
+      for key in validated_personality_values
+    )
+    master_restore_enabled = next((
+      value
+      for key, value in validated_personality_values.items()
+      if LEGACY_STARPILOT_PARAM_RENAMES.get(key, key) == "CustomPersonalities"
+    ), None)
+
+    with _PERSONALITY_PROFILES_WRITE_LOCK:
+      if (profile is not None or parked_personality_keys) and _personality_settings_write_locked():
+        return jsonify({"success": False, "message": "Settings can only be restored while parked with off-road state confirmed."}), 403
+      if master_restore_requested:
+        ev_tuning = _get_detected_ev_tuning()
+        truck_tuning = (_get_detected_truck_tuning() or params.get_bool("TruckTuning")) and not ev_tuning
+        raw_document = _params_raw.get(PERSONALITY_PROFILES_PARAM)
+        if not is_unconfigured_profile_document(raw_document) and strict_profile_document(raw_document) is None:
+          return jsonify({
+            "success": False,
+            "message": "Stored longitudinal personality profiles require a verified migration before restoring the master control.",
+          }), 409
+        document = synchronise_profile_document_enabled(
+          raw_document, master_restore_enabled, ev_tuning, truck_tuning,
+        )
+        if master_restore_enabled:
+          if document is None:
+            return jsonify({"success": False, "message": "Driving personality profiles could not be prepared for enabling."}), 500
+          params.put(PERSONALITY_PROFILES_PARAM, document)
+          if strict_profile_document(_params_raw.get(PERSONALITY_PROFILES_PARAM)) != document:
+            return jsonify({"success": False, "message": "Driving personality profiles could not be verified after writing."}), 500
+          params.put_bool("CustomPersonalities", True)
+        else:
+          params.put_bool("CustomPersonalities", False)
+          if document is not None:
+            params.put(PERSONALITY_PROFILES_PARAM, document)
+        restored_count += 1
+
+      for key, value in toggle_values.items():
+        if not isinstance(key, str):
+          skipped_count += 1
+          continue
+
+        mapped_key = LEGACY_STARPILOT_PARAM_RENAMES.get(key, key)
+        if mapped_key not in allowed_keys:
+          skipped_count += 1
+          continue
+        if mapped_key == "CustomPersonalities":
+          continue
+
+        try:
+          restore_value = validated_personality_values.get(key, value)
+          # Slot values already use the native Params type (including BYTES and TIME).
+          if profile is None or mapped_key in PERSONALITY_PARKED_PARAM_KEYS:
+            restore_value = _coerce_toggle_restore_value(mapped_key, restore_value)
+          _params_raw.put(mapped_key, restore_value)
+          restored_count += 1
+        except (KeyError, TypeError, ValueError, OverflowError):
+          skipped_count += 1
 
     if restored_count == 0:
       return jsonify({"success": False, "message": "No compatible toggle settings were found in this backup."}), 400
 
     update_starpilot_toggles()
+    if profile is not None:
+      message = f"Loaded {profile['label']} ({restored_count} settings)."
+      if skipped_count:
+        message += f" Skipped {skipped_count} incompatible settings."
+      return jsonify({
+        "success": True, "message": message,
+        "slot": profile["slot"], "label": profile["label"],
+        "restoredCount": restored_count, "skippedCount": skipped_count,
+      })
     message = f"Restored {restored_count} toggle settings."
     if skipped_count:
       message += f" Skipped {skipped_count} incompatible or unavailable settings."
@@ -7815,8 +10441,57 @@ def setup(app):
       "skippedCount": skipped_count,
     })
 
+  @app.route("/api/toggles/profiles", methods=["GET"])
+  def get_toggle_profiles():
+    return jsonify({
+      "slots": param_profiles.list_profiles(profile_root=TOGGLE_BACKUPS),
+      "isOnroad": _safe_params_get_bool("IsOnroad"),
+    })
+
+  @app.route("/api/toggles/profiles/<slot>/save", methods=["POST"])
+  def save_toggle_profile(slot):
+    if _safe_params_get_bool("IsOnroad"):
+      return jsonify({"success": False, "message": "Settings profiles can only be saved while parked."}), 403
+    try:
+      status = param_profiles.save_profile(
+        _params_raw,
+        slot,
+        allowed_keys=_get_toggle_backup_keys(),
+        profile_root=TOGGLE_BACKUPS,
+      )
+    except param_profiles.ParamProfileError as error:
+      return jsonify({"success": False, "message": str(error)}), 400
+    return jsonify({
+      "success": True,
+      "message": f"Saved current settings to {status['label']}.",
+      "profile": status,
+    })
+
+  @app.route("/api/toggles/profiles/<slot>/load", methods=["POST"])
+  def load_toggle_profile(slot):
+    if _personality_settings_write_locked():
+      return jsonify({"success": False, "message": "Settings profiles can only be loaded while parked with off-road state confirmed."}), 403
+    try:
+      profile = param_profiles.prepare_profile(
+        _params_raw,
+        slot,
+        allowed_keys=_get_toggle_backup_keys(),
+        profile_root=TOGGLE_BACKUPS,
+        legacy_renames=LEGACY_STARPILOT_PARAM_RENAMES,
+      )
+    except param_profiles.ParamProfileError as error:
+      return jsonify({"success": False, "message": str(error)}), 400
+
+    return _restore_toggle_values(profile["settings"], profile=profile)
+
   @app.route("/api/toggles/reset_default", methods=["POST"])
   def reset_toggle_values():
+    if _personality_settings_write_locked():
+      return jsonify({
+        "success": False,
+        "message": "Toggles can only be reset while parked.",
+      }), 403
+
     for raw_key in _params_raw.all_keys():
       key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
       if key in EXCLUDED_KEYS:
@@ -7837,56 +10512,6 @@ def setup(app):
       return Response(jpeg, mimetype="image/jpeg")
     return jsonify({"error": "Unable to capture live frame from driver camera."}), 503
 
-
-  def _get_live_driver_jpeg():
-    from openpilot.system.manager.process_config import managed_processes
-    started = False
-    try:
-      try:
-        subprocess.check_call(["pgrep", "camerad"])
-      except subprocess.CalledProcessError:
-        managed_processes['camerad'].start()
-        started = True
-
-      client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_DRIVER, True)
-      if not client.connect(True):
-        return None
-
-      if started:
-        settle_deadline = time.monotonic() + 4.0
-        while time.monotonic() < settle_deadline:
-          client.recv(timeout_ms=100)
-
-      buf = client.recv(timeout_ms=5000)
-      if buf is None:
-        return None
-
-      y = np.array(buf.data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
-      u = np.array(buf.data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
-      v = np.array(buf.data[buf.uv_offset + 1::2], dtype=np.uint8).reshape((-1, buf.stride // 2))[:buf.height // 2, :buf.width // 2]
-
-      ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
-      vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
-
-      yuv = np.dstack((y, ul, vl)).astype(np.int16)
-      yuv[:, :, 1:] -= 128
-
-      m = np.array([
-        [1.00000,  1.00000, 1.00000],
-        [0.00000, -0.39465, 2.03211],
-        [1.13983, -0.58060, 0.00000],
-      ])
-      rgb = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
-
-      img = Image.fromarray(rgb)
-      buf_io = BytesIO()
-      img.save(buf_io, format="JPEG", quality=85)
-      return buf_io.getvalue()
-    except Exception:
-      return None
-    finally:
-      if started:
-        managed_processes['camerad'].stop()
 
   @app.route("/api/v_asm/config", methods=["GET"])
   def v_asm_get_config():
@@ -7930,7 +10555,8 @@ def setup(app):
   def pip_preview_get_config():
     if not params.get_bool("GalaxyDeveloperMode"):
       return jsonify({"error": "PiP Side Camera is available only with Galaxy Developer Mode enabled."}), 403
-    return jsonify(_decode_json_object(params.get("PIPPreviewMask")))
+    mask = _decode_json_object(params.get("PIPPreviewMask"))
+    return jsonify({"device_type": HARDWARE.get_device_type(), "mask": mask})
 
   @app.route("/api/pip_preview/config", methods=["POST"])
   def pip_preview_save_config():
@@ -7968,72 +10594,65 @@ def setup(app):
 
   @app.route("/thumbnails/<path:file_path>", methods=["GET"])
   def get_thumbnail(file_path):
-    for footage_path in FOOTAGE_PATHS:
-      if os.path.exists(os.path.join(footage_path, file_path)):
-        return send_from_directory(footage_path, file_path, as_attachment=True)
-    return {"error": "Thumbnail not found"}, 404
+    preview_path = _get_or_create_route_thumbnail(file_path)
+    if preview_path is None:
+      return {"error": "Thumbnail not found"}, 404
+
+    response = send_file(
+      preview_path,
+      mimetype="image/png",
+      conditional=True,
+      max_age=ROUTE_THUMBNAIL_CACHE_SECONDS,
+    )
+    response.headers["Cache-Control"] = f"public, max-age={ROUTE_THUMBNAIL_CACHE_SECONDS}"
+    return response
 
   @app.route("/video/<path>", methods=["GET"])
   def get_video(path):
+    if not utilities.SEGMENT_RE.fullmatch(path or ""):
+      return {"error": "Invalid segment name"}, 400
+
     camera = request.args.get("camera")
     filename = {"driver": "dcamera.hevc", "wide": "ecamera.hevc"}.get(camera, "fcamera.hevc")
+
+    # qcamera.ts is a 526x330 companion to the road camera, so wrapping it costs a
+    # fraction of the full stream. It still needs the mp4 wrap - a bare MPEG-TS will
+    # not play in a <video>. Anything missing falls through to the full stream.
+    if request.args.get("quality") == "low" and filename == "fcamera.hevc":
+      for footage_path in FOOTAGE_PATHS:
+        preview_path = os.path.join(footage_path, path, "qcamera.ts")
+        if not os.path.isfile(preview_path):
+          continue
+        try:
+          preview_mp4 = _get_or_create_segment_mp4(preview_path)
+        except (FileNotFoundError, ValueError):
+          break
+        if preview_mp4 is None:
+          return {"error": "Preview video is still being prepared"}, 503
+        return send_file(
+          preview_mp4,
+          mimetype="video/mp4",
+          conditional=True,
+          max_age=VIDEO_CACHE_SECONDS,
+        )
+
     for footage_path in FOOTAGE_PATHS:
-      filepath = f"{footage_path}{path}/{filename}"
+      filepath = os.path.join(footage_path, path, filename)
       if os.path.exists(filepath):
-        file_handle = utilities.ffmpeg_mp4_wrap_process_builder(filepath)
+        try:
+          cache_path = _get_or_create_segment_mp4(filepath)
+        except (FileNotFoundError, ValueError) as error:
+          return {"error": str(error)}, 409
+        if cache_path is None:
+          return {"error": "Video is still being prepared"}, 503
 
-        file_handle.seek(0, 2)
-        file_size = file_handle.tell()
-        file_handle.seek(0)
-
-        range_header = request.headers.get('Range', None)
-        if range_header:
-          byte_start = 0
-          byte_end = file_size - 1
-
-          if range_header.startswith('bytes='):
-            range_spec = range_header[6:]
-            if '-' in range_spec:
-              start, end = range_spec.split('-', 1)
-              if start:
-                byte_start = max(0, int(start))
-              if end:
-                byte_end = min(file_size - 1, int(end))
-
-          if byte_start >= file_size:
-            file_handle.close()
-            return Response("Requested Range Not Satisfiable", 416)
-
-          byte_end = max(byte_start, byte_end)
-
-          file_handle.seek(byte_start)
-          read_length = byte_end - byte_start + 1
-          data = file_handle.read(read_length)
-
-          response = Response(
-            data,
-            206,
-            headers={
-              'Content-Range': f'bytes {byte_start}-{byte_end}/{file_size}',
-              'Accept-Ranges': 'bytes',
-              'Content-Length': str(len(data)),
-              'Content-Type': 'video/mp4'
-            }
-          )
-        else:
-          data = file_handle.read()
-          response = Response(
-            data,
-            200,
-            headers={
-              'Accept-Ranges': 'bytes',
-              'Content-Length': str(file_size),
-              'Content-Type': 'video/mp4'
-            }
-          )
-
-        file_handle.close()
-        return response
+        # send_file streams from disk and handles Range and ETag itself.
+        return send_file(
+          cache_path,
+          mimetype="video/mp4",
+          conditional=True,
+          max_age=VIDEO_CACHE_SECONDS,
+        )
     return {"error": "Video not found"}, 404
 
 def main():
@@ -8056,7 +10675,7 @@ def main():
     print("\"The Galaxy\" is not running on a comma device, enabling debug mode")
 
   app.secret_key = secrets.token_hex(32)
-  app.run(host=host, port=port, debug=debug, use_reloader=use_reloader)
+  app.run(host=host, port=port, debug=debug, use_reloader=use_reloader, threaded=True)
 
 if __name__ == "__main__":
   main()

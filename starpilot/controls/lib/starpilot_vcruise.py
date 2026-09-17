@@ -6,14 +6,28 @@ from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.starpilot.common.starpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
-from openpilot.starpilot.controls.lib.curve_speed_controller import CurveSpeedController, is_manual_speed_control
+from openpilot.starpilot.controls.lib.curve_speed_controller import (
+  CSC_ACTIVE_OFF_DELTA,
+  CSC_GLOW_HOLD_TIME,
+  CSC_GLOW_ON_DELTA,
+  CurveSpeedController,
+  is_manual_speed_control,
+)
 from openpilot.starpilot.controls.lib.speed_limit_controller import SpeedLimitController
+from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
+  get_force_stop_distance_bias,
+  get_force_stop_handoff_distance,
+  get_force_stop_low_speed_hold,
+  get_force_stop_reanchor_speed_tolerance,
+)
 
 CSC_MIN_SPEED = CITY_SPEED_LIMIT * CV.MPH_TO_MS
-CSC_CURVE_RELEASE_HOLD_TIME = 0.75
 OVERRIDE_FORCE_STOP_TIMER = 10
 STANDSTILL_FORCE_STOP_CLEAR_TIME = 0.75
-STANDSTILL_FORCE_STOP_LIGHT_HOLD_TIME = 5.0
+# Open-loop — green is undetectable at standstill, so this only needs to cover the
+# handoff to CEM+model ownership. Extra seconds are pure departure lag.
+STANDSTILL_FORCE_STOP_LIGHT_HOLD_TIME = 2.0
+FORCE_STOP_LIGHT_CLEAR_TIME = 0.5
 SLC_LEAD_DROP_RELAXATION_MIN_SPEED = 20.0 * CV.MPH_TO_MS
 SLC_LEAD_DROP_RELAXATION_MIN_DISTANCE = 30.0
 SLC_LEAD_DROP_RELAXATION_MIN_HEADWAY = 1.2
@@ -48,9 +62,10 @@ LEAD_VETO_M = 75.0        # m — lead proximity that vetoes Force Stop (kept of
 LEAD_VETO_M_OVERRIDES = {
   "HYUNDAI_ELANTRA_2021": 90.0,
 }
-MPC_HANDOFF_M = 6.0       # m — below this, command 0 and let MPC finish the stop
 FORCE_STOP_APPROACH_DECEL = 0.65  # m/s^2 — speed ceiling before commit. LOWER = more early
                           # braking; don't go under FORCE_STOP_MODEL_APPROACH_DECEL
+# approachStopLength is published RAW: model_length converges from above, so rate-limiting
+# it inward freezes it far out and the constraint never binds. Tried, measured, don't re-add.
 ADAS_MAX_MS = 17.88       # 40 mph — cross-street ADAS guard
 DASH_SEED_M = 27.0        # ~88 ft — typical ADAS detection distance, used to snap
                           # tracked length closer when dashboard confirms a sign
@@ -67,6 +82,15 @@ FORCE_STOP_TURN_VETO_MAX_SPEED = 18.0 * CV.MPH_TO_MS
 FORCE_STOP_TURN_VETO_STEERING_ANGLE = 25.0
 FORCE_STOP_CURVE_VETO_MAX_ROAD_CURVATURE = 0.003
 FORCE_STOP_TURN_VETO_STOP_SEEN_HOLD_TIME = 4.0
+FORCE_STOP_DISTANCE_REANCHOR_MIN_GAP = 3.0  # m — ignore small model-horizon noise
+FORCE_STOP_REANCHOR_MIN_M = 40.0  # m — inside this only ratchet down; shouldStop doesn't
+                          # assert until ~10 m, so horizon jitter would release the stop
+FORCE_STOP_CAP_SLACK_M = 15.0  # m — the line can't move away, so tracked can never exceed
+                          # what it was at commit minus distance driven. Slack covers an
+                          # under-read at commit; without it that would stop us short.
+FORCE_STOP_CAP_TAPER_M = 60.0  # m — slack fades to 0 as the cap closes. The solver aims at
+                          # tracked, so slack held near the line is braking for a stop bar
+                          # that far past the real one.
 
 # Knob bounds (mirror of UI slider; defense in depth)
 OFFSET_FT_MIN = -20
@@ -161,15 +185,20 @@ class StarPilotVCruise:
 
     self.override_force_stop_timer = 0
     self.force_stop_timer = 0.0
+    self.force_stop_entry_speed = None
     self.activation_gate_active = False
     self.standstill_force_stop_hold = False
     self.standstill_force_stop_clear_since = 0.0
     self.standstill_force_stop_started_at = None
     self.standstill_force_stop_reason = None
+    self.force_stop_from_light = False
+    self.force_stop_light_clear_since = None
     self.controls_enabled_previously = False
+    self.approach_stop_length = 0.0  # published as starpilotPlan.approachStopLength
     # Kinematic distance estimator. Same attribute also published as
     # starpilotPlan.forcingStopLength, so the existing reader keeps working.
     self.tracked_model_length = 0.0
+    self.force_stop_distance_cap = 0.0  # odometry ceiling, re-seeded until commit
 
     self.stop_sign_confirmed = False
     self.stop_seen_on_approach_at = None
@@ -178,8 +207,9 @@ class StarPilotVCruise:
     self._nav_instruction_state = {}
     self._applied_slc_control_target = 0.0
     self.csc_controlling_speed = False
+    self.csc_glow_release_timer = 0.0
+    self.csc_override = False
     self.csc_target = 0.0
-    self.csc_curve_last_seen_at = None
 
   def _update_nav_instruction_state(self):
     raw = self.starpilot_planner.params_memory.get("NavInstructionState") or {}
@@ -314,6 +344,12 @@ class StarPilotVCruise:
       self._applied_slc_control_target = 0.0
 
     long_control_active = sm["carControl"].longActive
+    force_stop_handoff_m = get_force_stop_handoff_distance(
+      getattr(starpilot_toggles, "car_model", "")
+    )
+    force_stop_distance_bias_m = get_force_stop_distance_bias(
+      getattr(starpilot_toggles, "car_model", "")
+    )
 
     raw_stop_seen = bool(
       self.starpilot_planner.starpilot_cem.stop_light_detected
@@ -345,6 +381,8 @@ class StarPilotVCruise:
       car_params = sm["carParams"]
     except (KeyError, IndexError, TypeError, AttributeError):
       car_params = None
+    force_stop_reanchor_speed_tolerance = get_force_stop_reanchor_speed_tolerance(car_params)
+    force_stop_low_speed_hold = get_force_stop_low_speed_hold(car_params)
     lead_veto_m = get_lead_veto_distance(car_params)
     lead_present = (bool(getattr(lead, "status", False))
                     and float(getattr(lead, "dRel", float("inf"))) < lead_veto_m
@@ -392,6 +430,13 @@ class StarPilotVCruise:
                  and not lead_present)
 
     force_stop_active = cem_path or dash_path
+
+    if cem_path:
+      self.force_stop_from_light = True
+      self.force_stop_light_clear_since = None
+    elif not self.forcing_stop:
+      self.force_stop_from_light = False
+      self.force_stop_light_clear_since = None
 
     # Latch on first dash frame so the CEM pin can fire and we don't release on
     # transient dashboard dropouts. Cleared in the no-force-stop branch below.
@@ -463,6 +508,36 @@ class StarPilotVCruise:
     force_stop_enabled |= self.forcing_stop and not sm["carState"].standstill
     force_stop_enabled |= self.standstill_force_stop_hold
 
+    light_stop_cleared = (
+      self.forcing_stop and
+      self.force_stop_from_light and
+      not sm["carState"].standstill and
+      not stop_light_detected and
+      not dash_active
+    )
+    low_speed_stop_commit = bool(
+      light_stop_cleared and
+      force_stop_low_speed_hold is not None and
+      self.force_stop_entry_speed is not None and
+      v_ego <= force_stop_low_speed_hold and
+      v_ego < self.force_stop_entry_speed - 0.25
+    )
+    # The Santa Fe's model stop signal can blink off after the car has already
+    # committed to the stop. Do not turn that late dropout into a throttle
+    # release while the vehicle is still rolling through the sign.
+    light_stop_cleared &= not low_speed_stop_commit
+    if light_stop_cleared:
+      if self.force_stop_light_clear_since is None:
+        self.force_stop_light_clear_since = now
+      elif self._elapsed_seconds(now, self.force_stop_light_clear_since) >= FORCE_STOP_LIGHT_CLEAR_TIME:
+        self.forcing_stop = False
+        self.force_stop_from_light = False
+        self.force_stop_light_clear_since = None
+        self.force_stop_timer = 0.0
+        force_stop_enabled = False
+    else:
+      self.force_stop_light_clear_since = None
+
     if self.forcing_stop and standstill and not force_stop_enabled and self.standstill_force_stop_reason != "sign":
       self.override_force_stop_timer = OVERRIDE_FORCE_STOP_TIMER
 
@@ -490,38 +565,74 @@ class StarPilotVCruise:
     v_ego_cluster = max(sm["carState"].vEgoCluster, v_ego)
     v_ego_diff = v_ego_cluster - v_ego
 
-    # FrogsGoMoo's Curve Speed Controller
+    # Curve Speed Controller
     following_lead = bool(getattr(self.starpilot_planner.starpilot_following, "following_lead", False))
     manual_speed_control = is_manual_speed_control(sm)
     csc_available = (
+      not force_stop_active and
+      not self.forcing_stop and
       long_control_active and
       not manual_speed_control and
       v_ego > CRUISING_SPEED and
       starpilot_toggles.curve_speed_controller and
       (not getattr(starpilot_toggles, "csc_no_lead", False) or not following_lead)
     )
-    csc_curve_detected = csc_available and self.starpilot_planner.road_curvature_detected
-    if csc_curve_detected:
-      self.csc.update_target(v_ego)
 
-      self.csc_controlling_speed = True
-      self.csc_target = self.csc.target
-      self.csc_curve_last_seen_at = now
-    else:
-      csc_release_hold = bool(
-        csc_available and
-        self.csc_controlling_speed and
-        self.csc_curve_last_seen_at is not None and
-        self._elapsed_seconds(now, self.csc_curve_last_seen_at) < CSC_CURVE_RELEASE_HOLD_TIME
-      )
-      if not csc_release_hold:
-        self.csc.log_data(v_ego, sm)
 
+    csc_blinker_on = ((sm["carState"].leftBlinker or sm["carState"].rightBlinker) and
+                      not self.starpilot_planner.driving_in_curve)
+    csc_was_controlling = self.csc_controlling_speed
+
+    slc_confirmation_pending = self.slc.speed_limit_changed_timer > DT_MDL and self.slc.unconfirmed_speed_limit >= 1
+    csc_accel_button = bool(sm["starpilotCarState"].accelPressed) and not slc_confirmation_pending
+
+
+
+    if csc_was_controlling and csc_accel_button:
+      self.csc_override = True
+    if not (long_control_active and starpilot_toggles.curve_speed_controller):
+      self.csc_override = False
+
+    if csc_available and not csc_blinker_on:
+      self.csc.update_target(v_ego, v_cruise)
+
+      if self.csc_override and self.csc.target > v_cruise - CSC_ACTIVE_OFF_DELTA:
+        self.csc_override = False
+
+      if self.csc_override:
         self.csc_controlling_speed = False
-        self.csc.target_set = False
-        self.csc_curve_last_seen_at = None
-
+        self.csc_glow_release_timer = 0.0
         self.csc_target = v_cruise
+      else:
+        self.csc_target = self.csc.target
+
+
+
+        if self.csc_target < v_cruise - CSC_GLOW_ON_DELTA and v_ego >= self.csc_target - CSC_ACTIVE_OFF_DELTA:
+          self.csc_controlling_speed = True
+          self.csc_glow_release_timer = 0.0
+        elif self.csc_target > v_cruise - CSC_ACTIVE_OFF_DELTA:
+
+          self.csc_glow_release_timer += DT_MDL
+          if self.csc_glow_release_timer >= CSC_GLOW_HOLD_TIME:
+            self.csc_controlling_speed = False
+        else:
+          self.csc_glow_release_timer = 0.0
+    elif csc_available:
+
+
+      self.csc.update_target(v_ego, v_cruise)
+      self.csc_controlling_speed = False
+      self.csc_glow_release_timer = 0.0
+      self.csc_target = v_cruise
+    else:
+      self.csc.reset(v_cruise)
+      self.csc_controlling_speed = False
+      self.csc_glow_release_timer = 0.0
+      self.csc_target = v_cruise
+
+    self.csc.handle_override(v_ego, csc_was_controlling, sm, accel_button=csc_accel_button)
+    self.csc.log_data(v_ego, sm)
 
     # Pfeiferj's Speed Limit Controller
     self.slc.starpilot_toggles = starpilot_toggles
@@ -548,12 +659,17 @@ class StarPilotVCruise:
     offset_ft = max(OFFSET_FT_MIN, min(OFFSET_FT_MAX, offset_ft_raw))
     offset_m = offset_ft * FT_TO_M
 
+    # cleared on every path; only the far-approach envelope below republishes it
+    self.approach_stop_length = 0.0
+
     if force_standstill_enabled and not self.override_force_standstill:
       self.forcing_stop = True
       self.tracked_model_length = 0.0
       v_cruise = 0.0
 
     elif force_stop_enabled and not self.override_force_stop:
+      if self.force_stop_entry_speed is None and not sm["carState"].standstill:
+        self.force_stop_entry_speed = v_ego
       self.forcing_stop |= not sm["carState"].standstill or self.standstill_force_stop_hold
 
       if self.standstill_force_stop_hold:
@@ -561,18 +677,43 @@ class StarPilotVCruise:
         v_cruise = 0.0
       else:
         # Kinematic distance estimator (also published as forcingStopLength).
-        # Decay one-to-one with motion, clamp by current model_length so we adopt
-        # the model's view when it regains sight, and snap closer to DASH_SEED_M
-        # when the dashboard signal is active and the model agrees a stop is near.
+        # Decay one-to-one with motion. A force-stop cycle may otherwise retain
+        # an old short horizon forever, even after the model has reopened the
+        # path. Recover only for the CEM/model path and only when the model's
+        # explicit stop action is clear; a committed model stop remains sticky.
         self.tracked_model_length = max(self.tracked_model_length - (v_ego * DT_MDL), 0.0)
-        self.tracked_model_length = min(self.tracked_model_length, self.starpilot_planner.model_length)
+        model_length = float(self.starpilot_planner.model_length)
+        try:
+          model_wants_stop = bool(sm["modelV2"].action.shouldStop)
+        except (KeyError, AttributeError, TypeError):
+          model_wants_stop = False
+        if (
+          not dash_active and
+          self.tracked_model_length > max(force_stop_handoff_m, FORCE_STOP_REANCHOR_MIN_M) and
+          not model_wants_stop and
+          model_length > self.tracked_model_length + FORCE_STOP_DISTANCE_REANCHOR_MIN_GAP and
+          (
+            force_stop_reanchor_speed_tolerance is None or
+            self.force_stop_entry_speed is None or
+            v_ego >= self.force_stop_entry_speed - force_stop_reanchor_speed_tolerance
+          )
+        ):
+          self.tracked_model_length = model_length
+        else:
+          self.tracked_model_length = min(self.tracked_model_length, model_length)
+        # Odometry ceiling: the line can't recede, so a re-anchor may never exceed what we
+        # had at commit minus what we've driven. Bounds a ballooning horizon (seen +95 m)
+        # that the REANCHOR_MIN floor can't catch, since that floor trusts the estimate.
+        self.force_stop_distance_cap = max(self.force_stop_distance_cap - (v_ego * DT_MDL), 0.0)
+        cap_slack = FORCE_STOP_CAP_SLACK_M * min(self.force_stop_distance_cap / FORCE_STOP_CAP_TAPER_M, 1.0)
+        self.tracked_model_length = min(self.tracked_model_length, self.force_stop_distance_cap + cap_slack)
         if dash_active:
-          if self.starpilot_planner.model_length < DASH_MODEL_AGREE_M:
+          if model_length < DASH_MODEL_AGREE_M:
             self.tracked_model_length = min(self.tracked_model_length, DASH_SEED_M)
           # inside the seed the model range is the better line estimate; letting it pull
           # tracked back up is what keeps an early snap from parking us short of the sign
-          if self.starpilot_planner.model_length < DASH_SEED_M:
-            self.tracked_model_length = self.starpilot_planner.model_length
+          if model_length < DASH_SEED_M:
+            self.tracked_model_length = model_length
 
         # A car stopped in the next lane marks the stop bar better than the model does.
         # Shortening clamp only — it can pull the stop in, never push it out.
@@ -582,22 +723,24 @@ class StarPilotVCruise:
 
         # Kinematic profile with user offset. Positive offset shifts the perceived
         # line further down the road -> car rolls further before commanding 0.
-        effective_d = self.tracked_model_length + offset_m
-        if effective_d <= MPC_HANDOFF_M:
+        effective_d = self.tracked_model_length + offset_m + force_stop_distance_bias_m
+        if effective_d <= force_stop_handoff_m:
           v_target = 0.0
         else:
           approach_decel = FORCE_STOP_DASH_APPROACH_DECEL if dash_active else FORCE_STOP_MODEL_APPROACH_DECEL
-          v_target = math.sqrt(2.0 * approach_decel * (effective_d - MPC_HANDOFF_M))
+          v_target = math.sqrt(2.0 * approach_decel * (effective_d - force_stop_handoff_m))
 
         v_cruise = min(v_target, v_cruise)
 
     else:
       self.forcing_stop = False
+      self.force_stop_entry_speed = None
       self._clear_standstill_force_stop_hold()
       # Latch is only meaningful during an active force-stop cycle
       self.stop_sign_confirmed = False
 
       self.tracked_model_length = self.starpilot_planner.model_length
+      self.force_stop_distance_cap = self.tracked_model_length
 
       targets = [v_cruise]
       if self.csc_target >= CSC_MIN_SPEED:
@@ -609,8 +752,7 @@ class StarPilotVCruise:
         self.slc_offset,
         self.slc.overridden_speed,
         v_ego_diff,
-        allow_lower_override=(getattr(starpilot_toggles, "redneck_cruise", False) and
-                              getattr(starpilot_toggles, "speed_limit_controller_override_set_speed", False)),
+        allow_lower_override=getattr(starpilot_toggles, "redneck_cruise", False),
       )
       slc_control_target = get_slc_lead_drop_relaxed_target(
         slc_control_target,
@@ -643,9 +785,11 @@ class StarPilotVCruise:
         adjacent_stop_d = self._get_adjacent_stop_distance(sm)
         if adjacent_stop_d is not None:
           approach_d = min(approach_d, adjacent_stop_d)
-        approach_d += offset_m
-        if approach_d > MPC_HANDOFF_M:
-          targets.append(math.sqrt(2.0 * FORCE_STOP_APPROACH_DECEL * (approach_d - MPC_HANDOFF_M)))
+        # pre-offset, so it hands off to forcingStopLength at commit without a step
+        self.approach_stop_length = max(approach_d, 0.0)
+        approach_d += offset_m + force_stop_distance_bias_m
+        if approach_d > force_stop_handoff_m:
+          targets.append(math.sqrt(2.0 * FORCE_STOP_APPROACH_DECEL * (approach_d - force_stop_handoff_m)))
 
       v_cruise = min(targets)
 

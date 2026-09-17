@@ -4,13 +4,12 @@ import signal
 import time
 from pathlib import Path
 import json
-from types import SimpleNamespace
 
 from cereal import car
 from openpilot.common.params import Params
 import openpilot.system.manager.manager as manager
 from openpilot.system.manager.process import ensure_running
-from openpilot.system.manager.process_config import BigDeviceUIProcess, managed_processes, procs
+from openpilot.system.manager.process_config import big_device_ui_process, managed_processes, procs
 from openpilot.system.hardware import HARDWARE
 
 os.environ['FAKEUPLOAD'] = "1"
@@ -73,6 +72,42 @@ class FileBackedFakeParams:
 
   def remove(self, key):
     Path(self.get_param_path(key)).unlink(missing_ok=True)
+
+
+class TransitionParams:
+  def __init__(self):
+    self.removals = []
+    self.clears = []
+
+  def remove(self, key):
+    self.removals.append(key)
+
+  def clear_all(self, flags):
+    self.clears.append(flags)
+
+
+def test_force_onroad_resets_card_readiness_flags():
+  params = TransitionParams()
+  params_memory = TransitionParams()
+
+  manager.reset_onroad_transition_params(params, params_memory, force_onroad=True)
+
+  assert params.removals == ["ControlsReady", "FirmwareQueryDone"]
+  assert params.clears == []
+  assert params_memory.removals == []
+  assert params_memory.clears == []
+
+
+def test_normal_onroad_transition_clears_transition_flags():
+  params = TransitionParams()
+  params_memory = TransitionParams()
+
+  manager.reset_onroad_transition_params(params, params_memory, force_onroad=False)
+
+  assert params.removals == []
+  assert params.clears == [manager.ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION]
+  assert params_memory.removals == []
+  assert params_memory.clears == [manager.ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION]
 
 
 def test_navigation_selected_while_already_offroad_is_not_tracked_for_cleanup(tmp_path):
@@ -206,45 +241,19 @@ def test_offroad_cleanup_does_not_remove_destination_replaced_after_snapshot(tmp
   assert "NavDestination" not in params.removed
 
 
-class FakeManagedProcess:
-  def __init__(self):
-    self.proc = None
-    self.shutting_down = False
-    self.starts = 0
-    self.stops = 0
-
-  def prepare(self):
-    pass
-
-  def start(self):
-    if self.proc is not None:
-      return
-
-    self.starts += 1
-    self.shutting_down = False
-    self.proc = SimpleNamespace(exitcode=None, pid=self.starts, is_alive=lambda: True)
-
-  def stop(self, retry=True, block=True, sig=None):
-    if self.proc is None:
-      return None
-
-    self.stops += 1
-    self.shutting_down = False
-    self.proc = None
-    return 0
-
-  def check_watchdog(self, started):
-    pass
-
-  def get_process_state_msg(self):
-    return SimpleNamespace(name="ui")
-
-
 def test_reboot_guard_only_defers_automatic_requests():
   assert manager.should_defer_reboot("DoReboot", started=True, ignition=False)
   assert manager.should_defer_reboot("DoReboot", started=False, ignition=True)
   assert not manager.should_defer_reboot("DoReboot", started=False, ignition=False)
   assert not manager.should_defer_reboot("DoUserReboot", started=True, ignition=True)
+
+
+def test_big_device_ui_process_always_launches_c3_ui():
+  ui_process = big_device_ui_process()
+
+  assert ui_process.cwd == "."
+  assert ui_process.cmdline[0:2] == ["/usr/bin/env", "BIG=1"]
+  assert ui_process.cmdline[-2:] == ["-m", "openpilot.selfdrive.ui.ui"]
 
 
 class TestManager:
@@ -275,34 +284,6 @@ class TestManager:
 
     assert names.index("the_galaxy") < ui_idx
     assert names.index("galaxy") < ui_idx
-
-  def test_big_device_ui_process_swaps_offroad_only(self, tmp_path):
-    ui_process = BigDeviceUIProcess(lambda *args: True)
-    qt_process = FakeManagedProcess()
-    raylib_process = FakeManagedProcess()
-    ui_process._qt_process = qt_process
-    ui_process._raylib_process = raylib_process
-
-    params = FileBackedFakeParams(tmp_path / "params", {"UseOldUI": False})
-
-    assert ui_process.should_run(False, params, car.CarParams.new_message(), SimpleNamespace())
-    ui_process.start()
-    assert ui_process.proc is raylib_process.proc
-    assert qt_process.starts == 0
-    assert raylib_process.starts == 1
-
-    params.put_bool("UseOldUI", True)
-    assert ui_process.should_run(True, params, car.CarParams.new_message(), SimpleNamespace())
-    ui_process.start()
-    assert ui_process.proc is raylib_process.proc
-    assert qt_process.stops == 0
-    assert qt_process.starts == 0
-
-    assert ui_process.should_run(False, params, car.CarParams.new_message(), SimpleNamespace())
-    ui_process.start()
-    assert raylib_process.stops == 1
-    assert qt_process.starts == 1
-    assert ui_process.proc is qt_process.proc
 
   def test_blacklisted_procs(self):
     # TODO: ensure there are blacklisted procs until we have a dedicated test
@@ -447,6 +428,7 @@ class TestManager:
       "CoastUpToLeads": True,
       "HumanAcceleration": True,
       "HumanFollowing": True,
+      "ReverseCruise": True,
     })
     params_cache = FileBackedFakeParams(tmp_path / "cache", {
       "HumanFollowing": False,
@@ -458,6 +440,7 @@ class TestManager:
     assert not Path(params.get_param_path("CoastUpToLeads")).exists()
     assert not Path(params.get_param_path("HumanAcceleration")).exists()
     assert not Path(params.get_param_path("HumanFollowing")).exists()
+    assert params.get_bool("ReverseCruise")
     assert not Path(params_cache.get_param_path("HumanFollowing")).exists()
     assert not Path(params_cache.get_param_path("PrioritizeSmoothFollowing")).exists()
 

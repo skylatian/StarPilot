@@ -41,10 +41,9 @@ def create_lta_steer_command_2(packer, frame):
 
 
 def create_accel_command(packer, accel, pcm_cancel, permit_braking, standstill_req, lead, acc_type, fcw_alert,
-                         distance, reverse_cruise_active, allow_long_press=None):
+                         distance, reverse_cruise_active):
   # TODO: find the exact canceling bit that does not create a chime
-  if allow_long_press is None:
-    allow_long_press = 2 if reverse_cruise_active else 1
+  allow_long_press = 2 if reverse_cruise_active else 1
 
   values = {
     "ACCEL_CMD": accel,
@@ -88,38 +87,6 @@ def create_pcs_commands(packer, accel, active, mass):
   msg2 = packer.make_can_msg("PRE_COLLISION_2", 0, values2)
 
   return [msg1, msg2]
-
-
-def create_brake_hold_command(packer, frame, pre_collision_2, brake_hold_active):
-  values = {s: pre_collision_2[s] for s in [
-    "DSS1GDRV",
-    "DS1STAT2",
-    "DS1STBK2",
-    "PCSWAR",
-    "PCSALM",
-    "PCSOPR",
-    "PCSABK",
-    "PBATRGR",
-    "PPTRGR",
-    "IBTRGR",
-    "CLEXTRGR",
-    "IRLT_REQ",
-    "BRKHLD",
-    "AVSTRGR",
-    "VGRSTRGR",
-    "PREFILL",
-    "PBRTRGR",
-    "PCSDIS",
-    "PBPREPMP",
-  ] if s in pre_collision_2}
-
-  if brake_hold_active:
-    values = {
-      "DSS1GDRV": 0x3FF,
-      "PBRTRGR": frame % 730 < 727,
-    }
-
-  return packer.make_can_msg("PRE_COLLISION_2", 0, values)
 
 
 def create_acc_cancel_command(packer):

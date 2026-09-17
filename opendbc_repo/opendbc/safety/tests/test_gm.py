@@ -59,6 +59,28 @@ def test_gm_panda_scheduler_paths():
   safety.safety_rx_hook(prndl)
 
 
+def test_gm_cc_longitudinal_ascm_safety_whitelist():
+  safety = libsafety_py.libsafety
+  flags = (GMSafetyFlags.FLAG_GM_NO_CAMERA | GMSafetyFlags.FLAG_GM_NO_ACC |
+           GMSafetyFlags.FLAG_GM_CC_LONG | GMSafetyFlags.FLAG_GM_VOLT_CC_GATEWAY)
+  assert safety.set_safety_hooks(CarParams.SafetyModel.gm, flags) == 0
+  safety.init_tests()
+  safety.set_controls_allowed(True)
+  safety.set_cruise_engaged_prev(True)
+
+  allowed = ((0x180, 0, 4), (0x409, 0, 7), (0x40A, 0, 7), (0x370, 0, 6),
+             (0x1E1, 0, 7), (0x3D1, 0, 8), (0xBD, 0, 7), (0x1F5, 0, 8))
+  for addr, bus, length in allowed:
+    data = b'\x00' * length
+    if addr == 0x1E1:
+      data = data[:5] + b'\x10' + data[6:]
+    assert safety.safety_tx_hook(common.make_msg(bus, addr, length, data))
+
+  blocked = ((0x184, 2, 8), (0x200, 0, 6), (0x2CB, 0, 8), (0x306, 1, 8))
+  for addr, bus, length in blocked:
+    assert not safety.safety_tx_hook(common.make_msg(bus, addr, length))
+
+
 def test_gm_bolt_acc_pedal_clears_stock_cruise():
   safety = libsafety_py.libsafety
   flags = GMSafetyFlags.HW_CAM | GMSafetyFlags.FLAG_GM_GAS_INTERCEPTOR | GMSafetyFlags.FLAG_GM_BOLT_2022_PEDAL
@@ -630,6 +652,31 @@ class TestGmCcLongitudinalNoCameraSafety(TestGmCcLongitudinalSafety):
     self.safety.set_safety_hooks(CarParams.SafetyModel.gm, GMSafetyFlags.HW_CAM | GMSafetyFlags.FLAG_GM_NO_ACC |
                                  GMSafetyFlags.FLAG_GM_CC_LONG | GMSafetyFlags.FLAG_GM_NO_CAMERA)
     self.safety.init_tests()
+
+
+def test_gm_volt_cc_gateway_brake_threshold_matches_carstate():
+  safety = libsafety_py.libsafety
+  safety.set_safety_hooks(
+    CarParams.SafetyModel.gm,
+    GMSafetyFlags.FLAG_GM_NO_CAMERA |
+    GMSafetyFlags.FLAG_GM_NO_ACC |
+    GMSafetyFlags.FLAG_GM_CC_LONG |
+    GMSafetyFlags.FLAG_GM_VOLT_CC_GATEWAY,
+  )
+  safety.init_tests()
+  safety.set_controls_allowed(True)
+
+  cruise = common.make_msg(0, 0x3D1, 8, bytes([0, 0, 0, 0, 0x80, 0, 0, 0]))
+  safety.safety_rx_hook(cruise)
+  assert safety.get_controls_allowed()
+
+  noisy_brake = libsafety_py.make_CANPacket(0xF1, 0, b"\x34\x06\x05\x40\x00\x00")
+  safety.safety_rx_hook(noisy_brake)
+  assert safety.get_controls_allowed()
+
+  pressed_brake = libsafety_py.make_CANPacket(0xF1, 0, b"\x34\x15\x05\x40\x00\x00")
+  safety.safety_rx_hook(pressed_brake)
+  assert not safety.get_controls_allowed()
 
 
 class TestGmCcLongitudinalPandaSchedSafety(TestGmCcLongitudinalSafety):

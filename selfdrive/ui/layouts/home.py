@@ -9,6 +9,7 @@ from openpilot.selfdrive.ui.widgets.drive_stats import DriveStatsDashboard
 from openpilot.selfdrive.ui.widgets.home_info_card import HomeInfoCard
 from openpilot.selfdrive.ui.widgets.setup import SetupWidget
 from openpilot.selfdrive.ui.lib.starpilot_version import starpilot_display_description
+from openpilot.starpilot.common.model_lab import model_lab_pair_display_name_from_params
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.multilang import tr, trn
@@ -181,12 +182,31 @@ class HomeLayout(Widget):
 
     version_rect = rl.Rectangle(self.header_rect.x + self.header_rect.width - version_text_width, self.header_rect.y,
                                 version_text_width, self.header_rect.height)
+    brand_text = "StarPilot"
+    detail_text = self._version_text.removeprefix(brand_text)
+    brand_font = gui_app.font(FontWeight.BRAND)
     version_font_size = 48
-    version_text_size = measure_text_cached(font, self._version_text, version_font_size)
-    if version_text_size.x > version_rect.width:
-      version_font_size = max(32, int(version_font_size * version_rect.width / version_text_size.x))
-    gui_label(version_rect, self._version_text, version_font_size, rl.WHITE, font_weight=FontWeight.MEDIUM,
-              alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
+
+    def _measure_header(font_size: int) -> tuple[rl.Vector2, rl.Vector2]:
+      return (measure_text_cached(brand_font, brand_text, font_size + 2),
+              measure_text_cached(font, detail_text, font_size))
+
+    brand_size, detail_size = _measure_header(version_font_size)
+    total_width = brand_size.x + detail_size.x
+    if total_width > version_rect.width:
+      version_font_size = max(32, int(version_font_size * version_rect.width / total_width))
+      brand_size, detail_size = _measure_header(version_font_size)
+      total_width = brand_size.x + detail_size.x
+
+    rendered_width = min(total_width, version_rect.width)
+    text_x = version_rect.x + version_rect.width - rendered_width
+    brand_rect = rl.Rectangle(text_x, version_rect.y, min(brand_size.x, rendered_width), version_rect.height)
+    gui_label(brand_rect, brand_text, version_font_size + 2, rl.WHITE, font_weight=FontWeight.BRAND, elide_right=False)
+
+    detail_width = max(0.0, rendered_width - brand_rect.width)
+    if detail_text and detail_width > 0:
+      detail_rect = rl.Rectangle(brand_rect.x + brand_rect.width, version_rect.y, detail_width, version_rect.height)
+      gui_label(detail_rect, detail_text, version_font_size, rl.WHITE, font_weight=FontWeight.MEDIUM)
 
   def _render_home_content(self):
     self._render_left_column()
@@ -245,7 +265,9 @@ class HomeLayout(Widget):
     description = starpilot_display_description(self.params.get("UpdaterCurrentDescription"))
     version_text = f"{brand} {description}" if description else brand
 
-    model_name = self.params.get("DrivingModelName", encoding="utf-8") or self.params.get_default_value("DrivingModelName")
+    model_name = (model_lab_pair_display_name_from_params(self.params) or
+                  self.params.get("DrivingModelName", encoding="utf-8") or
+                  self.params.get_default_value("DrivingModelName"))
     if isinstance(model_name, bytes):
       model_name = model_name.decode("utf-8", errors="ignore")
     model_name = str(model_name or "").replace("_default", "").replace("(Default)", "").strip()

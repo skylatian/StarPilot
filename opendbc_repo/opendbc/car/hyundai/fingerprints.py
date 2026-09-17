@@ -1,4 +1,6 @@
 """ AUTO-FORMATTED USING opendbc/car/debug/format_fingerprints.py, EDIT STRUCTURE THERE."""
+# Provenance: portions of HKG firmware data are adapted from sunnypilot/opendbc master at
+# f95f996f5 and its hkg-angle-steering-2025 branch at cc4b08625. See CREDITS.md.
 from opendbc.car.structs import CarParams
 from opendbc.car.hyundai.values import CAR
 
@@ -183,6 +185,7 @@ FW_VERSIONS = {
     ],
     (Ecu.abs, 0x7d1, None): [
       b'\xf1\x00DN ESC \x01 102\x19\x04\x13 58910-L1300',
+      b'\xf1\x00DN ESC \x01 107 \x07\x03 58910-L1300',
       b'\xf1\x00DN ESC \x03 100 \x08\x01 58910-L0300',
       b'\xf1\x00DN ESC \x06 104\x19\x08\x01 58910-L0100',
       b'\xf1\x00DN ESC \x06 106 \x07\x01 58910-L0100',
@@ -206,6 +209,7 @@ FW_VERSIONS = {
       b'\xf1\x00DN8 MDPS C 1.00 1.01 56310L0210\x00 4DNAC102',
       b'\xf1\x00DN8 MDPS C 1.00 1.03 56310-L1010 4DNDC103',
       b'\xf1\x00DN8 MDPS C 1.00 1.03 56310-L1030 4DNDC103',
+      b'\xf1\x00DN8 MDPS C 1.00 1.03 56310-L1210 4DNDC103',
       b'\xf1\x00DN8 MDPS R 1.00 1.00 57700-L0000 4DNAP100',
       b'\xf1\x00DN8 MDPS R 1.00 1.00 57700-L0000 4DNAP101',
       b'\xf1\x00DN8 MDPS R 1.00 1.02 57700-L1000 4DNDP105',
@@ -213,6 +217,7 @@ FW_VERSIONS = {
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00DN8 MFC  AT KOR LHD 1.00 1.02 99211-L1000 190422',
       b'\xf1\x00DN8 MFC  AT KOR LHD 1.00 1.04 99211-L1000 191016',
+      b'\xf1\x00DN8 MFC  AT KOR LHD 1.00 1.06 99211-L1000 210325',
       b'\xf1\x00DN8 MFC  AT RUS LHD 1.00 1.03 99211-L1000 190705',
       b'\xf1\x00DN8 MFC  AT USA LHD 1.00 1.00 99211-L0000 190716',
       b'\xf1\x00DN8 MFC  AT USA LHD 1.00 1.01 99211-L0000 191016',
@@ -1402,6 +1407,14 @@ FW_VERSIONS = {
       b'\xf1\x00JK__ RDR -----      1.00 1.01 99110-DS500         ',
     ],
   },
+  CAR.GENESIS_GV70_2026: {
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00JK  MFC  AT USA LHD 1.00 1.11 99211-IY600 241125',
+    ],
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00JK__ RDR -----      1.00 1.01 99110-AR600         ',
+    ],
+  },
   CAR.GENESIS_GV80_2025: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00JX__ RDR -----      1.00 1.03 99110-T6500         ',
@@ -1686,6 +1699,11 @@ FW_VERSIONS = {
   CAR.HYUNDAI_BAYON_1ST_GEN_NON_SCC: {
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00BC3 LKA  AT EUR LHD 1.00 1.01 99211-Q0100 261',
+    ],
+  },
+  CAR.KIA_RAY_EV: {
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00TAM MFC  AT KOR LHD 1.00 1.02 99211-E2000 230901',
     ],
   },
 }
