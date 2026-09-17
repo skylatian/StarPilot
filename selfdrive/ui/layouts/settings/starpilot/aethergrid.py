@@ -165,9 +165,9 @@ def _intersect_rect(a: rl.Rectangle, b: rl.Rectangle) -> rl.Rectangle:
   return rl.Rectangle(left, top, right - left, bottom - top)
 
 
-def _roundness_for(rect: rl.Rectangle, radius_px: float = TILE_RADIUS_PX) -> float:
+def _roundness_for(rect: rl.Rectangle, radius_px: float = TILE_RADIUS_PX, max_roundness: float = 0.5) -> float:
   min_dim = max(1.0, min(rect.width, rect.height))
-  return max(0.0, min(0.5, radius_px / min_dim))
+  return max(0.0, min(max_roundness, radius_px / min_dim))
 
 
 def _segments_for(rect: rl.Rectangle, radius_px: float = TILE_RADIUS_PX) -> int:
@@ -226,14 +226,17 @@ def draw_text_fit_common(
   rl.draw_text_ex(font, text, rl.Vector2(round(draw_x), round(pos.y + nudge_y)), actual_font_size, spacing, color)
 
 
-def draw_rounded_fill(rect: rl.Rectangle, color: rl.Color, radius_px: float = TILE_RADIUS_PX, segments: int | None = None):
+def draw_rounded_fill(rect: rl.Rectangle, color: rl.Color, radius_px: float = TILE_RADIUS_PX, segments: int | None = None,
+                      max_roundness: float = 0.5):
   snapped = snap_rect(rect)
-  rl.draw_rectangle_rounded(snapped, _roundness_for(snapped, radius_px), segments or _segments_for(snapped, radius_px), color)
+  rl.draw_rectangle_rounded(snapped, _roundness_for(snapped, radius_px, max_roundness), segments or _segments_for(snapped, radius_px), color)
 
 
-def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1, radius_px: float = TILE_RADIUS_PX, segments: int | None = None):
+def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1, radius_px: float = TILE_RADIUS_PX, segments: int | None = None,
+                        max_roundness: float = 0.5):
   snapped = snap_rect(rect)
-  rl.draw_rectangle_rounded_lines_ex(snapped, _roundness_for(snapped, radius_px), segments or _segments_for(snapped, radius_px), thickness, color)
+  rl.draw_rectangle_rounded_lines_ex(snapped, _roundness_for(snapped, radius_px, max_roundness), segments or _segments_for(snapped, radius_px),
+                                     thickness, color)
 
 
 def truncate_text_ellipsis(
@@ -447,7 +450,8 @@ def init_list_panel(rect: rl.Rectangle, style: PanelStyle | None = None, metrics
   return frame, scroll_rect, content_width
 
 
-def draw_hud_background(rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, radius_px: float = 100, bg_color: rl.Color | None = None) -> tuple[rl.Rectangle, rl.Color]:
+def draw_hud_background(rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, radius_px: float = 100, bg_color: rl.Color | None = None,
+                        max_roundness: float = 0.5) -> tuple[rl.Rectangle, rl.Color]:
   snapped = snap_rect(rect)
   rx, ry, rw, rh = int(snapped.x), int(snapped.y), int(snapped.width), int(snapped.height)
   face = rl.Rectangle(rx, ry, rw, rh)
@@ -462,9 +466,9 @@ def draw_hud_background(rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0,
       off = i * 2.5 * glow
       a = int(25 * (1.0 - i / 5) * glow)
     gr = rl.Rectangle(rx - off, ry - off, rw + off * 2, rh + off * 2)
-    draw_rounded_fill(gr, rl.Color(accent.r, accent.g, accent.b, max(0, min(255, a))), radius_px=radius_px)
+    draw_rounded_fill(gr, rl.Color(accent.r, accent.g, accent.b, max(0, min(255, a))), radius_px=radius_px, max_roundness=max_roundness)
 
-  draw_rounded_fill(face, bg_color if bg_color is not None else _HUD_BG_ON, radius_px=radius_px)
+  draw_rounded_fill(face, bg_color if bg_color is not None else _HUD_BG_ON, radius_px=radius_px, max_roundness=max_roundness)
 
   gl = max(glow, 0.18)
   bc = rl.Color(
@@ -472,7 +476,7 @@ def draw_hud_background(rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0,
     max(0, min(255, int(off_border.g + (accent.g - off_border.g) * gl))),
     max(0, min(255, int(off_border.b + (accent.b - off_border.b) * gl))),
     255)
-  draw_rounded_stroke(face, bc, radius_px=radius_px)
+  draw_rounded_stroke(face, bc, radius_px=radius_px, max_roundness=max_roundness)
 
   return face, accent
 
@@ -1706,6 +1710,9 @@ def _get_or_create_toggle_constellation(seed_id: str) -> tuple[list[dict], list[
   _TOGGLE_CONSTELLATION_CACHE[seed_id] = (nodes, vecs)
   return nodes, vecs
 
+TOGGLE_CORNER_RADIUS = 18.0
+
+
 def draw_toggle_switch(
   rect: rl.Rectangle,
   enabled: bool,
@@ -1719,12 +1726,15 @@ def draw_toggle_switch(
   right_inset: int = AETHER_LIST_METRICS.toggle_right_inset,
   knob_offset: float | None = None,
   seed_id: str = "",
-  radius_px: float = TILE_RADIUS_PX,
   bg_color: rl.Color | None = None,
 ):
   # Snap first: draw_hud_background snaps the track, so the knob and fill must use the same pixels.
   toggle_rect = snap_rect(rl.Rectangle(rect.x + rect.width - width - right_inset, rect.y + (rect.height - height) / 2, width, height))
   knob_inset = 4.0  # same gap between the knob and the track on all four sides
+  # One corner radius for every toggle (rendered px). The aether helpers take radius_px at 2x the
+  # rendered radius (roundness = radius_px / min_dim), so pass 2x with the roundness cap lifted.
+  track_radius = min(TOGGLE_CORNER_RADIUS, toggle_rect.height / 2)
+  track_radius_px = track_radius * 2
   knob_w = 44.0
   knob_h = toggle_rect.height - 2 * knob_inset
   if knob_offset is None:
@@ -1740,7 +1750,8 @@ def draw_toggle_switch(
   knob_y = toggle_rect.y + toggle_rect.height / 2
 
   # Delegate to draw_hud_background — same layered bloom, fill, and lerped border as tiles
-  draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress, radius_px=radius_px, bg_color=bg_color)
+  draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress,
+                      radius_px=track_radius_px, bg_color=bg_color, max_roundness=1.0)
 
   # Accent fill from the left edge to the knob so ON reads from color, not only knob position.
   # Same inset as the knob, so the fill's edges line up with the knob's.
@@ -1748,7 +1759,8 @@ def draw_toggle_switch(
     fill_rect = rl.Rectangle(toggle_rect.x + knob_inset, toggle_rect.y + knob_inset,
                              max(0.0, knob_x + knob_w / 2 - toggle_rect.x - knob_inset), knob_h)
     fill_alpha = int((150 if is_enabled else 60) * min(knob_progress * 1.5, 1.0))
-    draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(radius_px - knob_inset, 1.0))
+    # Concentric with the track: rendered radius = track radius - inset (radius_px is 2x rendered).
+    draw_rounded_fill(fill_rect, with_alpha(track_color, fill_alpha), radius_px=max(track_radius - knob_inset, 0.5) * 2, max_roundness=1.0)
 
   if seed_id and enabled:
     nodes, vecs = _get_or_create_toggle_constellation(seed_id)
@@ -1765,7 +1777,7 @@ def draw_toggle_switch(
         rl.draw_line_ex(rl.Vector2(nx, ny), rl.Vector2(knob_x, knob_y), 1.2, tether_col)
 
   # Nearly-square slider thumb — physical button sliding across the starfield
-  knob_roundness = 0.65              # ≈10px corner radius on 30px width — rect, not pill
+  knob_roundness = 0.78  # rounded rect, not pill
   knob_segments = 8
   knob_rect = snap_rect(rl.Rectangle(
     knob_x - knob_w / 2, knob_y - knob_h / 2, knob_w, knob_h
@@ -3407,7 +3419,6 @@ class AetherSettingsView(PanelManagerView):
         knob_progress=1.0 if toggle_value else 0.0,
         track_color=self._panel_style.accent,
         seed_id=toggle_id,
-        radius_px=100,
         bg_color=rl.Color(12, 10, 18, 255),
       )
     else:
