@@ -630,7 +630,8 @@ class StarPilotAppearanceLayout(_SettingsPage):
                 else:
                     self._params.put(key, dialog.selection)
 
-        dialog = MultiOptionDialog(tr(key), COLOR_PRESETS, current, callback=on_select)
+        titles = {"LaneLinesColor": tr_noop("Lane Line Color"), "PathEdgesColor": tr_noop("Path Edge Color"), "PathColor": tr_noop("Path Color")}
+        dialog = MultiOptionDialog(tr(titles.get(key, key)), COLOR_PRESETS, current, callback=on_select)
         gui_app.push_widget(dialog)
 
     # ── Numeric sliders (int / float) ──

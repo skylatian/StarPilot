@@ -224,7 +224,8 @@ class _PlotWidget(Widget):
   Axes may be linear or log10 (``log_x`` / ``log_y``).
   """
 
-  PAD_L, PAD_R, PAD_T, PAD_B = 74, 26, 22, 46
+  PAD_L, PAD_R, PAD_T, PAD_B = 74, 26, 22, 70
+  AXIS_TITLE_DY = 40  # below the tick labels (drawn at +8, ~25 px tall after FONT_SCALE)
   x_min, x_max, y_min, y_max = 0.0, 1.0, 0.0, 1.0
   log_x = False
   log_y = False
@@ -326,9 +327,20 @@ class _PlotWidget(Widget):
         w = measure_text_cached(font, labels[i], 20).x
         self._text(labels[i], plot.x - 10 - w, y - 11, 20)
 
+  def _arrow(self, tip_x: float, y: float, direction: int, color: rl.Color, size: float = 12.0):
+    """Filled triangle pointing left (direction=-1) or right (+1) with its tip at tip_x."""
+    base_x = tip_x - direction * size
+    top, bottom = rl.Vector2(base_x, y - size / 2), rl.Vector2(base_x, y + size / 2)
+    tip = rl.Vector2(tip_x, y)
+    # raylib wants counter-clockwise vertex order
+    if direction > 0:
+      rl.draw_triangle(top, bottom, tip, color)
+    else:
+      rl.draw_triangle(top, tip, bottom, color)
+
   def _axis_title(self, text: str):
     plot = self._plot
-    self._text(text, plot.x + plot.width / 2, plot.y + plot.height + 26, 18, center=True)
+    self._text(text, plot.x + plot.width / 2, plot.y + plot.height + self.AXIS_TITLE_DY, 18, center=True)
 
   def _legend(self, items: list[tuple[str, rl.Color, bool]], x: float | None = None, y: float | None = None):
     """items: (label, color, dashed)."""
@@ -385,7 +397,7 @@ class SigmoidCurvePreview(_PlotWidget):
   def _draw_plot(self, plot: rl.Rectangle):
     self._grid_x([-2, -1, 0, 1, 2], ["-2", "-1", "0", "1", "2"])
     self._grid_y([-0.5, -0.25, 0.0, 0.25, 0.5], ["-0.5", "-0.25", "0", "0.25", "0.5"])
-    self._axis_title(tr("lat accel (m/s²) → torque"))
+    self._axis_title(tr("torque vs. lat accel (m/s²)"))
     slope = 1.0 / RETROFIT_BASE_LAT_ACCEL_FACTOR
     self._dashed(self.sx(self.x_min), self.sy(self.x_min * slope), self.sx(self.x_max), self.sy(self.x_max * slope), _STOCK, 2.0)
     self._curve(lambda x: siglin_torque(x, self._left, self._right))
@@ -412,12 +424,12 @@ class FFWindowPreview(_PlotWidget):
     self._grid_x(xs, [f"{v:.1f}" for v in xs])
     ys = [0.98, 1.0, 1.02, 1.04, 1.06, 1.08]
     self._grid_y(ys, [f"{v:.2f}" for v in ys])
-    self._axis_title(tr("|lat accel| → FF scale"))
+    self._axis_title(tr("FF scale vs. |lat accel|"))
     self._dashed(plot.x, self.sy(1.0), plot.x + plot.width, self.sy(1.0), _REFERENCE, 1.0)
     for value, color, label in ((self._onset, _MARK_A, tr("onset")), (self._cutoff, _MARK_B, tr("cutoff"))):
       x = self.sx(min(max(value, self.x_min), self.x_max))
       self._dashed(x, plot.y, x, plot.y + plot.height, color, 1.0, 6.0)
-      self._text(label, x + 6, plot.y + 6, 18, color)
+      self._text(label, x + 8, plot.y + 12, 18, color)
     self._curve(lambda la: ff_window_scale(la, self._gain, self._onset, self._onset_w, self._cutoff, self._cutoff_w))
     self._legend([(tr("FF scale"), _CURVE, False)], x=plot.x + plot.width - 150)
 
@@ -447,10 +459,15 @@ class TurnDynamicsPreview(_PlotWidget):
     self._grid_y(ys, [f"{v:.1f}" for v in ys])
     self._dashed(plot.x, self.sy(1.0), plot.x + plot.width, self.sy(1.0), _REFERENCE, 1.0)
     self._dashed(self.sx(0.0), plot.y, self.sx(0.0), plot.y + plot.height, _REFERENCE, 1.0)
-    self._text(tr("← unwind"), plot.x + 6, plot.y + plot.height + 26, 18, _MARK_B)
+    # Phase direction labels on the axis-title row; arrows are drawn since the font has no arrow glyphs.
     font, _ = self._fonts()
-    turn_in = tr("turn-in →")
-    self._text(turn_in, plot.x + plot.width - 6 - measure_text_cached(font, turn_in, 18).x, plot.y + plot.height + 26, 18, _CURVE)
+    y = plot.y + plot.height + self.AXIS_TITLE_DY
+    unwind, turn_in = tr("unwind"), tr("turn-in")
+    self._arrow(plot.x + 6, y + 12, -1, _MARK_B)
+    self._text(unwind, plot.x + 26, y, 18, _MARK_B)
+    turn_in_w = measure_text_cached(font, turn_in, 18).x
+    self._text(turn_in, plot.x + plot.width - 26 - turn_in_w, y, 18, _CURVE)
+    self._arrow(plot.x + plot.width - 6, y + 12, 1, _CURVE)
     self._curve(lambda phase: turn_dynamics_multiplier(phase, self._turn_in_boost, self._unwind_boost, self._unwind_taper))
     self._legend([(tr("FF multiplier"), _CURVE, False)], x=plot.x + plot.width - 180)
 
@@ -476,10 +493,10 @@ class CenterTaperPreview(_PlotWidget):
     self._grid_x(xs, [f"{v:.1f}" for v in xs])
     ys = [0.75, 0.80, 0.85, 0.90, 0.95, 1.0]
     self._grid_y(ys, [f"{v:.2f}" if v in (0.8, 0.9, 1.0) else "" for v in ys])
-    self._axis_title(tr("|lat accel| → output scale"))
+    self._axis_title(tr("output scale vs. |lat accel|"))
     for v_ego, color, _ in self.SPEEDS:
       self._curve(lambda la, v=v_ego: center_taper_scale(la, v, self._max, self._lat, self._lat_w, self._speed, self._speed_w), color, 2.0)
-    self._legend([(label, color, False) for _, color, label in self.SPEEDS])
+    self._legend([(label, color, False) for _, color, label in self.SPEEDS], y=plot.y + plot.height - 30)
 
 
 class KPCurveEditor(_PlotWidget):
@@ -511,7 +528,7 @@ class KPCurveEditor(_PlotWidget):
   def _draw_plot(self, plot: rl.Rectangle):
     self._grid_x([pt.speed for pt in KP_POINTS], [f"{pt.speed:g}" for pt in KP_POINTS])
     self._grid_y([0.1, 0.3, 1, 3, 10, 30, 100, 300], ["0.1", "", "1", "", "10", "", "100", ""])
-    self._axis_title(tr("speed (m/s) → KP"))
+    self._axis_title(tr("KP vs. speed (m/s)"))
     pts = self._screen_points()
     self._polyline(pts, _CURVE, 3.0)
     for i, (x, y) in enumerate(pts):
@@ -561,6 +578,11 @@ class _RetrofitSubPage(_SettingsPage):
   """A page owned by StarPilotRetrofitLayout. Navigation requests are forwarded to the
   parent unchanged so the parent (and main_panel's stack) own the current page — a sub-page
   never tracks its own ``_current_sub_panel``, which would otherwise block re-entry."""
+
+  @property
+  def _header_title(self) -> str:
+    # The breadcrumb reads the sub-panel's _header_title; ours lives on the wrapped view.
+    return getattr(self._manager_view, "_header_title", "")
 
   def _navigate_to(self, sub_panel: str):
     if self._navigate_callback:
