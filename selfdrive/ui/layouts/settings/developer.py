@@ -1,8 +1,14 @@
+import os
+import subprocess
+import threading
+
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
+from openpilot.system.hardware import HARDWARE
 from openpilot.selfdrive.ui.widgets.ssh_key import ssh_key_item
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.list_view import toggle_item
+from openpilot.system.ui.widgets.list_view import button_item, toggle_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.lib.application import gui_app
@@ -25,7 +31,18 @@ DESCRIPTIONS = {
     "Enable this to switch to openpilot longitudinal control. Enabling Experimental mode is recommended when enabling openpilot longitudinal control alpha. " +
     "Changing this setting will restart openpilot if the car is powered on."
   ),
+  'use_prebuilt': tr_noop(
+    "When enabled (default), the device skips source compilation on boot if a prebuilt artifact exists. " +
+    "Disable this if you plan to edit code and rebuild on-device."
+  ),
+  'full_rebuild': tr_noop(
+    "Clean and rebuild all compiled code, then reboot. Required after param or panda safety changes when " +
+    "\"Use Prebuilt Binaries\" is off. Takes ~20 minutes on Comma 3."
+  ),
 }
+
+FULL_REBUILD_CMD = "rm -f .sconsign.dblite && scons -j4 2>&1"
+FULL_REBUILD_REBOOT_DELAY = 2.5
 
 
 class DeveloperLayout(Widget):
@@ -51,6 +68,26 @@ class DeveloperLayout(Widget):
       callback=self._on_enable_ssh,
     )
     self._ssh_keys = ssh_key_item(lambda: tr("SSH Keys"), description=lambda: tr(DESCRIPTIONS["ssh_key"]))
+
+    self._use_prebuilt_toggle = toggle_item(
+      lambda: tr("Use Prebuilt Binaries"),
+      description=lambda: tr(DESCRIPTIONS["use_prebuilt"]),
+      initial_state=self._params.get_bool("UsePrebuilt"),
+      callback=self._on_use_prebuilt,
+      enabled=ui_state.is_offroad,
+    )
+
+    # Full Rebuild: clean + rebuild all compiled code, then reboot. Car-agnostic, always available here.
+    self._rebuild_running = False
+    self._rebuild_status = ""
+    self._rebuild_last_line = ""
+    self._full_rebuild_item = button_item(
+      lambda: tr("Full Rebuild"),
+      lambda: self._rebuild_status or tr("BUILD"),
+      description=lambda: self._rebuild_last_line or tr(DESCRIPTIONS["full_rebuild"]),
+      callback=self._on_full_rebuild,
+      enabled=lambda: ui_state.is_offroad() and not self._rebuild_running,
+    )
 
     self._joystick_toggle = toggle_item(
       lambda: tr("Joystick Debug Mode"),
@@ -80,6 +117,8 @@ class DeveloperLayout(Widget):
       self._adb_toggle,
       self._ssh_toggle,
       self._ssh_keys,
+      self._use_prebuilt_toggle,
+      self._full_rebuild_item,
       self._joystick_toggle,
       self._alpha_long_toggle,
       self._ui_debug_toggle,
@@ -115,6 +154,7 @@ class DeveloperLayout(Widget):
     for key, item in (
       ("AdbEnabled", self._adb_toggle),
       ("SshEnabled", self._ssh_toggle),
+      ("UsePrebuilt", self._use_prebuilt_toggle),
       ("JoystickDebugMode", self._joystick_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._ui_debug_toggle),
@@ -131,6 +171,51 @@ class DeveloperLayout(Widget):
 
   def _on_enable_ssh(self, state: bool):
     self._params.put_bool("SshEnabled", state)
+
+  def _on_use_prebuilt(self, state: bool):
+    self._params.put_bool("UsePrebuilt", state)
+
+  def _on_full_rebuild(self):
+    if self._rebuild_running:
+      return
+
+    def confirm_callback(result: int):
+      if result == DialogResult.CONFIRM:
+        self._start_full_rebuild()
+
+    gui_app.push_widget(ConfirmDialog(
+      tr("This will clean all build artifacts, rebuild from source, and reboot. Continue?"),
+      tr("Rebuild"), callback=confirm_callback))
+
+  def _start_full_rebuild(self):
+    self._rebuild_running = True
+    self._rebuild_status = tr("Cleaning...")
+    self._rebuild_last_line = ""
+    threading.Thread(target=self._full_rebuild_worker, daemon=True).start()
+
+  def _full_rebuild_worker(self):
+    # Runs off the UI thread; only touches the status strings the list item reads each frame.
+    env = dict(os.environ, SCONS_PROGRESS="1")
+    try:
+      proc = subprocess.Popen(["bash", "-c", FULL_REBUILD_CMD], cwd=BASEDIR, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+      assert proc.stdout is not None
+      for line in proc.stdout:
+        line = line.strip()
+        if line:
+          self._rebuild_last_line = line
+          self._rebuild_status = ("..." + line[-20:]) if len(line) > 23 else line
+      exit_code = proc.wait()
+    except Exception as e:
+      self._rebuild_last_line = str(e)
+      exit_code = -1
+
+    if exit_code == 0:
+      self._rebuild_status = "Build complete! Rebooting..."
+      threading.Timer(FULL_REBUILD_REBOOT_DELAY, HARDWARE.reboot).start()
+    else:
+      self._rebuild_status = f"Build failed (exit {exit_code})"
+      self._rebuild_running = False
 
   def _on_joystick_debug_mode(self, state: bool):
     self._params.put_bool("JoystickDebugMode", state)
