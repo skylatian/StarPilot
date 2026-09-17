@@ -23,6 +23,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AdjustorTogglesPanelView,
   AetherAdjustorRow,
   AetherSegmentedControl,
+  draw_segmented_shell,
   AetherSliderDialog,
   DEFAULT_PANEL_STYLE,
   PanelManagerView,
@@ -394,7 +395,7 @@ class ConditionalDriveModeView(AdjustorTogglesPanelView):
     
     header_w = content_width
     bar_rect = rl.Rectangle(rect.x, y, header_w, self.TAB_HEIGHT)
-    draw_list_group_shell(bar_rect, style=PANEL_STYLE)
+    draw_segmented_shell(bar_rect, style=PANEL_STYLE)
     self._drive_mode_control.render(bar_rect)
     
     y += self.TAB_HEIGHT + self.TAB_BOTTOM_GAP

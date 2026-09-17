@@ -5548,6 +5548,18 @@ class AetherMultiSelectTile(AetherTile):
                           rl.Vector2(rx + content_pad + 26, y),
                           max_w - 26, val_size, align_center=False, color=val_color)
 
+SEGMENT_FACE_RADIUS_PX = 22.0  # radius_px is twice the visible corner radius: 11 px corners on each tab
+SEGMENT_INNER_PAD = 7
+
+
+def draw_segmented_shell(rect: rl.Rectangle, style: PanelStyle = DEFAULT_PANEL_STYLE):
+  """Container behind an AetherSegmentedControl. Its corners are concentric with the tabs inside
+  (tab corner + inner padding = 18 px, the toggle corner radius)."""
+  radius_px = SEGMENT_FACE_RADIUS_PX + SEGMENT_INNER_PAD * 2
+  draw_rounded_fill(rect, style.surface_fill, radius_px=radius_px)
+  draw_rounded_stroke(rect, style.surface_border, radius_px=radius_px)
+
+
 class AetherSegmentedControl(Widget):
   def __init__(
     self,
@@ -5657,7 +5669,7 @@ class AetherSegmentedControl(Widget):
     if not self._suppress_background:
       draw_soft_card(rect, rl.Color(255, 255, 255, 4), rl.Color(255, 255, 255, 14))
 
-    inner_pad = 6 if self._compact else 7
+    inner_pad = 6 if self._compact else SEGMENT_INNER_PAD
     gap = 6 if self._compact else 9
     inner_rect = rl.Rectangle(rect.x + inner_pad, rect.y + inner_pad, rect.width - inner_pad * 2, rect.height - inner_pad * 2)
     option_w = (inner_rect.width - max(0, len(self._options) - 1) * gap) / max(1, len(self._options))
@@ -5683,9 +5695,8 @@ class AetherSegmentedControl(Widget):
         title_color = AetherListColors.HEADER if is_active else AetherListColors.SUBTEXT
         status_color = AetherListColors.MUTED
 
-      draw_rounded_fill(face_rect, fill, radius_px=23)
-      draw_rounded_stroke(face_rect, border, radius_px=23)
-      rl.draw_rectangle_rec(rl.Rectangle(face_rect.x, face_rect.y, face_rect.width, 1), rl.Color(255, 255, 255, 18 if is_active else 10))
+      draw_rounded_fill(face_rect, fill, radius_px=SEGMENT_FACE_RADIUS_PX)
+      draw_rounded_stroke(face_rect, border, radius_px=SEGMENT_FACE_RADIUS_PX)
 
       label = str(_resolve_value(option, ""))
       status = str(_resolve_value(self._statuses[i], ""))

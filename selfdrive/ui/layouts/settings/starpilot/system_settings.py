@@ -26,6 +26,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
   AetherAdjustorRow,
   AetherSegmentedControl,
+  draw_segmented_shell,
   AetherListColors,
   DEFAULT_PANEL_STYLE,
   PanelManagerView,
@@ -444,7 +445,7 @@ class SystemSettingsManagerView(PanelManagerView):
   def _draw_header(self, rect: rl.Rectangle):
     content_width = self._scroll_rect.width - AETHER_LIST_METRICS.content_right_gutter
     bar_rect = rl.Rectangle(rect.x, rect.y - 6.0, content_width, self._TOPBAR_HEIGHT)
-    draw_list_group_shell(bar_rect, style=self.PANEL_STYLE)
+    draw_segmented_shell(bar_rect, style=self.PANEL_STYLE)
     self._drive_mode_control.render(bar_rect)
     total_offset = self._TOPBAR_HEIGHT + self._TOPBAR_GAP
     self._scroll_rect.y += total_offset
