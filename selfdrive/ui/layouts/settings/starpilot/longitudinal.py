@@ -497,6 +497,9 @@ class StarPilotLongitudinalLayout(_SettingsPage):
     ce_lead = lambda: ce_on() and self._params.get_bool("CELead")
     csc_on = lambda: self._params.get_bool("CurveSpeedController")
     confirmation_on = lambda: self._params.get_bool("SLCConfirmation")
+    slc_on = lambda: self._params.get_bool("SpeedLimitController")
+    personalities_on = lambda: self._params.get_bool("CustomPersonalities")
+    vsl_on = lambda: self._params.get_bool("VisionSpeedLimitDetection")
     
     # ── 1. Longitudinal Tuning Rows ──
     self._tune_rows = [
@@ -592,72 +595,111 @@ class StarPilotLongitudinalLayout(_SettingsPage):
                  subtitle="",
                  get_value=lambda: self._profile_label_for_value(self._params.get_int("SLCFallback"), SLC_FALLBACK_OPTIONS),
                  on_click=lambda: self._show_labeled_select("Fallback Speed", "SLCFallback", SLC_FALLBACK_OPTIONS,
-                                                            self._params.get_int("SLCFallback"))),
+                                                            self._params.get_int("SLCFallback")),
+                 visible=slc_on),
       SettingRow("SLCPriority", "value", tr_noop("Source Priority"),
                  subtitle="",
                  get_value=self._get_priority_value,
-                 on_click=self._on_priority_clicked),
+                 on_click=self._on_priority_clicked,
+                 visible=slc_on),
       SettingRow("SetSpeedLimit", "toggle", tr_noop("Auto Match Speed Limits"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SetSpeedLimit"),
-                 set_state=lambda s: self._params.put_bool("SetSpeedLimit", s)),
+                 set_state=lambda s: self._params.put_bool("SetSpeedLimit", s),
+                 visible=slc_on),
       SettingRow("SLCConfirmation", "toggle", tr_noop("Confirm New Limits"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SLCConfirmation"),
-                 set_state=lambda s: self._params.put_bool("SLCConfirmation", s)),
+                 set_state=lambda s: self._params.put_bool("SLCConfirmation", s),
+                 visible=slc_on),
       SettingRow("SLCConfirmationLower", "toggle", tr_noop("Confirm Lower"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SLCConfirmationLower"),
                  set_state=lambda s: self._params.put_bool("SLCConfirmationLower", s),
-                 visible=confirmation_on),
+                 visible=lambda: slc_on() and confirmation_on()),
       SettingRow("SLCConfirmationHigher", "toggle", tr_noop("Confirm Higher"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SLCConfirmationHigher"),
                  set_state=lambda s: self._params.put_bool("SLCConfirmationHigher", s),
-                 visible=confirmation_on),
+                 visible=lambda: slc_on() and confirmation_on()),
       SettingRow("SLCLookHigher", "value", tr_noop("Higher Lookahead"),
                  subtitle="",
                  get_value=lambda: f"{self._params.get_int('SLCLookaheadHigher')}s",
-                 on_click=lambda: self._show_slider("SLCLookaheadHigher", 0, 30, unit="s")),
+                 on_click=lambda: self._show_slider("SLCLookaheadHigher", 0, 30, unit="s"),
+                 visible=slc_on),
       SettingRow("SLCLookLower", "value", tr_noop("Lower Lookahead"),
                  subtitle="",
                  get_value=lambda: f"{self._params.get_int('SLCLookaheadLower')}s",
-                 on_click=lambda: self._show_slider("SLCLookaheadLower", 0, 30, unit="s")),
+                 on_click=lambda: self._show_slider("SLCLookaheadLower", 0, 30, unit="s"),
+                 visible=slc_on),
       SettingRow("SLCMapboxFiller", "toggle", tr_noop("Mapbox Fallback"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SLCMapboxFiller"),
                  set_state=lambda s: self._params.put_bool("SLCMapboxFiller", s),
-                 visible=self._mapbox_available),
+                 visible=lambda: slc_on() and self._mapbox_available()),
       SettingRow("ShowSLCOffset", "toggle", tr_noop("Show SLC Offset"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("ShowSLCOffset"),
-                 set_state=lambda s: self._params.put_bool("ShowSLCOffset", s)),
+                 set_state=lambda s: self._params.put_bool("ShowSLCOffset", s),
+                 visible=slc_on),
       SettingRow("SpeedLimitSources", "toggle", tr_noop("Show Sources"),
                  subtitle="",
                  get_state=lambda: self._params.get_bool("SpeedLimitSources"),
-                 set_state=lambda s: self._params.put_bool("SpeedLimitSources", s)),
+                 set_state=lambda s: self._params.put_bool("SpeedLimitSources", s),
+                 visible=slc_on),
       SettingRow("SLCAbbreviatedSources", "toggle", tr_noop("Abbreviated Sources"),
                  subtitle=tr_noop("Render speed-limit sources as compact text labels (e.g. Dash-45)."),
                  get_state=lambda: self._params.get_bool("SLCAbbreviatedSources"),
                  set_state=lambda s: self._params.put_bool("SLCAbbreviatedSources", s),
-                 visible=self._sources_visible),
+                 visible=lambda: slc_on() and self._sources_visible()),
       SettingRow("SLCActiveSourcesOnly", "toggle", tr_noop("Active Sources Only"),
                  subtitle=tr_noop("Hide source rows that have no current speed limit reading."),
                  get_state=lambda: self._params.get_bool("SLCActiveSourcesOnly"),
                  set_state=lambda s: self._params.put_bool("SLCActiveSourcesOnly", s),
-                 visible=self._sources_visible),
+                 visible=lambda: slc_on() and self._sources_visible()),
       SettingRow("ConfigureOffsets", "value", tr_noop("SLC Offsets"),
                  subtitle=tr_noop("Per-limit speed adjustments for the Speed Limit Controller."),
                  get_value=lambda: tr_noop("Configure"),
-                 on_click=self._show_slc_offsets_category),
+                 on_click=self._show_slc_offsets_category,
+                 visible=slc_on),
     ]
 
     # ── 4. Vision Speed Limits Rows ──
     self._vision_speed_limit_rows = [
-      SettingRow("VisionSpeedLimit", "toggle", tr_noop("Vision Detection"),
-                 subtitle=tr_noop("Use the road camera to detect and display speed-limit signs, with optional use by Speed Limit Controller."),
-                 get_state=lambda: self._params.get_bool("VisionSpeedLimitDetection"),
-                 set_state=lambda s: self._params.put_bool("VisionSpeedLimitDetection", s)),
+      # The page's header toggle is VisionSpeedLimitDetection itself, so it is not repeated as a row.
+      # These are the settings it owns; Galaxy has exposed them since the feature landed, the big UI
+      # only ever had a row duplicating the header switch.
+      SettingRow("VisionSpeedLimitLowLimitFilter", "toggle", tr_noop("Ignore Low Limits"),
+                 subtitle=tr_noop("Stop Speed Limit Controller acting on vision limits at or below the threshold. Detection and display continue."),
+                 get_state=lambda: self._params.get_bool("VisionSpeedLimitLowLimitFilter"),
+                 set_state=lambda s: self._params.put_bool("VisionSpeedLimitLowLimitFilter", s),
+                 visible=vsl_on),
+      SettingRow("VisionSpeedLimitLowLimitThreshold", "value", tr_noop("Ignore At or Below"),
+                 subtitle=tr_noop("Vision limits at or below this speed will not control the car."),
+                 # read_default: the control code reads this through a return_defaults Params
+                 # (starpilot_variables.py), so an untouched param is 25 there. Reading it raw here
+                 # would show 0 -- below the slider's own minimum -- for a limit that is really 25.
+                 get_value=lambda: f"{self._vsl_low_limit()}{self._speed_unit()}",
+                 on_click=lambda: self._show_slider("VisionSpeedLimitLowLimitThreshold", 5,
+                                                    130 if self._is_metric() else 80, step=5,
+                                                    unit=self._speed_unit(), title="Ignore At or Below",
+                                                    current_value=self._vsl_low_limit()),
+                 visible=lambda: vsl_on() and self._params.get_bool("VisionSpeedLimitLowLimitFilter")),
+      SettingRow("VisionSpeedLimitAutoBookmark", "toggle", tr_noop("Auto-Bookmark Signs"),
+                 subtitle=tr_noop("Save confirmed vision-detected signs to the debug session so they can be imported into the training set."),
+                 get_state=lambda: self._params.get_bool("VisionSpeedLimitAutoBookmark"),
+                 set_state=lambda s: self._params.put_bool("VisionSpeedLimitAutoBookmark", s),
+                 visible=vsl_on),
+      SettingRow("VisionSpeedLimitAutoPreserveSegment", "toggle", tr_noop("Preserve Bookmarked Segments"),
+                 subtitle=tr_noop("Also send a real bookmark so loggerd keeps the route segment. Costs extra storage."),
+                 get_state=lambda: self._params.get_bool("VisionSpeedLimitAutoPreserveSegment"),
+                 set_state=lambda s: self._params.put_bool("VisionSpeedLimitAutoPreserveSegment", s),
+                 visible=lambda: vsl_on() and self._params.get_bool("VisionSpeedLimitAutoBookmark")),
+      SettingRow("VisionSpeedLimitTrainingCollector", "toggle", tr_noop("Collect Training Samples"),
+                 subtitle=tr_noop("Save lower-confidence sign candidates to the debug session without showing or applying them live."),
+                 get_state=lambda: self._params.get_bool("VisionSpeedLimitTrainingCollector"),
+                 set_state=lambda s: self._params.put_bool("VisionSpeedLimitTrainingCollector", s),
+                 visible=vsl_on),
     ]
 
     # Initialize SLC Offsets rows
@@ -696,19 +738,23 @@ class StarPilotLongitudinalLayout(_SettingsPage):
       SettingRow("Traffic", "value", tr_noop("Traffic"),
                  subtitle=tr_noop("Configure follow distance, smoothness, and response for traffic conditions."),
                  get_value=lambda: tr_noop("Configure"),
-                 on_click=lambda: self._show_personality_profile_category("Traffic")),
+                 on_click=lambda: self._show_personality_profile_category("Traffic"),
+                 visible=personalities_on),
       SettingRow("Aggressive", "value", tr_noop("Aggressive"),
                  subtitle=tr_noop("Configure follow distance, smoothness, and response for aggressive driving."),
                  get_value=lambda: tr_noop("Configure"),
-                 on_click=lambda: self._show_personality_profile_category("Aggressive")),
+                 on_click=lambda: self._show_personality_profile_category("Aggressive"),
+                 visible=personalities_on),
       SettingRow("Standard", "value", tr_noop("Standard"),
                  subtitle=tr_noop("Configure follow distance, smoothness, and response for everyday driving."),
                  get_value=lambda: tr_noop("Configure"),
-                 on_click=lambda: self._show_personality_profile_category("Standard")),
+                 on_click=lambda: self._show_personality_profile_category("Standard"),
+                 visible=personalities_on),
       SettingRow("Relaxed", "value", tr_noop("Relaxed"),
                  subtitle=tr_noop("Configure follow distance, smoothness, and response for relaxed driving."),
                  get_value=lambda: tr_noop("Configure"),
-                 on_click=lambda: self._show_personality_profile_category("Relaxed")),
+                 on_click=lambda: self._show_personality_profile_category("Relaxed"),
+                 visible=personalities_on),
     ]
 
     # ── 7. Daily QOL & Weather Rows ──
@@ -1046,6 +1092,7 @@ class StarPilotLongitudinalLayout(_SettingsPage):
     "CustomCruise", "CustomCruiseLong", "SetSpeedOffset",
     "CESpeed", "CESpeedLead", "CESignalSpeed",
     "CCMSpeed", "CCMSpeedLead", "CCMSetSpeedMargin",
+    "VisionSpeedLimitLowLimitThreshold",
   )
   _SPEED_RESCALE_FLOAT_KEYS = ("PulseGlideSpeedDelta",)
 
@@ -1085,6 +1132,9 @@ class StarPilotLongitudinalLayout(_SettingsPage):
     distance_factor = CV.FOOT_TO_METER if current else CV.METER_TO_FOOT
     for key in self._DISTANCE_RESCALE_KEYS:
       self._params.put_int(key, int(round(self._params.get_int(key) * distance_factor)))
+
+  def _vsl_low_limit(self) -> int:
+    return self._params.get_int("VisionSpeedLimitLowLimitThreshold", return_default=True)
 
   def _mapbox_available(self) -> bool:
     """SLCMapboxFiller is only meaningful when a Mapbox key is configured."""
