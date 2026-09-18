@@ -112,7 +112,7 @@ class SystemSettingsManagerView(PanelManagerView):
   ACTION_PILL_WIDTH = 132
   DANGER_PILL_WIDTH = 112
   _TOPBAR_HEIGHT = 120.0
-  _TOPBAR_GAP = 0.0
+  _TOPBAR_GAP = 6.0
   METRICS = SYSTEM_PANEL_METRICS
 
   @property
@@ -444,7 +444,7 @@ class SystemSettingsManagerView(PanelManagerView):
 
   def _draw_header(self, rect: rl.Rectangle):
     content_width = self._scroll_rect.width - AETHER_LIST_METRICS.content_right_gutter
-    bar_rect = rl.Rectangle(rect.x, rect.y - 6.0, content_width, self._TOPBAR_HEIGHT)
+    bar_rect = rl.Rectangle(rect.x, rect.y, content_width, self._TOPBAR_HEIGHT)
     draw_segmented_shell(bar_rect, style=self.PANEL_STYLE)
     self._drive_mode_control.render(bar_rect)
     total_offset = self._TOPBAR_HEIGHT + self._TOPBAR_GAP
