@@ -105,6 +105,17 @@ def with_alpha(color, alpha: int) -> rl.Color:
   return rl.Color(r, g, b, max(0, min(a, int(alpha))))
 
 
+def _shift_rgb(color, amount: int) -> rl.Color:
+  r, g, b, a = _get_rgba(color)
+  return rl.Color(*(max(0, min(255, c + amount)) for c in (r, g, b)), a)
+
+
+# How far an emphasized button's face darkens from its accent between the top edge and the bottom.
+# It only falls off; lifting the top would push blue (246) past 255 while red and green kept rising,
+# desaturating the top edge toward white -- which is what makes a gradient read as cheap gloss.
+EMPHASIS_GRADIENT_FALLOFF = -14
+
+
 def clamp_and_snap(value: float, min_val: float, max_val: float, step: float) -> float:
     if step <= 0:
         return max(min_val, min(max_val, value))
@@ -316,6 +327,34 @@ def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1,
   stroke_radius = max(0.0, radius_px - inset * 2)
   rl.draw_rectangle_rounded_lines_ex(stroke_rect, _roundness_for(stroke_rect, stroke_radius, max_roundness),
                                      segments or _segments_for(stroke_rect, stroke_radius), thickness, color)
+
+
+def draw_rounded_gradient_v(rect: rl.Rectangle, top_color: rl.Color, bottom_color: rl.Color,
+                            roundness: float, segments: int = 12, bands: int = 20):
+  # raylib has no rounded-rectangle gradient, and its scissor does not nest -- widgets draw inside a
+  # scroll clip, so banding with begin_scissor_mode would drop the panel's clipping. Instead draw the
+  # shape once in the bottom colour, then redraw it progressively shorter and lighter from the top
+  # edge. Every pass is a real rounded rect held at the same corner radius, so the silhouette never
+  # changes and the passes only tint what is already inside it. Opaque colours only: translucent ones
+  # would accumulate over the stack.
+  radius = roundness * min(rect.width, rect.height) / 2.0
+  rl.draw_rectangle_rounded(rect, roundness, segments, bottom_color)
+  min_height = radius * 2.0  # any shorter and the arc would have to shrink, poking outside the shape
+  if rect.height <= min_height + 1.0:
+    return
+  for i in range(bands, 0, -1):
+    t = i / bands
+    height = min_height + (rect.height - min_height) * t
+    band = rl.Rectangle(rect.x, rect.y, rect.width, height)
+    mix = 1.0 - t
+    rl.draw_rectangle_rounded(
+      band,
+      min(1.0, radius * 2.0 / min(band.width, height)),
+      segments,
+      rl.Color(round(bottom_color.r + (top_color.r - bottom_color.r) * mix),
+               round(bottom_color.g + (top_color.g - bottom_color.g) * mix),
+               round(bottom_color.b + (top_color.b - bottom_color.b) * mix), 255),
+    )
 
 
 def truncate_text_ellipsis(
@@ -1899,7 +1938,6 @@ def draw_action_pill(
 ):
   rl.draw_rectangle_rounded(rect, roundness, segments, fill)
   rl.draw_rectangle_rounded_lines_ex(rect, roundness, segments, 1, border)
-  rl.draw_rectangle_rec(rl.Rectangle(rect.x, rect.y, rect.width, 1), with_alpha(text_color, 18))
   draw_text_fit_common(
     gui_app.font(FontWeight.SEMI_BOLD),
     text,
@@ -3384,13 +3422,16 @@ class AetherButton(Widget):
     if pressed:
       bg = rl.Color(max(bg.r - 8, 0), max(bg.g - 8, 0), max(bg.b - 8, 0), bg.a)
 
-    rl.draw_rectangle_rounded(rect, 0.18, 12, bg)
+    if self._emphasized and bg.a == 255:
+      # a primary action reads as a lit, raised surface rather than a flat patch of accent. The
+      # gradient is a whole-face cue, so unlike a 1 px highlight it survives being read at arm's
+      # length. Disabled keeps the flat translucent fill -- it should not look raised.
+      draw_rounded_gradient_v(rect, bg, _shift_rgb(bg, EMPHASIS_GRADIENT_FALLOFF), 0.18)
+    else:
+      rl.draw_rectangle_rounded(rect, 0.18, 12, bg)
     rl.draw_rectangle_rounded_lines_ex(rect, 0.18, 12, 1, border)
-    rl.draw_rectangle_rec(rl.Rectangle(rect.x, rect.y, rect.width, 1), with_alpha(AetherListColors.HEADER, 18 if enabled else 8))
-    if self._emphasized and enabled:
-      rl.draw_rectangle_rec(rl.Rectangle(rect.x + 1, rect.y + 1, rect.width - 2, 1), with_alpha(AetherListColors.HEADER, 14))
     draw_text_fit_common(
-      gui_app.font(FontWeight.MEDIUM),
+      gui_app.font(FontWeight.BOLD if self._emphasized else FontWeight.MEDIUM),
       self.text,
       rl.Vector2(rect.x + 18, centered_text_y(rect.y, rect.height, self._font_size)),
       max(1.0, rect.width - 36),

@@ -136,7 +136,6 @@ class DrivingModelManagerView(AetherInteractiveMixin, Widget):
         lambda: self._controller.cancel_active_download() if self._controller._is_download_active() else self._controller.download_all_missing(),
         enabled=lambda: self._controller.primary_header_button_state()[1],
         emphasized=True,
-        accent_color=rl.Color(139, 92, 246, 92),
       )
     )
     self._secondary_header_button = self._child(
