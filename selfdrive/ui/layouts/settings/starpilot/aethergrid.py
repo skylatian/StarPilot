@@ -2824,7 +2824,6 @@ class AetherAdjustorRow(Widget):
     drag_range: tuple[float, float] | None = None,
     drag_floor: float | None = None,
     auto_toggle: tuple[float, float] | None = None,
-    reserve_auto_space: bool = False,
   ):
     super().__init__()
     # Direct manipulation (on_set given): drag or tap the track to set the value, the chevron opens the dialog
@@ -2834,7 +2833,6 @@ class AetherAdjustorRow(Widget):
     self._drag_range = drag_range or (min_val, max_val)
     self._drag_floor = self._drag_range[0] if drag_floor is None else drag_floor
     self._auto_toggle = auto_toggle
-    self._reserve_auto_space = reserve_auto_space  # keep the track edge aligned with Auto rows in the same list
     self._drag_state: str | None = None  # "pending" (pressed, not yet moved) or "dragging"
     self._drag_value = 0.0
     self._press_pos = rl.Vector2(0, 0)
@@ -3109,8 +3107,9 @@ class AetherAdjustorRow(Widget):
     font = gui_app.font(FontWeight.SEMI_BOLD)
     label = tr("Auto")
     pill_w = measure_text_cached(font, label, ADJUSTOR_PILL_TEXT).x + ADJUSTOR_PILL_PAD_X * 2
-    if self._reserve_auto_space and not self._auto_toggle:
-      track_right = self._chevron_rect.x - pill_w - 14
+    # A row with no Auto pill runs its track all the way to the chevron. Holding the pill's width
+    # empty to line the tracks up costs that row its full span, and a track that stops short reads
+    # as a level that cannot reach maximum.
     if self._auto_toggle:
       pill = snap_rect(rl.Rectangle(self._chevron_rect.x - pill_w, rect.y + (rect.height - ADJUSTOR_PILL_H) / 2, pill_w, ADJUSTOR_PILL_H))
       self._auto_rect = pill

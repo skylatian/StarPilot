@@ -154,7 +154,6 @@ class SoundsManagerView(AdjustorTogglesPanelView):
       color=PANEL_STYLE.accent,
       on_set=lambda v: self._controller._params.put_int(cd_key, int(v)),
       drag_range=(0.0, float(cd_info["max"])),
-      reserve_auto_space=True,
     )
     self._adjustor_rows[cd_key] = cd_adjustor
 
