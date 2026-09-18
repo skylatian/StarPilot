@@ -300,11 +300,22 @@ def draw_rounded_fill(rect: rl.Rectangle, color: rl.Color, radius_px: float = TI
   rl.draw_rectangle_rounded(snapped, _roundness_for(snapped, radius_px, max_roundness), segments or _segments_for(snapped, radius_px), color)
 
 
+STROKE_INSET = 1.0
+
+
 def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1, radius_px: float = TILE_RADIUS_PX, segments: int | None = None,
                         max_roundness: float = 0.5):
+  # raylib lands this outline outside the edge of a fill drawn on the same rect -- 1 px out on the top and
+  # right, 2 px out on the left and bottom -- so a box shows its border, a 1 px gap of whatever is behind
+  # it, and then its own fill edge. That reads as two mismatched edges per box, and the uneven offset makes
+  # the border look off-center on its own fill. Pull the outline in by a pixel, shrinking its arc to match,
+  # so the border and the fill share an edge.
   snapped = snap_rect(rect)
-  rl.draw_rectangle_rounded_lines_ex(snapped, _roundness_for(snapped, radius_px, max_roundness), segments or _segments_for(snapped, radius_px),
-                                     thickness, color)
+  inset = min(STROKE_INSET, snapped.width / 2, snapped.height / 2)
+  stroke_rect = rl.Rectangle(snapped.x + inset, snapped.y + inset, snapped.width - inset * 2, snapped.height - inset * 2)
+  stroke_radius = max(0.0, radius_px - inset * 2)
+  rl.draw_rectangle_rounded_lines_ex(stroke_rect, _roundness_for(stroke_rect, stroke_radius, max_roundness),
+                                     segments or _segments_for(stroke_rect, stroke_radius), thickness, color)
 
 
 def truncate_text_ellipsis(
