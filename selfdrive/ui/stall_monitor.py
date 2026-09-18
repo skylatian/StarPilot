@@ -282,3 +282,92 @@ class UIStallMonitor:
     except OSError as e:
       cloudlog.error(f"failed to write {self._name} stall dump to {path}: {e}")
       return None
+
+
+class StartupGuard:
+  """Kick the watchdog and sample the main thread across a long, uninterruptible init.
+
+  MainLayout() builds every settings panel eagerly, and on device that block does
+  D-Bus round trips to NetworkManager and BlueZ, several param writes (each a global
+  flock plus two fsyncs), an SSL handshake from ModelManager and a zmq poll -- none of
+  which the host sees, which is why it measures 0.18s on a Mac and 5.6-10.5s on a C3.
+
+  ui.py kicks the watchdog once before that block and once after, so an init slower
+  than UI_WATCHDOG_MAX_DT (10s) gets the process SIGKILLed, restarted, and sent
+  straight back into the same block. A process that is still constructing widgets is
+  alive, so kick while it runs -- but only up to `max_grace_s`, after which a genuine
+  hang is allowed to die as before.
+
+  While kicking, sample where the main thread actually is. The stall dump gives one
+  sample per stall; this gives a distribution over the whole init, which is what
+  names the slow panel.
+  """
+
+  def __init__(self, name: str, max_grace_s: float = 45.0, poll_s: float = 0.1,
+               report_top: int = 8):
+    self._name = name
+    self._max_grace_s = max_grace_s
+    self._poll_s = poll_s
+    self._report_top = report_top
+    self._main_thread_id = threading.get_ident()
+    self._stop = threading.Event()
+    self._samples: Counter[str] = Counter()
+    self._kicks = 0
+    self._gave_up = False
+    self._thread = threading.Thread(target=self._run, name=f"{name}_startup_guard", daemon=True)
+    self._t0 = 0.0
+
+  @staticmethod
+  def _describe(frame) -> str:
+    path = frame.f_code.co_filename
+    rel = path.split("/openpilot/", 1)[-1] if "/openpilot/" in path else path
+    return f"{rel}:{frame.f_lineno} in {frame.f_code.co_name}"
+
+  def _sample_main(self) -> str | None:
+    innermost = frame = sys._current_frames().get(self._main_thread_id)
+    if frame is None:
+      return None
+    # Prefer the innermost frame that belongs to openpilot, so the sample names our
+    # own call site rather than the stdlib or site-packages function it is sitting in.
+    # Fall back to the innermost frame, so a main thread parked entirely inside a
+    # library (a D-Bus reply wait, an SSL handshake) still reports something.
+    while frame is not None:
+      path = frame.f_code.co_filename
+      if "/openpilot/" in path and "site-packages" not in path:
+        return self._describe(frame)
+      frame = frame.f_back
+    return self._describe(innermost)
+
+  def _run(self) -> None:
+    from openpilot.common.watchdog import kick_watchdog
+    while not self._stop.wait(self._poll_s):
+      sample = self._sample_main()
+      if sample is not None:
+        self._samples[sample] += 1
+      if time.monotonic() - self._t0 < self._max_grace_s:
+        kick_watchdog()
+        self._kicks += 1
+      elif not self._gave_up:
+        self._gave_up = True
+        cloudlog.error(f"{self._name} startup guard gave up after {self._max_grace_s:.0f}s; "
+                       f"letting the watchdog fire. main thread at: {sample}")
+
+  def __enter__(self) -> "StartupGuard":
+    self._t0 = time.monotonic()
+    self._thread.start()
+    return self
+
+  def __exit__(self, *exc_info) -> None:
+    self._stop.set()
+    self._thread.join(timeout=1.0)
+    elapsed = time.monotonic() - self._t0
+    if elapsed < 1.0 or not self._samples:
+      return
+    total = sum(self._samples.values())
+    top = "".join(
+      f"\n  {count * self._poll_s:5.2f}s ({100.0 * count / total:4.1f}%) {site}"
+      for site, count in self._samples.most_common(self._report_top)
+    )
+    log = cloudlog.warning if elapsed < 5.0 else cloudlog.error
+    log(f"{self._name} took {elapsed:.1f}s ({self._kicks} watchdog kicks). "
+        f"Main thread spent it here:{top}")

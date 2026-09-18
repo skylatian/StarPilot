@@ -6,7 +6,7 @@ from openpilot.system.hardware import TICI
 from openpilot.common.realtime import Priority, config_realtime_process, set_core_affinity
 from openpilot.common.watchdog import kick_watchdog
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.selfdrive.ui.stall_monitor import UIStallMonitor
+from openpilot.selfdrive.ui.stall_monitor import StartupGuard, UIStallMonitor
 from openpilot.selfdrive.ui.ui_state import ui_state
 
 BIG_UI = gui_app.big_ui()
@@ -57,15 +57,18 @@ def main():
     kick_watchdog()
     stall_monitor.progress("ui.before_layout_init")
     screenshot_tour = None
-    if BIG_UI:
-      from openpilot.selfdrive.ui.layouts.main import MainLayout
-      main_layout = MainLayout()
-      if os.getenv("UI_SCREENSHOT_DIR"):
-        from openpilot.selfdrive.ui.screenshot_tour import ScreenshotTour
-        screenshot_tour = ScreenshotTour(main_layout, os.environ["UI_SCREENSHOT_DIR"])
-    else:
-      from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
-      MiciMainLayout()
+    # Layout construction is one uninterruptible block with no chance to kick the
+    # watchdog, and on device it runs 5-10s against a 10s timeout -- see StartupGuard.
+    with StartupGuard("ui.layout_init"):
+      if BIG_UI:
+        from openpilot.selfdrive.ui.layouts.main import MainLayout
+        main_layout = MainLayout()
+        if os.getenv("UI_SCREENSHOT_DIR"):
+          from openpilot.selfdrive.ui.screenshot_tour import ScreenshotTour
+          screenshot_tour = ScreenshotTour(main_layout, os.environ["UI_SCREENSHOT_DIR"])
+      else:
+        from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
+        MiciMainLayout()
     stall_monitor.progress("ui.after_layout_init")
     stall_monitor.set_context(_stall_context())
     kick_watchdog()
