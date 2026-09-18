@@ -5549,15 +5549,18 @@ class AetherMultiSelectTile(AetherTile):
                           max_w - 26, val_size, align_center=False, color=val_color)
 
 SEGMENT_FACE_RADIUS_PX = 22.0  # radius_px is twice the visible corner radius: 11 px corners on each tab
-SEGMENT_INNER_PAD = 7
+SEGMENT_INNER_PAD = 8
+SEGMENT_GAP = 8
+# The track is a solid plate, not an outline. An outline here would be a second curve 8 px outside the
+# selected tab's curve; at these alphas both read as faint ghost arcs with mismatched radii.
+SEGMENT_SHELL_FILL = rl.Color(255, 255, 255, 16)
 
 
 def draw_segmented_shell(rect: rl.Rectangle, style: PanelStyle = DEFAULT_PANEL_STYLE):
-  """Container behind an AetherSegmentedControl. Its corners are concentric with the tabs inside
-  (tab corner + inner padding = 18 px, the toggle corner radius)."""
+  """Track behind an AetherSegmentedControl. Fill only, with corners concentric with the tabs inside
+  (tab corner 11 px + inner padding 8 px = 19 px)."""
   radius_px = SEGMENT_FACE_RADIUS_PX + SEGMENT_INNER_PAD * 2
-  draw_rounded_fill(rect, style.surface_fill, radius_px=radius_px)
-  draw_rounded_stroke(rect, style.surface_border, radius_px=radius_px)
+  draw_rounded_fill(rect, SEGMENT_SHELL_FILL, radius_px=radius_px)
 
 
 class AetherSegmentedControl(Widget):
@@ -5670,7 +5673,7 @@ class AetherSegmentedControl(Widget):
       draw_soft_card(rect, rl.Color(255, 255, 255, 4), rl.Color(255, 255, 255, 14))
 
     inner_pad = 6 if self._compact else SEGMENT_INNER_PAD
-    gap = 6 if self._compact else 9
+    gap = 6 if self._compact else SEGMENT_GAP
     inner_rect = rl.Rectangle(rect.x + inner_pad, rect.y + inner_pad, rect.width - inner_pad * 2, rect.height - inner_pad * 2)
     option_w = (inner_rect.width - max(0, len(self._options) - 1) * gap) / max(1, len(self._options))
     has_status = any(str(_resolve_value(status, "")) for status in self._statuses)
@@ -5685,18 +5688,21 @@ class AetherSegmentedControl(Widget):
 
       if self._style is not None:
         accent = self._style.accent
-        fill = mix_colors(rl.Color(18, 22, 28, 255), accent, 0.16, alpha=255) if is_active else rl.Color(255, 255, 255, 3)
-        border = with_alpha(accent, 72) if is_active else rl.Color(255, 255, 255, 8)
+        fill = mix_colors(rl.Color(18, 22, 28, 255), accent, 0.16, alpha=255)
+        border = with_alpha(accent, 72)
         title_color = accent if is_active else AetherListColors.SUBTEXT
         status_color = mix_colors(accent, AetherListColors.HEADER, 0.4) if is_active else AetherListColors.MUTED
       else:
-        fill = rl.Color(255, 255, 255, 12) if is_active else rl.Color(255, 255, 255, 3)
-        border = rl.Color(255, 255, 255, 30) if is_active else rl.Color(255, 255, 255, 8)
+        fill = rl.Color(255, 255, 255, 12)
+        border = rl.Color(255, 255, 255, 30)
         title_color = AetherListColors.HEADER if is_active else AetherListColors.SUBTEXT
         status_color = AetherListColors.MUTED
 
-      draw_rounded_fill(face_rect, fill, radius_px=SEGMENT_FACE_RADIUS_PX)
-      draw_rounded_stroke(face_rect, border, radius_px=SEGMENT_FACE_RADIUS_PX)
+      # Only the selected tab draws a pill. An unselected tab at these alphas is invisible as a surface
+      # but its 1 px outline still reads as a stray arc against the track's corner.
+      if is_active:
+        draw_rounded_fill(face_rect, fill, radius_px=SEGMENT_FACE_RADIUS_PX)
+        draw_rounded_stroke(face_rect, border, radius_px=SEGMENT_FACE_RADIUS_PX)
 
       label = str(_resolve_value(option, ""))
       status = str(_resolve_value(self._statuses[i], ""))

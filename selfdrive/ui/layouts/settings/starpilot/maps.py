@@ -30,6 +30,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   draw_busy_ring,
   draw_empty_state_card,
   draw_list_group_shell,
+  draw_segmented_shell,
   draw_metric_strip,
   draw_section_header,
   draw_selection_list_row,
@@ -196,6 +197,7 @@ class MapsManagerView(PanelManagerView):
     # 2. Pinned Source Segmented Control ([ U.S. States & Regions | Other Countries ])
     seg_y = scroll_rect.y + STATUS_CARD_HEIGHT + HEADER_GAP
     seg_rect = rl.Rectangle(scroll_rect.x + BROWSER_INSET, seg_y, content_width - BROWSER_INSET * 2, SEGMENTED_CONTROL_HEIGHT)
+    draw_segmented_shell(seg_rect, style=PANEL_STYLE)
     self._source_segmented_control.render(seg_rect)
 
     # 3. Pinned Master Section Header
