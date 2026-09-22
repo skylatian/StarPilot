@@ -63,7 +63,12 @@ class DeveloperLayout(Widget):
   def __init__(self):
     super().__init__()
     self._params = Params()
-    self._params.put_bool("LongitudinalManeuverMode", False)
+    # Clear the maneuver mode on UI start, but only when it is actually set. Every
+    # Params::put takes a global flock on /data/params and two fsyncs, and this runs
+    # inside MainLayout()'s eager panel construction, which is measured against the 10s
+    # UI watchdog -- StartupGuard samples caught this exact line owning whole seconds.
+    if self._params.get_bool("LongitudinalManeuverMode"):
+      self._params.put_bool("LongitudinalManeuverMode", False)
 
     # Build items and keep references for callbacks/state updates
     self._adb_toggle = toggle_item(

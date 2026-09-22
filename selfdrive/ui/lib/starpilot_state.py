@@ -102,7 +102,12 @@ class StarPilotState:
             self.car_state.isVolt = False
 
         if fallback_model:
-            self.params.put("CarModel", fallback_model)
+            # fallback_model is often params.get("CarModel") itself, so this used to write
+            # the same string back on every startup. Each Params::put is a global flock on
+            # /data/params plus two fsyncs, and this runs inside the eager panel construction
+            # that the 10s UI watchdog is timing -- StartupGuard sampled this line at 1.5s.
+            if fallback_model != self.params.get("CarModel"):
+                self.params.put("CarModel", fallback_model)
             self.car_state.isJeep = fallback_model.startswith("JEEP_")
 
         if not starpilot_toggles:

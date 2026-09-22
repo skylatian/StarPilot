@@ -32,6 +32,16 @@ class UIStallMonitor:
     self._hitch_report_interval_s = max(self._poll_s, float(os.getenv("UI_HITCH_REPORT_INTERVAL", "300")))
     self._hitch_report_min_count = max(1, int(os.getenv("UI_HITCH_REPORT_MIN_COUNT", "3")))
     self._hitch_log_interval_s = max(0.0, float(os.getenv("UI_HITCH_LOG_INTERVAL", "10")))
+
+    # A stall parked inside a native graphics call is the display/GPU block, not a wedged
+    # loop -- see the GPU guard in _run(). Kick in from below the 10s watchdog so there is
+    # room to act, and stop kicking after _gpu_guard_max_s so a genuine hang still dies.
+    self._gpu_guard_enabled = os.getenv("UI_GPU_GUARD", "1") == "1"
+    self._gpu_guard_after_s = float(os.getenv("UI_GPU_GUARD_AFTER", "3"))
+    self._gpu_guard_max_s = float(os.getenv("UI_GPU_GUARD_MAX", "60"))
+    self._gpu_guard_kicks = 0
+    self._gpu_guard_active = False
+    self._gpu_guard_gave_up = False
     self._dump_dir = _default_dump_dir()
     self._main_thread_id = threading.get_ident()
 
@@ -133,9 +143,57 @@ class UIStallMonitor:
         dump_path = self._write_dump(dump)
         self._report_stall(dump, dump_path, phase, stalled_for_s, phase_for_s, preview=preview)
 
+      self._service_gpu_guard(stalled_for_s, phase)
+
       hitch_report = self._take_hitch_report(now)
       if hitch_report is not None:
         self._report_hitches(hitch_report)
+
+  def _service_gpu_guard(self, stalled_for_s: float, phase: str) -> None:
+    """Keep the watchdog alive while the main thread is blocked inside a native GL call.
+
+    Manager SIGKILLs `ui` when its loop has not kicked for UI_WATCHDOG_MAX_DT (10s), and
+    the kick lives inside the render loop -- so any render stall past 10s restarts the
+    process, costing ~8s of layout init and the user's place in the UI. Measured on device
+    2026-09-18: rl.end_drawing() blocked 4.7s and the next frame's rl.draw_circle() blocked
+    5.2s back to back, and the watchdog killed it at dt=10.312.
+
+    Those stalls also happen under the Qt UI on this device, which does not restart nearly
+    as often -- so the stall itself is a platform (display/GPU) problem, while the restart
+    loop is ours. A process blocked in eglSwapBuffers is not wedged; it is waiting on the
+    GPU and will come back. Kick for it, and let everything else die exactly as before:
+    a stall in our own Python code never reaches this guard's kick path.
+    """
+    if not self._gpu_guard_enabled:
+      return
+
+    if stalled_for_s < self._gpu_guard_after_s:
+      # Loop is healthy (or only briefly behind) -- reset for the next stall.
+      if self._gpu_guard_active:
+        cloudlog.warning(f"{self._name} gpu guard released after {self._gpu_guard_kicks} kicks")
+      self._gpu_guard_active = False
+      self._gpu_guard_gave_up = False
+      self._gpu_guard_kicks = 0
+      return
+
+    where = self._main_thread_in_native_gfx()
+    if where is None:
+      # Stalled, but not in a graphics call. That is a real hang -- do not mask it.
+      return
+
+    if stalled_for_s >= self._gpu_guard_max_s:
+      if not self._gpu_guard_gave_up:
+        self._gpu_guard_gave_up = True
+        cloudlog.error(f"{self._name} gpu guard gave up after {stalled_for_s:.1f}s in {where} (phase={phase}); letting the watchdog fire")
+      return
+
+    if not self._gpu_guard_active:
+      self._gpu_guard_active = True
+      cloudlog.error(f"{self._name} gpu stall: main thread blocked {stalled_for_s:.1f}s in {where} (phase={phase}); holding off the watchdog")
+
+    from openpilot.common.watchdog import kick_watchdog
+    kick_watchdog()
+    self._gpu_guard_kicks += 1
 
   def _report_stall(self, dump: str, dump_path: Path | None, phase: str, stalled_for_s: float, phase_for_s: float,
                     preview: str | None = None) -> None:
@@ -264,6 +322,36 @@ class UIStallMonitor:
 
     return "".join(line if line.endswith("\n") else f"{line}\n" for line in lines)
 
+  # Frames whose innermost Python entry means "we called into native graphics and it has
+  # not come back". pyray wraps every raylib entry point, so a blocked eglSwapBuffers or a
+  # blocked GPU submit leaves the wrapper as the top Python frame -- that is exactly what
+  # the 2026-09-18 dumps showed (pyray/__init__.py:94 in wrapped_func, inside draw_circle).
+  _NATIVE_GFX_MARKERS = ("/pyray/", "/raylib/", "_raylib_cffi")
+
+  def _main_thread_in_native_gfx(self, frames: dict[int, Any] | None = None) -> str | None:
+    """Return a description when the main thread is parked in a native graphics call.
+
+    Only the innermost frame counts. A GL call that is merely somewhere up the stack has
+    already returned; what matters is whether the thread is sitting in one right now.
+    """
+    frames = frames if frames is not None else sys._current_frames()
+    frame = frames.get(self._main_thread_id)
+    if frame is None:
+      return None
+    path = frame.f_code.co_filename
+    if not any(marker in path for marker in self._NATIVE_GFX_MARKERS):
+      return None
+    # Name our own call site, which is the frame below the wrapper, so the log says
+    # "draw_circle in aethergrid" rather than just "wrapped_func".
+    caller = frame.f_back
+    while caller is not None:
+      cpath = caller.f_code.co_filename
+      if "/openpilot/" in cpath and "site-packages" not in cpath:
+        rel = cpath.split("/openpilot/", 1)[-1]
+        return f"{frame.f_code.co_name} <- {rel}:{caller.f_lineno} in {caller.f_code.co_name}"
+      caller = caller.f_back
+    return frame.f_code.co_name
+
   def _main_thread_preview(self, frames: dict[int, Any] | None = None) -> str:
     frames = frames if frames is not None else sys._current_frames()
     frame = frames.get(self._main_thread_id)
@@ -349,8 +437,7 @@ class StartupGuard:
         self._kicks += 1
       elif not self._gave_up:
         self._gave_up = True
-        cloudlog.error(f"{self._name} startup guard gave up after {self._max_grace_s:.0f}s; "
-                       f"letting the watchdog fire. main thread at: {sample}")
+        cloudlog.error(f"{self._name} startup guard gave up after {self._max_grace_s:.0f}s; letting the watchdog fire. main thread at: {sample}")
 
   def __enter__(self) -> "StartupGuard":
     self._t0 = time.monotonic()
@@ -369,5 +456,4 @@ class StartupGuard:
       for site, count in self._samples.most_common(self._report_top)
     )
     log = cloudlog.warning if elapsed < 5.0 else cloudlog.error
-    log(f"{self._name} took {elapsed:.1f}s ({self._kicks} watchdog kicks). "
-        f"Main thread spent it here:{top}")
+    log(f"{self._name} took {elapsed:.1f}s ({self._kicks} watchdog kicks). Main thread spent it here:{top}")

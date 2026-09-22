@@ -307,6 +307,11 @@ def draw_text_fit_common(
 
 def draw_rounded_fill(rect: rl.Rectangle, color: rl.Color, radius_px: float = TILE_RADIUS_PX, segments: int | None = None,
                       max_roundness: float = 0.5):
+  # A fully transparent fill draws nothing but still costs a CFFI call and a batched
+  # 28-segment rounded rect. draw_hud_background's bloom loop fades its four layers to
+  # alpha 0 on an unglowing tile, so on a grid of them this is most of the submits.
+  if color.a <= 0:
+    return
   snapped = snap_rect(rect)
   rl.draw_rectangle_rounded(snapped, _roundness_for(snapped, radius_px, max_roundness), segments or _segments_for(snapped, radius_px), color)
 
@@ -321,6 +326,8 @@ def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1,
   # it, and then its own fill edge. That reads as two mismatched edges per box, and the uneven offset makes
   # the border look off-center on its own fill. Pull the outline in by a pixel, shrinking its arc to match,
   # so the border and the fill share an edge.
+  if color.a <= 0:
+    return
   snapped = snap_rect(rect)
   inset = min(STROKE_INSET, snapped.width / 2, snapped.height / 2)
   stroke_rect = rl.Rectangle(snapped.x + inset, snapped.y + inset, snapped.width - inset * 2, snapped.height - inset * 2)

@@ -94,3 +94,60 @@ def test_stall_report_uses_captured_stack_preview(monkeypatch, tmp_path):
                         preview="main_thread_stack:\ncaptured before recovery")
 
   assert report["extras"]["main_thread_stack"] == "main_thread_stack:\ncaptured before recovery"
+
+
+def _frame_in(filename):
+  """A real frame object whose code lives in `filename`, for the native-GL detector."""
+  src = "def f():\n  import sys\n  return sys._getframe()\n"
+  ns: dict = {}
+  exec(compile(src, filename, "exec"), ns)
+  return ns["f"]()
+
+
+def test_gpu_guard_holds_off_watchdog_only_for_native_gl_stalls(monkeypatch):
+  """A stall inside a GL call must not restart the UI; a wedged Python loop still must.
+
+  Measured on device 2026-09-18: rl.end_drawing() blocked 4.7s and the next frame's
+  rl.draw_circle() blocked 5.2s, and manager SIGKILLed ui at dt=10.312. Those same
+  stalls happen under the Qt UI, which does not restart nearly as often, so the stall
+  is a platform problem while the restart loop is ours.
+  """
+  kicks = []
+  monkeypatch.setattr(stall_monitor.cloudlog, "error", lambda *_a, **_k: None)
+  monkeypatch.setattr(stall_monitor.cloudlog, "warning", lambda *_a, **_k: None)
+
+  import sys as _sys
+  import types as _types
+  fake = _types.ModuleType("openpilot.common.watchdog")
+  fake.kick_watchdog = lambda: kicks.append(1)
+  monkeypatch.setitem(_sys.modules, "openpilot.common.watchdog", fake)
+
+  monitor = stall_monitor.UIStallMonitor("raylib_ui")
+  monitor._gpu_guard_after_s = 1.0
+  monitor._gpu_guard_max_s = 10.0
+
+  gl_frame = _frame_in("/venv/lib/python3.12/site-packages/pyray/__init__.py")
+  py_frame = _frame_in("/data/openpilot/openpilot/selfdrive/ui/layouts/main.py")
+
+  # Stalled in a native GL call -> kick, so the watchdog does not fire.
+  monkeypatch.setattr(stall_monitor.sys, "_current_frames",
+                      lambda: {monitor._main_thread_id: gl_frame})
+  monitor._service_gpu_guard(5.0, "gui_app.before_end_drawing")
+  assert len(kicks) == 1
+
+  # Stalled in our own Python -> a genuine hang, must be left to die.
+  monkeypatch.setattr(stall_monitor.sys, "_current_frames",
+                      lambda: {monitor._main_thread_id: py_frame})
+  monitor._service_gpu_guard(5.0, "gui_app.before_widget_render")
+  assert len(kicks) == 1
+
+  # Below the engage threshold -> nothing, whatever the thread is doing.
+  monkeypatch.setattr(stall_monitor.sys, "_current_frames",
+                      lambda: {monitor._main_thread_id: gl_frame})
+  monitor._service_gpu_guard(0.5, "gui_app.before_end_drawing")
+  assert len(kicks) == 1
+
+  # Past the cap -> stop covering for it and let the watchdog fire.
+  monitor._service_gpu_guard(11.0, "gui_app.before_end_drawing")
+  assert len(kicks) == 1
+  assert monitor._gpu_guard_gave_up
