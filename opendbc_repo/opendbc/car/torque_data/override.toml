@@ -20,6 +20,11 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 # Toyota LTA also has torque
 "TOYOTA_RAV4_TSS2_2023" = [nan, 3.0, nan]
 "TOYOTA_COROLLA" = [4.05, 1.84, 0.10]
+# Retrofit: 2016 EPS motor driving a hydraulic rack through a swapped bearing. The column has
+# real breakaway stiction, but the stock 0.10 friction lands as a near-square-wave near center
+# (it saturates within ~2 deg of angle error at highway speed) and drives a stick-slip limit
+# cycle in gentle turns. Lower coefficient + the steeringAngleDeadzoneDeg set in interface.py.
+"TOYOTA_COROLLA_RETROFIT" = [4.05, 1.84, 0.06]
 "TOYOTA_RAV4_PRIME" = [1.7, 2.0, 0.14]
 
 # Tesla angle based controllers

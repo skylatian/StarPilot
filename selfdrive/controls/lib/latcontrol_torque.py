@@ -109,6 +109,7 @@ class LatControlTorque(LatControl):
     self.steer_release_i_decay = 0.8
     self.prev_steering_pressed = False
     self.prev_output_torque = 0.0
+    self.retrofit_kd = 0.0
     self.debug_counter = 0
     self.prev_desired_lateral_accel = 0.0
     self.starpilot_lateral_state = custom.StarPilotLateralState.new_message()
@@ -393,6 +394,18 @@ class LatControlTorque(LatControl):
           center_taper_speed_width=max(_g('retrofit_tune_center_taper_speed_width', 2.5), 0.1),
         )
         retrofit_center_taper = get_retrofit_center_taper_scale(setpoint, CS.vEgo, retrofit_tune)
+
+        # Derivative (damping) gain. LatControlTorque otherwise runs with k_d == 0 on every car:
+        # PIDController defaults k_d to 0. and nothing ever overrides it, so measurement_rate is
+        # computed, filtered and clipped above, handed to the PID as error_rate, and multiplied by
+        # zero. Nothing in the loop opposes the rate of the measured response. That is fine on a
+        # low-stiction electric rack; this column sits still under rising torque, breaks free, and
+        # overshoots with no rate term to anticipate the approach. Live (no offroad cycle) so it
+        # can be swept on the road, and 0.0 -- the default -- is bit-for-bit stock behavior.
+        retrofit_kd = max(_g('retrofit_tune_kd', 0.0), 0.0)
+        if retrofit_kd != self.retrofit_kd:
+          self.retrofit_kd = retrofit_kd
+          self.pid._k_d = [[0], [retrofit_kd]]
       else:
         retrofit_tune = RETROFIT_TUNE_DEFAULTS
         retrofit_center_taper = 1.0

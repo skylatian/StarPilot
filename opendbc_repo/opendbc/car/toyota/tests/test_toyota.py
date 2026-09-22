@@ -105,6 +105,27 @@ class TestToyotaInterfaces:
     assert default_params.lateralTuning.torque.steeringAngleDeadzoneDeg == pytest.approx(0.3)
     assert forced_params.lateralTuning.torque.steeringAngleDeadzoneDeg == pytest.approx(0.3)
 
+  def test_corolla_retrofit_friction_and_center_deadzone(self):
+    # The retrofit column has real breakaway stiction. It gets its own torque entry (a lower
+    # friction coefficient than stock TOYOTA_COROLLA) plus a non-zero center deadzone, so the
+    # friction term stops flipping sign on every zero crossing of the lateral accel error.
+    params = CarInterface.get_params(
+      CAR.TOYOTA_COROLLA_RETROFIT, {bus: {} for bus in range(8)}, [], False, False, False,
+      SimpleNamespace(force_torque_controller=False, nnff=False, nnff_lite=False),
+    )
+    stock = CarInterface.get_params(
+      CAR.TOYOTA_COROLLA, {bus: {} for bus in range(8)}, [], False, False, False,
+      SimpleNamespace(force_torque_controller=False, nnff=False, nnff_lite=False),
+    )
+
+    assert params.lateralTuning.which() == "torque"
+    assert params.lateralTuning.torque.steeringAngleDeadzoneDeg > 0.0
+    assert params.lateralTuning.torque.friction < stock.lateralTuning.torque.friction
+    # The sigmoid torque map in interface.py is anchored to this factor; keep it aligned.
+    assert params.lateralTuning.torque.latAccelFactor == pytest.approx(stock.lateralTuning.torque.latAccelFactor)
+    # Stock Corolla must be untouched by the retrofit entry.
+    assert stock.lateralTuning.torque.steeringAngleDeadzoneDeg == pytest.approx(0.0)
+
   def test_prius_tss2_eps_retrofit_uses_legacy_body_and_eps_scale(self):
     params = CarInterface.get_params(
       CAR.TOYOTA_PRIUS_RETROFIT,

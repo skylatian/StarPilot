@@ -75,6 +75,17 @@ def test_specs_cover_every_retrofit_tune_param_with_matching_defaults():
     assert pt.y_min <= pt.default <= pt.y_max, pt.key
 
 
+def test_steer_angle_deadzone_default_matches_car_interface():
+  # The deadzone default lives in two places: the param table (what the UI slider starts from)
+  # and interface.py (the fallback when the key is absent from a stale compiled table).
+  from opendbc.car.toyota.interface import RETROFIT_STEER_ANGLE_DEADZONE_DEG
+
+  keys_src = open(f"{BASEDIR}/common/params_keys.h").read()
+  defaults = dict(re.findall(r'\{"(Retrofit[A-Za-z0-9_]+)", \{PERSISTENT, FLOAT, "([^"]*)"', keys_src))
+  assert math.isclose(float(defaults["RetrofitSteerAngleDeadzone"]), RETROFIT_STEER_ANGLE_DEADZONE_DEG)
+  assert RETROFIT_STEER_ANGLE_DEADZONE_DEG > 0.0
+
+
 def test_layout_has_every_page_and_reenters_sub_pages():
   layout = retrofit.StarPilotRetrofitLayout()
   assert set(layout._sub_panels) == {"tuning", "nonlinear", "nonlinear_advanced", "tune", "tune_kp", "tune_ff", "tune_turn", "tune_center"}

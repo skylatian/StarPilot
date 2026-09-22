@@ -27,6 +27,9 @@ def _sigmoid(x: float) -> float:
 
 RETROFIT_BASE_LAT_ACCEL_FACTOR = 4.05
 
+# Default center deadzone (deg) for the retrofit friction term; tunable via RetrofitSteerAngleDeadzone.
+RETROFIT_STEER_ANGLE_DEADZONE_DEG = 0.3
+
 def _user_params_to_abcd(strength: float, saturation: float, bias: float):
   """Convert user-facing params to [a, b, c, d] for left and right.
 
@@ -239,6 +242,15 @@ class CarInterface(CarInterfaceBase):
     # Retrofit: no radar hardware installed
     if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
       ret.radarUnavailable = True
+
+      # Center deadzone for the friction (stiction) compensation term. get_friction() runs its
+      # input through apply_center_deadzone(); with a zero deadzone the +/-friction term flips
+      # sign the instant the lateral accel error crosses zero, which on this column (real
+      # breakaway stiction, junkyard SAS with a live offset correction) turns every small
+      # correction into a stick-slip limit cycle. Upstream applies the same 0.3 deg treatment
+      # to the bad-angle-sensor Prius. Frozen into CarParams, so changes need an offroad cycle.
+      ret.lateralTuning.torque.steeringAngleDeadzoneDeg = Params().get_float(
+        "RetrofitSteerAngleDeadzone", default=RETROFIT_STEER_ANGLE_DEADZONE_DEG)
 
     # Since we don't yet parse radar on TSS2/TSS-P radar-based ACC cars, gate
     # longitudinal behind the alpha-long toggle.

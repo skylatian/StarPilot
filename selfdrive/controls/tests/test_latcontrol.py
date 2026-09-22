@@ -232,6 +232,59 @@ class TestLatControl:
     assert debug_state.frictionJerkDeadzone > 0.0
     assert debug_state.lowSpeedFactor > 0.0
 
+  def _drive_torque(self, controller, VM, CS, params, toggles, angles, desired_curvature):
+    out = 0.0
+    for angle in angles:
+      CS.steeringAngleDeg = angle
+      out, _, _ = controller.update(True, CS, VM, params, False, desired_curvature, False, 0.2, None, None, toggles)
+    return out
+
+  def test_retrofit_damping_gain_defaults_off_and_is_live(self):
+    controller, VM, CS, params, toggles = self._build_torque_controller(TOYOTA.TOYOTA_COROLLA_RETROFIT)
+
+    # Default is no damping: stock openpilot leaves k_d at zero, and so do we until asked.
+    controller.update(True, CS, VM, params, False, -0.004, False, 0.2, None, None, toggles)
+    assert controller.pid.k_d == 0.0
+    assert controller.pid.d == 0.0
+
+    # Live: applied without rebuilding the controller (no offroad cycle needed).
+    toggles.retrofit_tune_kd = 0.25
+    controller.update(True, CS, VM, params, False, -0.004, False, 0.2, None, None, toggles)
+    assert controller.pid.k_d == pytest.approx(0.25)
+
+  def test_retrofit_damping_opposes_measured_turn_rate(self):
+    # A column that sticks then breaks free arrives at the target fast. With damping the
+    # controller must back off while it is still closing, not after it has gone past.
+    # Rising steering angle drives the measurement negative, so aim at a negative curvature:
+    # the car is then closing on the target and damping must reduce the command.
+    angles = [1.0 + 0.3 * i for i in range(30)]
+    curvature = -0.004
+
+    def run(kd):
+      controller, VM, CS, params, toggles = self._build_torque_controller(TOYOTA.TOYOTA_COROLLA_RETROFIT)
+      CS.vEgo = 15.0
+      if kd:
+        toggles.retrofit_tune_kd = kd
+      out = self._drive_torque(controller, VM, CS, params, toggles, angles, curvature)
+      return controller, out
+
+    undamped, out_undamped = run(0.0)
+    damped, out_damped = run(0.3)
+
+    # Unsaturated, or the comparison below is meaningless.
+    assert abs(out_undamped) < 1.0
+    # The measurement is moving toward the target, so the damping term opposes the command.
+    assert damped.pid.d > 0.0
+    assert abs(out_damped) < abs(out_undamped)
+    assert undamped.pid.d == 0.0
+
+  def test_retrofit_damping_does_not_affect_other_cars(self):
+    controller, VM, CS, params, toggles = self._build_torque_controller(TOYOTA.TOYOTA_COROLLA)
+    toggles.retrofit_tune_kd = 0.5
+    controller.update(True, CS, VM, params, False, -0.004, False, 0.2, None, None, toggles)
+    assert controller.pid.k_d == 0.0
+    assert controller.pid.d == 0.0
+
   @staticmethod
   def _build_torque_controller(car_name, force_torque=False):
     CarInterface = interfaces[car_name]

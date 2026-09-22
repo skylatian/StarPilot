@@ -85,6 +85,10 @@ FF_PARAMS = [
 ]
 
 TURN_PARAMS = [
+  TuneParam("RetrofitTuneKD", tr_noop("Damping (KD)"), 0.0, 0.0, 2.0, 0.05,
+            tr_noop("Opposes how fast the car is already turning, so the controller eases off before it reaches the target " +
+                    "instead of after. This is the knob for a column that sticks, breaks free and then overshoots. " +
+                    "0 = off (stock openpilot has no damping at all). Try 0.10-0.30; too high feels heavy and vague.")),
   TuneParam("RetrofitTuneUnwindBoost", tr_noop("Unwind Boost"), 0.0, 0.0, 1.0, 0.05,
             tr_noop("Actively pushes the wheel back toward center when exiting a turn, for cars with weak self-centering. " +
                     "Start at 0.15-0.30 and increase if the car still feels lazy returning to straight.")),
@@ -651,6 +655,27 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
 
   def _build_view(self):
     sections = [
+      SettingSection(tr_noop("Steering"), [
+        SettingRow(
+          "RetrofitSteerAngleDeadzone",
+          "value",
+          tr_noop("Center Deadzone"),
+          subtitle=tr_noop(
+            "Blind spot around straight-ahead for the friction compensation, so it stops flipping " +
+            "sign on tiny corrections and shaking the wheel. Raise if it hunts on the highway. " +
+            "Needs an offroad cycle."
+          ),
+          get_value=lambda: f"{self._params.get_float('RetrofitSteerAngleDeadzone'):.1f}°",
+          on_click=lambda: self._show_slider(
+            "RetrofitSteerAngleDeadzone",
+            0.0,
+            2.0,
+            step=0.1,
+            unit="°",
+            value_type="float",
+          ),
+        ),
+      ]),
       SettingSection(tr_noop("Pedal"), [
         SettingRow(
           "RetrofitPedalOffsetStandstill",
