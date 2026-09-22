@@ -35,18 +35,26 @@ DESCRIPTIONS = {
     "When enabled (default), the device skips source compilation on boot if a prebuilt artifact exists. " +
     "Disable this if you plan to edit code and rebuild on-device."
   ),
+  'rebuild': tr_noop(
+    "Recompile changed code, then reboot. Required after param or panda safety changes when " +
+    "\"Use Prebuilt Binaries\" is off. May reuse cached build artifacts, so it is much faster — try this first."
+  ),
   'full_rebuild': tr_noop(
-    "Clean and rebuild all compiled code, then reboot. Required after param or panda safety changes when " +
-    "\"Use Prebuilt Binaries\" is off. Takes ~20 minutes on Comma 3."
+    "Recompile everything from source, ignoring the build cache, then reboot. Use this when a plain Rebuild " +
+    "did not take effect — e.g. a setting will not apply, or a param is missing from the compiled table. " +
+    "Takes ~20 minutes on Comma 3."
   ),
 }
 
-# --cache-disable is load-bearing: removing .sconsign.dblite only drops scons' local
-# up-to-date decisions, it does not touch the CacheDir (SConstruct). Without it scons
-# recomputes a build signature and, on a cache hit, copies the artifact out of the cache
-# instead of compiling -- so a "rebuild" can write fresh mtimes with stale content. That
-# shipped a params_pyx.so whose key table predated the Retrofit params, and every
-# put_float on one raised UnknownKeyName while reads silently returned 0.0.
+# The difference between these two is the scons CacheDir (SConstruct), and it matters:
+# removing .sconsign.dblite drops only scons' local up-to-date decisions, NOT the cache.
+# Without --cache-disable, scons recomputes a build signature and, on a cache hit, copies
+# the artifact out of the cache instead of compiling it -- so a "rebuild" can write fresh
+# mtimes with stale content. A C3 build once shipped a params_pyx.so whose key table
+# predated the Retrofit params, where every put_float on one raised UnknownKeyName while
+# get_float silently returned 0.0. The cache is what makes REBUILD_CMD quick, so keep it
+# as the default path and reach for FULL_REBUILD_CMD when the artifacts are suspect.
+REBUILD_CMD = "rm -f .sconsign.dblite && scons -j4 2>&1"
 FULL_REBUILD_CMD = "rm -f .sconsign.dblite && scons --cache-disable -j4 2>&1"
 FULL_REBUILD_REBOOT_DELAY = 2.5
 
@@ -83,17 +91,13 @@ class DeveloperLayout(Widget):
       enabled=ui_state.is_offroad,
     )
 
-    # Full Rebuild: clean + rebuild all compiled code, then reboot. Car-agnostic, always available here.
-    self._rebuild_running = False
+    # Rebuild / Full Rebuild: recompile then reboot. Car-agnostic, always available here.
+    # Only one may run at a time; _rebuild_running names which, so status lands on its own row.
+    self._rebuild_running: str | None = None
     self._rebuild_status = ""
     self._rebuild_last_line = ""
-    self._full_rebuild_item = button_item(
-      lambda: tr("Full Rebuild"),
-      lambda: self._rebuild_status or tr("BUILD"),
-      description=lambda: self._rebuild_last_line or tr(DESCRIPTIONS["full_rebuild"]),
-      callback=self._on_full_rebuild,
-      enabled=lambda: ui_state.is_offroad() and not self._rebuild_running,
-    )
+    self._rebuild_item = self._make_rebuild_item("rebuild", tr_noop("Rebuild"), REBUILD_CMD)
+    self._full_rebuild_item = self._make_rebuild_item("full_rebuild", tr_noop("Full Rebuild"), FULL_REBUILD_CMD)
 
     self._joystick_toggle = toggle_item(
       lambda: tr("Joystick Debug Mode"),
@@ -126,6 +130,7 @@ class DeveloperLayout(Widget):
       self._ssh_toggle,
       self._ssh_keys,
       self._use_prebuilt_toggle,
+      self._rebuild_item,
       self._full_rebuild_item,
       self._joystick_toggle,
       self._alpha_long_toggle,
@@ -183,29 +188,41 @@ class DeveloperLayout(Widget):
   def _on_use_prebuilt(self, state: bool):
     self._params.put_bool("UsePrebuilt", state)
 
-  def _on_full_rebuild(self):
-    if self._rebuild_running:
+  def _make_rebuild_item(self, key: str, label: str, cmd: str):
+    return button_item(
+      lambda: tr(label),
+      lambda: self._rebuild_status if self._rebuild_running == key else tr("BUILD"),
+      description=lambda: (self._rebuild_last_line if self._rebuild_running == key and self._rebuild_last_line
+                           else tr(DESCRIPTIONS[key])),
+      callback=lambda: self._on_rebuild(key, cmd),
+      enabled=lambda: ui_state.is_offroad() and self._rebuild_running is None,
+    )
+
+  def _on_rebuild(self, key: str, cmd: str):
+    if self._rebuild_running is not None:
       return
+
+    prompt = (tr("This will recompile everything from source, ignoring the build cache, and reboot. "
+                 "Takes ~20 minutes. Continue?") if key == "full_rebuild"
+              else tr("This will recompile changed code and reboot. Continue?"))
 
     def confirm_callback(result: int):
       if result == DialogResult.CONFIRM:
-        self._start_full_rebuild()
+        self._start_rebuild(key, cmd)
 
-    gui_app.push_widget(ConfirmDialog(
-      tr("This will clean all build artifacts, rebuild from source, and reboot. Continue?"),
-      tr("Rebuild"), callback=confirm_callback))
+    gui_app.push_widget(ConfirmDialog(prompt, tr("Rebuild"), callback=confirm_callback))
 
-  def _start_full_rebuild(self):
-    self._rebuild_running = True
+  def _start_rebuild(self, key: str, cmd: str):
+    self._rebuild_running = key
     self._rebuild_status = tr("Cleaning...")
     self._rebuild_last_line = ""
-    threading.Thread(target=self._full_rebuild_worker, daemon=True).start()
+    threading.Thread(target=self._rebuild_worker, args=(cmd,), daemon=True).start()
 
-  def _full_rebuild_worker(self):
+  def _rebuild_worker(self, cmd: str):
     # Runs off the UI thread; only touches the status strings the list item reads each frame.
     env = dict(os.environ, SCONS_PROGRESS="1")
     try:
-      proc = subprocess.Popen(["bash", "-c", FULL_REBUILD_CMD], cwd=BASEDIR, env=env,
+      proc = subprocess.Popen(["bash", "-c", cmd], cwd=BASEDIR, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
       assert proc.stdout is not None
       for line in proc.stdout:
@@ -223,7 +240,7 @@ class DeveloperLayout(Widget):
       threading.Timer(FULL_REBUILD_REBOOT_DELAY, HARDWARE.reboot).start()
     else:
       self._rebuild_status = f"Build failed (exit {exit_code})"
-      self._rebuild_running = False
+      self._rebuild_running = None
 
   def _on_joystick_debug_mode(self, state: bool):
     self._params.put_bool("JoystickDebugMode", state)

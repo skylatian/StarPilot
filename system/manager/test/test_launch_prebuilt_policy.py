@@ -17,13 +17,20 @@ def test_prebuilt_marker_is_the_only_build_gate():
 DEVELOPER_PANEL = Path(__file__).parents[3] / "selfdrive" / "ui" / "layouts" / "settings" / "developer.py"
 
 
-def test_full_rebuild_button_bypasses_the_scons_cache():
+def test_rebuild_buttons_differ_only_in_cache_use():
   # Dropping .sconsign.dblite only clears scons' local up-to-date decisions; the CacheDir
-  # still serves prebuilt artifacts, so without --cache-disable a "Full Rebuild" can copy
+  # still serves already-built artifacts, so without --cache-disable a rebuild can copy
   # stale objects into place with fresh mtimes (this shipped a params_pyx.so whose key
-  # table predated the Retrofit params).
+  # table predated the Retrofit params). The cache is what makes the plain Rebuild fast,
+  # so keep both: quick by default, --cache-disable when the artifacts are suspect.
   src = DEVELOPER_PANEL.read_text()
-  cmd = re.search(r'FULL_REBUILD_CMD = "([^"]+)"', src)
-  assert cmd, "FULL_REBUILD_CMD not found"
-  assert "--cache-disable" in cmd.group(1)
-  assert "rm -f .sconsign.dblite" in cmd.group(1)
+  quick = re.search(r'^REBUILD_CMD = "([^"]+)"', src, re.M)
+  full = re.search(r'^FULL_REBUILD_CMD = "([^"]+)"', src, re.M)
+  assert quick and full, "REBUILD_CMD / FULL_REBUILD_CMD not found"
+
+  assert "--cache-disable" not in quick.group(1)
+  assert "--cache-disable" in full.group(1)
+  for cmd in (quick.group(1), full.group(1)):
+    assert "rm -f .sconsign.dblite" in cmd
+  # the two must stay otherwise identical, so the only variable is the cache
+  assert full.group(1).replace(" --cache-disable", "") == quick.group(1)
