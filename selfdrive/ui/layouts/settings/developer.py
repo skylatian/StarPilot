@@ -41,7 +41,13 @@ DESCRIPTIONS = {
   ),
 }
 
-FULL_REBUILD_CMD = "rm -f .sconsign.dblite && scons -j4 2>&1"
+# --cache-disable is load-bearing: removing .sconsign.dblite only drops scons' local
+# up-to-date decisions, it does not touch the CacheDir (SConstruct). Without it scons
+# recomputes a build signature and, on a cache hit, copies the artifact out of the cache
+# instead of compiling -- so a "rebuild" can write fresh mtimes with stale content. That
+# shipped a params_pyx.so whose key table predated the Retrofit params, and every
+# put_float on one raised UnknownKeyName while reads silently returned 0.0.
+FULL_REBUILD_CMD = "rm -f .sconsign.dblite && scons --cache-disable -j4 2>&1"
 FULL_REBUILD_REBOOT_DELAY = 2.5
 
 
