@@ -174,3 +174,50 @@ def test_kp_editor_reset_restores_defaults(fake_params):
   editor.reset_defaults()
   assert all(fake_params.store[pt.key] == pt.default for pt in retrofit.KP_POINTS)
   assert editor._values == [pt.default for pt in retrofit.KP_POINTS]
+
+
+class _UnsetParams:
+  """Every key unset, like a fresh install or a newly added param: a bare read returns
+  0.0, return_default=True returns the params_keys.h default — as the real Params does."""
+
+  def __init__(self, table):
+    self.table = table
+
+  def get_float(self, key, return_default=False, default=0.0, **kwargs):
+    return float(self.table[key]) if return_default and key in self.table else default
+
+
+def test_tuning_rows_show_and_open_at_the_table_default_when_unset(monkeypatch):
+  keys_src = open(f"{BASEDIR}/common/params_keys.h").read()
+  table = dict(re.findall(r'\{"(Retrofit[A-Za-z0-9_]+)", \{PERSISTENT, FLOAT, "([^"]*)"', keys_src))
+
+  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
+  page._params = _UnsetParams(table)
+  opened = []
+  monkeypatch.setattr(page, "_show_slider", lambda key, lo, hi, **kw: opened.append((key, lo, hi, kw.get("current_value"))))
+
+  rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
+  for key in ("RetrofitNNFFFrictionAccel", "RetrofitNNFFFrictionJerk", "RetrofitSteerAngleDeadzone", "RetrofitPedalOffsetStandstill"):
+    default = float(table[key])
+    assert default != 0.0, key  # otherwise this row cannot tell the bug from the fix
+    assert f"{default:.1f}" in rows[key].get_value() or f"{default:.2f}" in rows[key].get_value(), key
+    rows[key].on_click()
+    assert opened[-1][0] == key and opened[-1][3] == default, key
+
+
+def test_nnff_friction_rows_open_sliders_matching_the_toggle_range(monkeypatch):
+  # The UI slider range must match the clamp in starpilot_variables, or a value the slider
+  # offers would be silently clamped before it reaches the controller.
+  variables_src = open(f"{BASEDIR}/starpilot/common/starpilot_variables.py").read()
+  clamps = {k: (float(lo), float(hi)) for k, lo, hi in re.findall(
+    r'get_value\("(RetrofitNNFF[A-Za-z]+)", cast=float, default=[0-9.]+, min=([0-9.]+), max=([0-9.]+)\)', variables_src)}
+  assert set(clamps) == {"RetrofitNNFFFrictionAccel", "RetrofitNNFFFrictionJerk"}
+
+  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
+  opened = []
+  monkeypatch.setattr(page, "_show_slider", lambda key, lo, hi, **kw: opened.append((key, lo, hi)))
+  rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
+  for key, (lo, hi) in clamps.items():
+    assert key in rows, key
+    rows[key].on_click()
+    assert opened[-1] == (key, lo, hi)

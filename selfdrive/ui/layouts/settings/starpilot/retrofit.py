@@ -221,6 +221,15 @@ _DRAG = rl.Color(0xFF, 0xA5, 0x00, 255)
 _CURVE_SAMPLES = 140
 
 
+def stored_float(params, key: str) -> float:
+  """Current value of a FLOAT param; a key never written reads its params_keys.h default.
+
+  A bare get_float() returns 0.0 for an unset key, so the row would show 0 and the slider
+  would open at 0 and write it back on confirm — silently replacing the real default.
+  """
+  return params.get_float(key, return_default=True)
+
+
 class _PlotWidget(Widget):
   """Rounded panel with a plot area, axis helpers, and per-page math in ``_draw_plot``.
 
@@ -665,7 +674,7 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
             "sign on tiny corrections and shaking the wheel. Raise if it hunts on the highway. " +
             "Needs an offroad cycle."
           ),
-          get_value=lambda: f"{self._params.get_float('RetrofitSteerAngleDeadzone'):.1f}°",
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitSteerAngleDeadzone'):.1f}°",
           on_click=lambda: self._show_slider(
             "RetrofitSteerAngleDeadzone",
             0.0,
@@ -673,6 +682,47 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
             step=0.1,
             unit="°",
             value_type="float",
+            current_value=stored_float(self._params, "RetrofitSteerAngleDeadzone"),
+          ),
+        ),
+      ]),
+      SettingSection(tr_noop("Neural Feedforward (NNFF only)"), [
+        SettingRow(
+          "RetrofitNNFFFrictionAccel",
+          "value",
+          tr_noop("NNFF Friction: Tracking Error"),
+          subtitle=tr_noop(
+            "How strongly NNFF's friction response reacts to steering that lags the plan. " +
+            "Only does anything with NNFF on (the Controller Tune knobs do nothing under NNFF). " +
+            "1.0 = current behaviour. Raise if the wheel sticks before moving; lower if it hunts. Applies live."
+          ),
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionAccel'):.2f}",
+          on_click=lambda: self._show_slider(
+            "RetrofitNNFFFrictionAccel",
+            0.0,
+            3.0,
+            step=0.05,
+            value_type="float",
+            current_value=stored_float(self._params, "RetrofitNNFFFrictionAccel"),
+          ),
+        ),
+        SettingRow(
+          "RetrofitNNFFFrictionJerk",
+          "value",
+          tr_noop("NNFF Friction: Planned Turn-In"),
+          subtitle=tr_noop(
+            "How much an upcoming turn-in or unwind adds to NNFF's friction response, so the " +
+            "column is already moving when the turn starts. Also feeds NNFF's feedback. " +
+            "NNFF only. 0.4 = stock. Applies live."
+          ),
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionJerk'):.2f}",
+          on_click=lambda: self._show_slider(
+            "RetrofitNNFFFrictionJerk",
+            0.0,
+            3.0,
+            step=0.05,
+            value_type="float",
+            current_value=stored_float(self._params, "RetrofitNNFFFrictionJerk"),
           ),
         ),
       ]),
@@ -684,7 +734,7 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
           subtitle=tr_noop(
             "Low-speed deadband before pedal scaling. Less negative = gas sooner from a stop."
           ),
-          get_value=lambda: f"{self._params.get_float('RetrofitPedalOffsetStandstill'):.2f}m/s²",
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitPedalOffsetStandstill'):.2f}m/s²",
           on_click=lambda: self._show_slider(
             "RetrofitPedalOffsetStandstill",
             -0.5,
@@ -692,6 +742,7 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
             step=0.05,
             unit="m/s²",
             value_type="float",
+            current_value=stored_float(self._params, "RetrofitPedalOffsetStandstill"),
           ),
         ),
       ]),
@@ -926,7 +977,7 @@ class StarPilotRetrofitLayout(_SettingsPage):
             "Corrects a physically misaligned steering angle sensor. " +
             "Set to the raw angle your SAS reports when wheels are straight."
           ),
-          get_value=lambda: f"{self._params.get_float('RetrofitSASOffset'):.0f}°",
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitSASOffset'):.0f}°",
           on_click=lambda: self._show_slider(
             "RetrofitSASOffset",
             -180,
@@ -934,6 +985,7 @@ class StarPilotRetrofitLayout(_SettingsPage):
             step=1,
             unit="°",
             value_type="float",
+            current_value=stored_float(self._params, "RetrofitSASOffset"),
           ),
         ),
         SettingRow(
