@@ -19,7 +19,9 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-from openpilot.starpilot.common.starpilot_variables import NNFF_MODELS_PATH, get_nnff_model_files, get_nnff_substitutes
+from openpilot.common.swaglog import cloudlog
+from openpilot.starpilot.common.starpilot_variables import NNFF_MODELS_PATH, RETROFIT_NNFF_MODELS_PATH, get_nnff_model_files, \
+                                                          get_nnff_substitutes, resolve_retrofit_nnff_model
 
 # At higher speeds (25+mph) we can assume:
 # Lateral acceleration achieved by a specific car correlates to
@@ -131,7 +133,26 @@ def get_lookahead_value(future_values, current_value):
 
   return min(future_values + [current_value], key=abs)
 
+def get_retrofit_nn_model_path() -> tuple[str, str] | None:
+  """(name, path) of the TOYOTA_COROLLA_RETROFIT model to load: RetrofitNNFFModel if set and present, else the newest."""
+  selection = Params().get("RetrofitNNFFModel", encoding="utf-8") or ""
+  name = resolve_retrofit_nnff_model(selection)
+  if name is None:
+    return None
+  if selection and selection != name:
+    cloudlog.warning(f"RetrofitNNFFModel {selection!r} not found, using newest {name!r}")
+  return name, os.path.join(RETROFIT_NNFF_MODELS_PATH, f"{name}.json")
+
 def get_nn_model(car, eps_firmware) -> FluxModel | None:
+  if car == TOYOTA_CAR.TOYOTA_COROLLA_RETROFIT:
+    retrofit_model = get_retrofit_nn_model_path()
+    if retrofit_model is not None:
+      name, model_path = retrofit_model
+      # NNFFModelName drives the onroad "NNFF loaded with:" alert, so it names the version that runs
+      Params().put("NNFFModelName", f"Corolla Retrofit {name}")
+      cloudlog.info(f"Loaded retrofit NNFF model {name}")
+      return FluxModel(model_path)
+
   model_path = get_nn_model_path(car, eps_firmware)
   if model_path:
     Params().put("NNFFModelName", car.replace("_", " "))

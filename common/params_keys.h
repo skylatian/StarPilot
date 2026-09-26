@@ -623,6 +623,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RecoveryPower", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
     {"RetrofitNNFFFrictionAccel", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
     {"RetrofitNNFFFrictionJerk", {PERSISTENT, FLOAT, "0.4", "0.4", 2}},
+    {"RetrofitNNFFModel", {PERSISTENT, STRING, "", "", 2}},
     {"RetrofitNonlinearSteering", {PERSISTENT, BOOL, "0", "0", 2}},
     {"RetrofitNonlinearStrength", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"RetrofitNonlinearSaturation", {PERSISTENT, FLOAT, "2.5", "2.5", 2}},

@@ -11,8 +11,10 @@ from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult, Widget
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 
 from openpilot.selfdrive.ui.layouts.settings.starpilot.panel import _SettingsPage
+from openpilot.starpilot.common.starpilot_variables import get_retrofit_nnff_models
 from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AetherListColors,
   AetherSettingsView,
@@ -228,6 +230,21 @@ def stored_float(params, key: str) -> float:
   would open at 0 and write it back on confirm — silently replacing the real default.
   """
   return params.get_float(key, return_default=True)
+
+
+def nnff_newest_label(models: list[str]) -> str:
+  return f"{tr('Newest')} ({models[0]})"
+
+
+def nnff_model_label(selection: str, models: list[str]) -> str:
+  """What the NNFF Model row shows. Mirrors resolve_retrofit_nnff_model(): empty = newest, a missing pin falls back."""
+  if not models:
+    return tr("None installed")
+  if not selection:
+    return nnff_newest_label(models)
+  if selection in models:
+    return selection
+  return f"{selection} {tr('missing')}, {tr('using')} {models[0]}"
 
 
 class _PlotWidget(Widget):
@@ -688,6 +705,18 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
       ]),
       SettingSection(tr_noop("Neural Feedforward (NNFF only)"), [
         SettingRow(
+          "RetrofitNNFFModel",
+          "value",
+          tr_noop("NNFF Model"),
+          subtitle=tr_noop(
+            "Which trained model NNFF drives with. Newest follows new versions as they are added; " +
+            "picking one pins it. Needs an offroad cycle."
+          ),
+          get_value=lambda: nnff_model_label(self._params.get("RetrofitNNFFModel", encoding="utf-8") or "",
+                                             get_retrofit_nnff_models()),
+          on_click=self._show_nnff_model_select,
+        ),
+        SettingRow(
           "RetrofitNNFFFrictionAccel",
           "value",
           tr_noop("NNFF Friction: Tracking Error"),
@@ -754,6 +783,22 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
       header_subtitle=tr_noop("Pedal and retrofit-specific adjustments."),
       panel_style=DEFAULT_PANEL_STYLE,
     )
+
+  def _show_nnff_model_select(self):
+    models = get_retrofit_nnff_models()
+    if not models:
+      return
+    newest = nnff_newest_label(models)
+    selection = self._params.get("RetrofitNNFFModel", encoding="utf-8") or ""
+    current = selection if selection in models else newest
+
+    def on_select(res):
+      if res != DialogResult.CONFIRM or not dialog.selection:
+        return
+      self._params.put("RetrofitNNFFModel", "" if dialog.selection == newest else dialog.selection)
+
+    dialog = MultiOptionDialog(tr("NNFF Model"), [newest, *models], current, callback=on_select)
+    gui_app.push_widget(dialog)
 
 
 class StarPilotNonlinearSteeringLayout(_PreviewPage):

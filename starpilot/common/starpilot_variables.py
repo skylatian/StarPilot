@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import re
 import tomllib
 
 from functools import cache
@@ -170,6 +171,12 @@ KONIK_PATH = _FP_CACHE_ROOT / "use_konik"
 MAPS_PATH = _FP_DATA_ROOT / "media/0/osm/offline"
 
 NNFF_MODELS_PATH = Path(BASEDIR) / "starpilot/assets/nnff_models"
+# Versioned TOYOTA_COROLLA_RETROFIT models, one file per trained version. Kept in a
+# subdirectory because the stock loader fuzzy-matches filenames in NNFF_MODELS_PATH
+# (non-recursively): a "TOYOTA_COROLLA_RETROFIT_v1" there would score >= 0.9 and could
+# be picked without anyone choosing it.
+RETROFIT_NNFF_MODELS_PATH = NNFF_MODELS_PATH / "retrofit"
+RETROFIT_NNFF_MODEL_PATTERN = re.compile(r"^v(\d+)_(\d{4}-\d{2}-\d{2})(_[a-z0-9-]+)?$")
 
 BUTTON_FUNCTIONS = {
   "NOTHING": 0,
@@ -308,7 +315,36 @@ def get_nnff_substitutes():
     substitutes = {key: value for key, value in substitutes_data.items()}
   return substitutes
 
+def get_retrofit_nnff_models():
+  """Retrofit NNFF model names (file stems), newest version first.
+
+  Names are "v<N>_<YYYY-MM-DD>[_label]" and sort by N. Files that don't follow the
+  pattern are ignored here (and fail the model tests).
+  """
+  if not RETROFIT_NNFF_MODELS_PATH.is_dir():
+    return []
+
+  versions = []
+  for file in RETROFIT_NNFF_MODELS_PATH.iterdir():
+    match = RETROFIT_NNFF_MODEL_PATTERN.match(file.stem)
+    if file.is_file() and file.suffix == ".json" and match:
+      versions.append((int(match.group(1)), file.stem))
+  return [name for _, name in sorted(versions, reverse=True)]
+
+def resolve_retrofit_nnff_model(selection):
+  """The model to load: the selected one if it exists, else the newest (None if there are none).
+
+  An empty selection means "newest", so adding a model changes what runs unless one is pinned.
+  """
+  models = get_retrofit_nnff_models()
+  if selection in models:
+    return selection
+  return models[0] if models else None
+
 def nnff_supported(car_fingerprint):
+  if car_fingerprint == TOYOTA_CAR.TOYOTA_COROLLA_RETROFIT and get_retrofit_nnff_models():
+    return True
+
   model_files = set(get_nnff_model_files())
   substitutes = get_nnff_substitutes()
 

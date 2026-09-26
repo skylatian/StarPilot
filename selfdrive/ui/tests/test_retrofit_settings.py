@@ -221,3 +221,58 @@ def test_nnff_friction_rows_open_sliders_matching_the_toggle_range(monkeypatch):
     assert key in rows, key
     rows[key].on_click()
     assert opened[-1] == (key, lo, hi)
+
+
+class _StringParams:
+  def __init__(self, store):
+    self.store = store
+
+  def get(self, key, encoding=None, **kwargs):
+    return self.store.get(key)
+
+  def put(self, key, value):
+    self.store[key] = value
+
+
+@pytest.mark.parametrize("selection, label", [
+  (None, "Newest (v2_2026-02-01)"),
+  ("", "Newest (v2_2026-02-01)"),
+  ("v1_2026-01-01", "v1_2026-01-01"),
+  ("v9_2026-01-01", "v9_2026-01-01 missing, using v2_2026-02-01"),
+])
+def test_nnff_model_row_label(selection, label):
+  assert retrofit.nnff_model_label(selection or "", ["v2_2026-02-01", "v1_2026-01-01"]) == label
+  assert retrofit.nnff_model_label("", []) == "None installed"
+
+
+@pytest.mark.parametrize("picked, stored", [
+  ("Newest (v2_2026-02-01)", ""),  # newest is stored as empty, so later models are followed
+  ("v2_2026-02-01", "v2_2026-02-01"),  # picking the newest by name pins it
+  ("v1_2026-01-01", "v1_2026-01-01"),
+])
+def test_nnff_model_picker_writes_selection(monkeypatch, picked, stored):
+  from openpilot.system.ui.widgets import DialogResult
+  monkeypatch.setattr(retrofit, "get_retrofit_nnff_models", lambda: ["v2_2026-02-01", "v1_2026-01-01"])
+  dialogs = []
+
+  class FakeDialog:
+    def __init__(self, title, options, current, callback):
+      self.options, self.current, self.callback, self.selection = options, current, callback, None
+      dialogs.append(self)
+
+  monkeypatch.setattr(retrofit, "MultiOptionDialog", FakeDialog)
+  monkeypatch.setattr(retrofit.gui_app, "push_widget", lambda w: None)
+
+  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
+  store = {"RetrofitNNFFModel": "v1_2026-01-01"}
+  page._params = _StringParams(store)
+  rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
+  assert rows["RetrofitNNFFModel"].get_value() == "v1_2026-01-01"
+
+  rows["RetrofitNNFFModel"].on_click()
+  dialog = dialogs[-1]
+  assert dialog.options == ["Newest (v2_2026-02-01)", "v2_2026-02-01", "v1_2026-01-01"]
+  assert dialog.current == "v1_2026-01-01"
+  dialog.selection = picked
+  dialog.callback(DialogResult.CONFIRM)
+  assert store["RetrofitNNFFModel"] == stored
