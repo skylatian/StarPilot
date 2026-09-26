@@ -812,6 +812,10 @@ class StarPilotVariables:
     toggle.retrofit_tune_friction_lat_rise = self.get_value("RetrofitTuneFrictionLatRise", cast=float, default=0.20, min=0.01, max=2.0)
     toggle.retrofit_tune_friction_jerk_rise = self.get_value("RetrofitTuneFrictionJerkRise", cast=float, default=0.24, min=0.01, max=2.0)
     toggle.retrofit_tune_kd = self.get_value("RetrofitTuneKD", cast=float, default=0.0, min=0.0, max=2.0)
+    # Only used by LatControlNNFF (neural feedforward). Defaults must match
+    # RETROFIT_NNFF_FRICTION_*_DEFAULT in neural_network_feedforward.py.
+    toggle.retrofit_nnff_friction_accel = self.get_value("RetrofitNNFFFrictionAccel", cast=float, default=1.0, min=0.0, max=3.0)
+    toggle.retrofit_nnff_friction_jerk = self.get_value("RetrofitNNFFFrictionJerk", cast=float, default=0.4, min=0.0, max=3.0)
     toggle.retrofit_tune_turn_in_boost = self.get_value("RetrofitTuneTurnInBoost", cast=float, default=0.0, min=0.0, max=1.0)
     toggle.retrofit_tune_unwind_boost = self.get_value("RetrofitTuneUnwindBoost", cast=float, default=0.0, min=0.0, max=1.0)
     toggle.retrofit_tune_unwind_taper = self.get_value("RetrofitTuneUnwindTaper", cast=float, default=0.0, min=0.0, max=1.0)

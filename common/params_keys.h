@@ -621,6 +621,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RivianAngleSaturated", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL, "0", "0"}},
     {"RivianToiRecoveryFailed", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL, "0", "0"}},
     {"RecoveryPower", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
+    {"RetrofitNNFFFrictionAccel", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
+    {"RetrofitNNFFFrictionJerk", {PERSISTENT, FLOAT, "0.4", "0.4", 2}},
     {"RetrofitNonlinearSteering", {PERSISTENT, BOOL, "0", "0", 2}},
     {"RetrofitNonlinearStrength", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"RetrofitNonlinearSaturation", {PERSISTENT, FLOAT, "2.5", "2.5", 2}},

@@ -355,3 +355,23 @@ def test_non_toyota_software_cruise_keeps_custom_intervals():
   assert spv.software_cruise_intervals_available(True, "hyundai", False, True, True) is True
   assert spv.reverse_cruise_available(True, "hyundai", False) is False
   assert spv.speed_limit_controller_available(openpilot_longitudinal=False, redneck_cruise=False) is False
+
+
+def test_retrofit_nnff_friction_factors_default_pass_through_and_clamp(monkeypatch, tmp_path):
+  params_cls = spv.Params
+
+  def isolated_params(_path=None, memory=False, return_defaults=False):
+    return params_cls(str(tmp_path / ("memory" if memory else "params")), return_defaults=return_defaults)
+
+  monkeypatch.setattr(spv, "Params", isolated_params)
+
+  toggles = spv.StarPilotVariables().starpilot_toggles
+  assert toggles.retrofit_nnff_friction_accel == 1.0
+  assert toggles.retrofit_nnff_friction_jerk == 0.4
+
+  params = isolated_params()
+  params.put_float("RetrofitNNFFFrictionAccel", 1.75)
+  params.put_float("RetrofitNNFFFrictionJerk", 9.0)  # beyond the 3.0 clamp
+  toggles = spv.StarPilotVariables().starpilot_toggles
+  assert toggles.retrofit_nnff_friction_accel == 1.75
+  assert toggles.retrofit_nnff_friction_jerk == 3.0

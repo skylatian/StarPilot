@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 
 from cereal import log
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
+from opendbc.car.toyota.values import CAR as TOYOTA_CAR
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
@@ -36,6 +37,15 @@ ACTIVATION_FUNCTION_NAMES = {"σ": "sigmoid"}
 
 PALISADE_NNFF_LAT_JERK_FRICTION_FACTOR = 0.25
 DEFAULT_NNFF_LAT_JERK_FRICTION_FACTOR = 0.4
+
+# TOYOTA_COROLLA_RETROFIT reads both friction factors live from params
+# (RetrofitNNFFFrictionAccel / RetrofitNNFFFrictionJerk) and applies them every
+# frame. The accel default is 1.0, not the 0.7 set in __init__, because 1.0 is
+# what every car actually runs: the look-ahead branch in update() overwrites the
+# factor with 1.0 the first time the planned jerk changes sign and never
+# restores it. The defaults therefore reproduce today's behaviour.
+RETROFIT_NNFF_FRICTION_ACCEL_DEFAULT = 1.0
+RETROFIT_NNFF_FRICTION_JERK_DEFAULT = DEFAULT_NNFF_LAT_JERK_FRICTION_FACTOR
 
 
 def get_nnff_lat_jerk_friction_factor(car_fingerprint) -> float:
@@ -203,6 +213,7 @@ class LatControlNNFF(LatControl):
     # Increase for a stronger response, decrease for a weaker response.
     self.lat_accel_friction_factor = 0.7  # in [0, 3], in 0.05 increments. 3 is arbitrary safety limit
     self.lat_jerk_friction_factor = get_nnff_lat_jerk_friction_factor(CP.carFingerprint)
+    self.live_friction_factors = CP.carFingerprint == TOYOTA_CAR.TOYOTA_COROLLA_RETROFIT
 
     # precompute time differences between ModelConstants.T_IDXS
     self.t_diffs = np.diff(ModelConstants.T_IDXS)
@@ -242,6 +253,10 @@ class LatControlNNFF(LatControl):
       output_torque = 0.0
       pid_log.active = False
     else:
+      if self.live_friction_factors:
+        self.lat_accel_friction_factor = float(getattr(starpilot_toggles, "retrofit_nnff_friction_accel", RETROFIT_NNFF_FRICTION_ACCEL_DEFAULT))
+        self.lat_jerk_friction_factor = float(getattr(starpilot_toggles, "retrofit_nnff_friction_jerk", RETROFIT_NNFF_FRICTION_JERK_DEFAULT))
+
       actual_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
       roll_compensation = params.roll * ACCELERATION_DUE_TO_GRAVITY
       curvature_deadzone = abs(VM.calc_curvature(math.radians(self.steering_angle_deadzone_deg), CS.vEgo, 0.0))
@@ -274,7 +289,10 @@ class LatControlNNFF(LatControl):
 
           if lookahead_lateral_jerk == 0.0:
             actual_lateral_jerk = 0.0
-            self.lat_accel_friction_factor = 1.0
+            # Upstream: sticky — never restored, so it applies for the rest of the drive.
+            # Cars with live factors keep the tuned value in every frame instead.
+            if not self.live_friction_factors:
+              self.lat_accel_friction_factor = 1.0
 
           lateral_jerk_setpoint = self.lat_jerk_friction_factor * lookahead_lateral_jerk
           lateral_jerk_measurement = self.lat_jerk_friction_factor * actual_lateral_jerk
