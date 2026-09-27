@@ -78,6 +78,8 @@ DASHBOARD_PERSISTENT_STATS_PARAM = "GalaxyDashboardStats"
 DASHBOARD_ROUTE_ANALYSIS_VERSION = 4
 DASHBOARD_PARAMS_DIR = Path("/data/params/d")
 DASHBOARD_ANALYZER_LOG_PATH = "/tmp/galaxy_dashboard_analyzer.log"
+# Cores the realtime processes leave free on comma devices (athenad, uploader and loggerd use these too).
+DASHBOARD_ANALYZER_CORES = {0, 1, 2, 3}
 DASHBOARD_ANALYZER_STATUS_PATH = Path("/tmp/galaxy_dashboard_analyzer_status.json")
 DASHBOARD_ANALYZER_STATUS_MAX_AGE_SECONDS = 30 * 60
 DASHBOARD_TOP_MODEL_LIMIT = 3
@@ -2050,6 +2052,27 @@ def _dashboard_analysis_status(candidates):
   }
 
 
+def _dashboard_analyzer_preexec():
+  """Run the analyzer as ordinary background work, whoever spawned it.
+
+  starpilot_process spawns this worker, and it runs SCHED_FIFO pinned to core 5. A forked child
+  inherits both, and `nice` does not apply to realtime tasks, so the worker ran as realtime on core 5
+  above the UI (SCHED_FIFO 50, also only allowed core 5). While it analyzed drives the UI got the
+  core only when the worker waited on disk: 46-49 s screen freezes, and watchdog restarts when the
+  UI's own stall guard could not run either.
+  """
+  try:
+    os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+  except (AttributeError, OSError):
+    pass
+  try:
+    cores = DASHBOARD_ANALYZER_CORES & os.sched_getaffinity(0) or DASHBOARD_ANALYZER_CORES & set(range(os.cpu_count() or 1))
+    if cores:
+      os.sched_setaffinity(0, cores)
+  except (AttributeError, OSError):
+    pass
+
+
 def _start_dashboard_background_analysis(footage_paths, route_infos, persistent_stats, candidates=None):
   global _DASHBOARD_ANALYZER_PROCESS
 
@@ -2087,6 +2110,7 @@ def _start_dashboard_background_analysis(footage_paths, route_infos, persistent_
         stdout=log_file,
         stderr=log_file,
         start_new_session=True,
+        preexec_fn=_dashboard_analyzer_preexec,
       )
       _write_dashboard_analyzer_status(_DASHBOARD_ANALYZER_PROCESS, len(candidates))
     except Exception:
