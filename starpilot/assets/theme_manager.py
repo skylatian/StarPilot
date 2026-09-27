@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from dateutil import easter
 from pathlib import Path
 
+from openpilot.common.realtime import drop_realtime_priority
 from openpilot.starpilot.common.starpilot_download_utilities import HF_BUCKET, GITHUB_URL, download_file, get_resource_urls, handle_error, verify_download
 from openpilot.starpilot.common.theme_asset_names import find_matching_theme_asset_file, find_matching_theme_asset_name
 from openpilot.starpilot.common.starpilot_utilities import delete_file, extract_zip, load_json_file, update_json_file
@@ -94,6 +95,7 @@ class ThemeManager:
       capture_output=True,
       text=True,
       check=True,
+      preexec_fn=drop_realtime_priority,
     )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -103,6 +105,7 @@ class ThemeManager:
       ["git", "-C", str(LOCAL_RESOURCES_PATH), "show", f"{ref}:{path}"],
       capture_output=True,
       check=True,
+      preexec_fn=drop_realtime_priority,
     )
     return result.stdout
 

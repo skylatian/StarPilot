@@ -6,6 +6,7 @@ from pathlib import Path
 import pyray as rl
 
 from openpilot.common.basedir import BASEDIR
+from openpilot.common.realtime import drop_realtime_priority
 from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MouseEvent, MousePos, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr, tr_noop
@@ -389,7 +390,8 @@ while True:
     sd._terminate()
     sd._initialize()
 """
-    cls._sound_player_process = subprocess.Popen(["python3", "-u", "-c", program], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    cls._sound_player_process = subprocess.Popen(["python3", "-u", "-c", program], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                 preexec_fn=drop_realtime_priority)
 
   def _test_sound(self, key: str):
     base_name = key.replace("Volume", "")

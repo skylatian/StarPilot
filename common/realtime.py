@@ -29,6 +29,34 @@ class Priority:
   CTRL_HIGH = 53
 
 
+# Cores the realtime processes leave to ordinary work on comma devices (athenad, uploader and loggerd run here too).
+BACKGROUND_CORES = (0, 1, 2, 3)
+
+
+def drop_realtime_priority() -> None:
+  """Make the caller ordinary background work: SCHED_OTHER on BACKGROUND_CORES.
+
+  Pass it as preexec_fn when a process that ran config_realtime_process starts a subprocess. A child
+  inherits SCHED_FIFO and the parent's cores, and nice has no effect on a realtime task, so a busy child
+  otherwise outranks everything else on that core. From starpilot_process (FIFO 51, core 5) that is
+  above the UI (FIFO 50, core 5): the Galaxy dashboard analyzer froze the UI for 46-49 s that way.
+
+  Called in a thread, it moves only that thread (Linux applies both calls per thread). It is a no-op
+  for a caller that is not realtime, which includes every desktop host. It runs between fork and exec,
+  so it must not import, log or take locks.
+  """
+  try:
+    if os.sched_getscheduler(0) not in (os.SCHED_FIFO, os.SCHED_RR):
+      return
+    os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+  except (AttributeError, OSError):
+    return
+  try:
+    os.sched_setaffinity(0, BACKGROUND_CORES)
+  except OSError:
+    pass
+
+
 def set_core_affinity(cores: list[int]) -> None:
   if sys.platform == 'linux' and not PC:
     try:

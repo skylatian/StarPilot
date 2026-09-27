@@ -508,7 +508,7 @@ def test_dashboard_background_analysis_does_not_start_onroad(monkeypatch):
 
 
 def test_dashboard_background_analysis_spawns_worker_with_background_scheduling(monkeypatch, tmp_path):
-  # starpilot_process is SCHED_FIFO on core 5; the worker must not inherit that (see _dashboard_analyzer_preexec).
+  # starpilot_process is SCHED_FIFO on core 5; the worker must not inherit that (see drop_realtime_priority).
   started_with = {}
 
   class FakeProcess:
@@ -529,31 +529,7 @@ def test_dashboard_background_analysis_spawns_worker_with_background_scheduling(
   monkeypatch.setattr(utilities.subprocess, "Popen", fake_popen)
 
   assert utilities._start_dashboard_background_analysis(["/tmp/routes"], [{"name": "route"}], {}, [{"name": "route"}])
-  assert started_with["preexec_fn"] is utilities._dashboard_analyzer_preexec
-
-
-def test_dashboard_analyzer_preexec_drops_realtime_and_leaves_core_5(monkeypatch):
-  calls = {}
-  monkeypatch.setattr(utilities.os, "SCHED_OTHER", 0, raising=False)
-  monkeypatch.setattr(utilities.os, "sched_param", lambda priority: ("param", priority), raising=False)
-  monkeypatch.setattr(utilities.os, "sched_setscheduler", lambda pid, policy, param: calls.update(sched=(pid, policy, param)), raising=False)
-  monkeypatch.setattr(utilities.os, "sched_getaffinity", lambda pid: {5}, raising=False)  # inherited from starpilot_process
-  monkeypatch.setattr(utilities.os, "sched_setaffinity", lambda pid, cores: calls.update(affinity=set(cores)), raising=False)
-  monkeypatch.setattr(utilities.os, "cpu_count", lambda: 8)
-
-  utilities._dashboard_analyzer_preexec()
-
-  assert calls["sched"] == (0, 0, ("param", 0))
-  assert calls["affinity"] == {0, 1, 2, 3}
-
-
-def test_dashboard_analyzer_preexec_tolerates_platforms_without_sched_calls(monkeypatch):
-  def unsupported(*args):
-    raise AttributeError("no sched_* on this platform")
-
-  monkeypatch.setattr(utilities.os, "sched_setscheduler", unsupported, raising=False)
-  monkeypatch.setattr(utilities.os, "sched_getaffinity", unsupported, raising=False)
-  utilities._dashboard_analyzer_preexec()
+  assert started_with["preexec_fn"] is utilities.drop_realtime_priority
 
 
 def test_dashboard_analysis_worker_exits_onroad_before_scanning(monkeypatch):

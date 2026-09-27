@@ -22,7 +22,7 @@ from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE, PC
 from openpilot.system.ui.lib.multilang import multilang
-from openpilot.common.realtime import Ratekeeper
+from openpilot.common.realtime import Ratekeeper, drop_realtime_priority
 
 DEVICE_TYPE = HARDWARE.get_device_type()
 _DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20}.get(DEVICE_TYPE, 60)))
@@ -793,7 +793,7 @@ class GuiApplication:
           '-f', 'mp4',              # Output format
           RECORD_OUTPUT,            # Output file path
         ]
-        self._ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE)
+        self._ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE, preexec_fn=drop_realtime_priority)
         self._ffmpeg_queue = queue.Queue(maxsize=60)  # Buffer up to 60 frames
         self._ffmpeg_stop_event = threading.Event()
         self._ffmpeg_thread = threading.Thread(target=self._ffmpeg_writer_thread, daemon=True)

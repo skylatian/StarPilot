@@ -12,6 +12,7 @@ from typing import Any
 import pyray as rl
 
 from openpilot.system.hardware import HARDWARE
+from openpilot.common.realtime import drop_realtime_priority
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult, Widget
@@ -1059,7 +1060,7 @@ class StarPilotSystemLayout(_SettingsPage):
         gui_app.push_widget(alert_dialog(tr("Backup creation started.")))
         def _task():
           os.makedirs("/data/backups", exist_ok=True)
-          subprocess.run(["tar", "--use-compress-program=zstd", "-cf", backup_path, "/data/openpilot"])
+          subprocess.run(["tar", "--use-compress-program=zstd", "-cf", backup_path, "/data/openpilot"], preexec_fn=drop_realtime_priority)
         threading.Thread(target=_task, daemon=True).start()
     self._keyboard.reset(min_text_size=0)
     self._keyboard.set_title(tr("Name your backup"), "")
@@ -1079,7 +1080,8 @@ class StarPilotSystemLayout(_SettingsPage):
         def _task():
           shutil.rmtree("/data/openpilot", ignore_errors=True)
           os.makedirs("/data/openpilot", exist_ok=True)
-          subprocess.run(["tar", "--use-compress-program=zstd", "-xf", f"/data/backups/{dialog.selection}", "-C", "/"])
+          subprocess.run(["tar", "--use-compress-program=zstd", "-xf", f"/data/backups/{dialog.selection}", "-C", "/"],
+                         preexec_fn=drop_realtime_priority)
           os.system("reboot")
         threading.Thread(target=_task, daemon=True).start()
 

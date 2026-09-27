@@ -11,7 +11,7 @@ from cereal import messaging
 from openpilot.common.api import Api, api_get
 from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL, Priority, Ratekeeper, config_realtime_process
+from openpilot.common.realtime import DT_MDL, Priority, Ratekeeper, config_realtime_process, drop_realtime_priority
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.sentry import capture_flm_tune_submission, capture_report
 from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
@@ -192,6 +192,9 @@ def get_dashboard_footage_paths():
     ]
 
 def refresh_dashboard_analysis():
+  # ~0.7 s of CPU per run (route listing, measured on a C3), which otherwise runs as SCHED_FIFO 51 on
+  # core 5 like the main loop, above the UI. Each run is a fresh ThreadManager thread; the loop keeps its class.
+  drop_realtime_priority()
   get_dashboard_utilities().get_dashboard_stats(get_dashboard_footage_paths())
 
 def transition_offroad(starpilot_planner, model_manager, theme_manager, thread_manager, time_validated, sm, params, starpilot_toggles):

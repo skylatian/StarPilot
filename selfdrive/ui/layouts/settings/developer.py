@@ -4,6 +4,7 @@ import threading
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
+from openpilot.common.realtime import drop_realtime_priority
 from openpilot.system.hardware import HARDWARE
 from openpilot.selfdrive.ui.widgets.ssh_key import ssh_key_item
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -227,7 +228,9 @@ class DeveloperLayout(Widget):
     # Runs off the UI thread; only touches the status strings the list item reads each frame.
     env = dict(os.environ, SCONS_PROGRESS="1")
     try:
-      proc = subprocess.Popen(["bash", "-c", cmd], cwd=BASEDIR, env=env,
+      # The UI is SCHED_FIFO 50 on core 5. Without this, scons -j4 and every compiler it starts inherit
+      # that: one core for the whole build, run at the UI's own priority.
+      proc = subprocess.Popen(["bash", "-c", cmd], cwd=BASEDIR, env=env, preexec_fn=drop_realtime_priority,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
       assert proc.stdout is not None
       for line in proc.stdout:

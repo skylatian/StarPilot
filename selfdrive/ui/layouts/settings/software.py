@@ -7,6 +7,7 @@ import datetime
 from pathlib import Path
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.common.swaglog import cloudlog
+from openpilot.common.realtime import drop_realtime_priority
 from openpilot.selfdrive.ui.lib.starpilot_version import starpilot_display_description
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.hardware import HARDWARE
@@ -280,14 +281,14 @@ class SoftwareLayout(Widget):
       try:
         result = subprocess.run(
           ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path,
-          capture_output=True, text=True, timeout=_FAST_UPDATE_GIT_TIMEOUT_S, env=_GIT_ENV)
+          capture_output=True, text=True, timeout=_FAST_UPDATE_GIT_TIMEOUT_S, env=_GIT_ENV, preexec_fn=drop_realtime_priority)
         if result.returncode != 0:
           raise RuntimeError(result.stderr.strip() or "failed to resolve HEAD branch")
         branch = result.stdout.strip()
 
         result = subprocess.run(
           ["git", "rev-parse", "HEAD"], cwd=repo_path,
-          capture_output=True, text=True, timeout=_FAST_UPDATE_GIT_TIMEOUT_S, env=_GIT_ENV)
+          capture_output=True, text=True, timeout=_FAST_UPDATE_GIT_TIMEOUT_S, env=_GIT_ENV, preexec_fn=drop_realtime_priority)
         if result.returncode != 0:
           raise RuntimeError(result.stderr.strip() or "failed to resolve HEAD commit")
 
@@ -295,13 +296,13 @@ class SoftwareLayout(Widget):
         result = subprocess.run(
           ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch",
            "--progress", "--depth=1", "--no-recurse-submodules", "origin", branch],
-          cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_FETCH_TIMEOUT_S, env=_GIT_ENV)
+          cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_FETCH_TIMEOUT_S, env=_GIT_ENV, preexec_fn=drop_realtime_priority)
         if result.returncode != 0:
           raise RuntimeError(result.stderr.strip() or "fetch failed")
 
         _set_fast_update_state(stage=FastUpdateStage.APPLYING, status=tr("Applying update..."))
         result = subprocess.run(["git", "reset", "--hard", "FETCH_HEAD"],
-                                cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_RESET_TIMEOUT_S, env=_GIT_ENV)
+                                cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_RESET_TIMEOUT_S, env=_GIT_ENV, preexec_fn=drop_realtime_priority)
         if result.returncode != 0:
           raise RuntimeError(result.stderr.strip() or "reset failed")
 
@@ -310,7 +311,7 @@ class SoftwareLayout(Widget):
           _set_fast_update_state(stage=FastUpdateStage.SUBMODULES, status=tr("Updating submodules..."))
           result = subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive", "--depth=1", "--progress"],
-            cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_SUBMODULE_TIMEOUT_S, env=_GIT_ENV)
+            cwd=repo_path, capture_output=True, text=True, timeout=_FAST_UPDATE_SUBMODULE_TIMEOUT_S, env=_GIT_ENV, preexec_fn=drop_realtime_priority)
           if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "submodule update failed")
 

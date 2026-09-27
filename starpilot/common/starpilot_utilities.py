@@ -18,7 +18,7 @@ from cereal import log, messaging
 from opendbc.can.parser import CANParser
 from opendbc.car.toyota.carcontroller import LOCK_CMD
 from openpilot.common.params import Params
-from openpilot.common.realtime import DT_DMON, DT_HW
+from openpilot.common.realtime import DT_DMON, DT_HW, drop_realtime_priority
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.version import get_build_metadata
 from panda import Panda, FW_PATH
@@ -349,7 +349,8 @@ def lock_doors(lock_doors_timer, sm, params):
 
 def run_cmd(cmd, success_message, fail_message, env=None, report=True):
   try:
-    result = subprocess.run(cmd, capture_output=True, check=True, env=env, text=True)
+    # Callers include starpilot_process (SCHED_FIFO 51, core 5); keep the command off the UI's core.
+    result = subprocess.run(cmd, capture_output=True, check=True, env=env, text=True, preexec_fn=drop_realtime_priority)
     print(success_message)
     return result.stdout.strip()
   except subprocess.CalledProcessError as exception:
