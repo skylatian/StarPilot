@@ -3467,7 +3467,8 @@ def _get_param_type_info():
           types[k] = str
 
     for k, dt in _get_layout_type_overrides().items():
-      if k in types and dt in ("int", "float") and types[k] == bool:
+      # str too: the default-string guess above can't parse a negative default like "-0.1"
+      if k in types and dt in ("int", "float") and types[k] in (bool, str):
         types[k] = float if dt == "float" else int
       elif k in types and dt == "bool":
         types[k] = bool
@@ -4436,6 +4437,41 @@ def _get_longitudinal_mode_capable():
 
 def _get_is_tici_or_tizi():
   return HARDWARE.get_device_type() in ("tici", "tizi")
+
+RETROFIT_FINGERPRINT = "TOYOTA_COROLLA_RETROFIT"
+
+def _get_is_retrofit():
+  # Same order as the device's Retrofit Options gate: launch_env.sh's FINGERPRINT first,
+  # then the persisted CarParams (CarParams may not exist yet right after boot).
+  if os.environ.get("FINGERPRINT", "") == RETROFIT_FINGERPRINT:
+    return True
+
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return str(getattr(cp, "carFingerprint", "")) == RETROFIT_FINGERPRINT
+  except Exception:
+    return False
+
+def _get_retrofit_nnff_models():
+  from openpilot.starpilot.common.starpilot_variables import get_retrofit_nnff_models
+  return get_retrofit_nnff_models()
+
+def _get_retrofit_nnff_model_options():
+  """Dropdown options for RetrofitNNFFModel: "" follows the newest model, a name pins one."""
+  models = _get_retrofit_nnff_models()
+  if not models:
+    return [{"value": "", "label": "None installed"}]
+
+  options = [{"value": "", "label": f"Newest ({models[0]})"}]
+  selection = str(params.get("RetrofitNNFFModel", encoding="utf-8") or "").strip()
+  if selection and selection not in models:
+    options.append({"value": selection, "label": f"{selection} (missing, using {models[0]})"})
+  options.extend({"value": name, "label": name} for name in models)
+  return options
 
 def _get_alpha_longitudinal_available():
   cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
@@ -5675,6 +5711,14 @@ def setup(app):
       "icons": [],
     }), 200
 
+  @app.route("/api/retrofit/nnff_models", methods=["GET"])
+  def retrofit_nnff_models():
+    # Always a list: the Toggles page iterates whatever this returns.
+    try:
+      return jsonify(_get_retrofit_nnff_model_options()), 200
+    except Exception:
+      return jsonify([]), 200
+
   @app.route("/api/car_features_check", methods=["GET"])
   def car_features_check():
     tool = request.args.get("tool")
@@ -6767,6 +6811,7 @@ def setup(app):
     result["AlphaLongitudinalAvailable"] = _get_alpha_longitudinal_available()
     result["HasRivianAngleHarness"] = _get_has_rivian_angle_harness()
     result["IsTiciOrTizi"] = _get_is_tici_or_tizi()
+    result["IsRetrofit"] = _get_is_retrofit()
 
     for key in ("CalibratedLateralAcceleration", "CalibrationProgress"):
       try:

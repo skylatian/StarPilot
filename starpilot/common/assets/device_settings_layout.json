@@ -5062,5 +5062,155 @@
         "settings_tier": "advanced"
       }
     ]
+  },
+  {
+    "name": "Retrofit",
+    "icon": "bi-wrench",
+    "params": [
+      {
+        "key": "RetrofitSASOffset",
+        "label": "SAS Offset",
+        "description": "Corrects a physically misaligned steering angle sensor. Set to the raw angle your SAS reports when the wheels are straight.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": -180,
+        "max": 180,
+        "step": 1,
+        "precision": 0,
+        "unit": "°",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNonlinearSteering",
+        "label": "Nonlinear Steering",
+        "description": "Replace the linear torque model with a sigmoid-linear curve: high response for small corrections, capped torque at large inputs. Needs an offroad cycle.",
+        "picker_description": "Sigmoid-linear steering torque model for the retrofit.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "is_parent_toggle": true,
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNonlinearStrength",
+        "label": "Sigmoid Strength",
+        "description": "Blend between linear (0) and full sigmoid (1). Increase if the wheel oscillates or whips back in turns; decrease if steering feels sluggish entering corners. At 0, behavior is identical to stock linear. Ignored while the device's Advanced (Raw ABCD) mode is on. Needs an offroad cycle.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+        "precision": 2,
+        "parent_key": "RetrofitNonlinearSteering",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNonlinearSaturation",
+        "label": "Saturation",
+        "description": "How quickly the torque curve flattens at large inputs. Increase if oscillation only happens in sharp turns; decrease if the car understeers mid-corner. Ignored while the device's Advanced (Raw ABCD) mode is on. Needs an offroad cycle.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.5,
+        "max": 5.0,
+        "step": 0.1,
+        "precision": 1,
+        "parent_key": "RetrofitNonlinearSteering",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNonlinearBias",
+        "label": "L/R Bias",
+        "description": "Compensate for asymmetric EPS response. Positive = more torque going left, negative = more going right. Ignored while the device's Advanced (Raw ABCD) mode is on. Needs an offroad cycle.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": -1.0,
+        "max": 1.0,
+        "step": 0.05,
+        "precision": 2,
+        "parent_key": "RetrofitNonlinearSteering",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitTuneKD",
+        "label": "Damping (KD)",
+        "description": "Opposes how fast the car is already turning, so the controller eases off before it reaches the target instead of after. This is the knob for a column that sticks, breaks free and then overshoots. 0 = off (stock openpilot has no damping at all). Try 0.10-0.30; too high feels heavy and vague. Torque controller only, not used while NNFF is on. Applies live.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.0,
+        "max": 2.0,
+        "step": 0.05,
+        "precision": 2,
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitSteerAngleDeadzone",
+        "label": "Center Deadzone",
+        "description": "Blind spot around straight-ahead for the friction compensation, so it stops flipping sign on tiny corrections and shaking the wheel. Raise if it hunts on the highway. Needs an offroad cycle.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.0,
+        "max": 2.0,
+        "step": 0.1,
+        "precision": 1,
+        "unit": "°",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNNFFModel",
+        "label": "NNFF Model",
+        "description": "Which trained model NNFF drives with. Newest follows new versions as they are added; picking one pins it. Only used while NNFF is on. Needs an offroad cycle.",
+        "data_type": "string",
+        "ui_type": "dropdown",
+        "options_endpoint": "/api/retrofit/nnff_models",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNNFFFrictionAccel",
+        "label": "NNFF Friction: Tracking Error",
+        "description": "How strongly NNFF's friction response reacts to steering that lags the plan. 1.0 = current behaviour. Raise if the wheel sticks before moving; lower if it hunts. Only used while NNFF is on. Applies live.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.0,
+        "max": 3.0,
+        "step": 0.05,
+        "precision": 2,
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitNNFFFrictionJerk",
+        "label": "NNFF Friction: Planned Turn-In",
+        "description": "How much an upcoming turn-in or unwind adds to NNFF's friction response, so the column is already moving when the turn starts. Also feeds NNFF's feedback. 0.4 = stock. Only used while NNFF is on. Applies live.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": 0.0,
+        "max": 3.0,
+        "step": 0.05,
+        "precision": 2,
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      },
+      {
+        "key": "RetrofitPedalOffsetStandstill",
+        "label": "Standstill Pedal Offset",
+        "description": "Low-speed deadband before pedal scaling. Less negative = gas sooner from a stop.",
+        "data_type": "float",
+        "ui_type": "numeric",
+        "min": -0.5,
+        "max": 0.2,
+        "step": 0.05,
+        "precision": 2,
+        "unit": " m/s²",
+        "requires_capability": "IsRetrofit",
+        "settings_tier": "simple"
+      }
+    ]
   }
 ]

@@ -131,6 +131,17 @@ CENTER_PARAMS = [
 ]
 
 
+# (min, max, step) for the slider rows that aren't TuneParam specs. Galaxy's Toggles page
+# (starpilot/common/assets/device_settings_layout.json) uses the same ranges; a test pins them.
+RETROFIT_SLIDER_RANGES = {
+  "RetrofitSASOffset": (-180, 180, 1),
+  "RetrofitSteerAngleDeadzone": (0.0, 2.0, 0.1),
+  "RetrofitPedalOffsetStandstill": (-0.5, 0.2, 0.05),
+  "RetrofitNNFFFrictionAccel": (0.0, 3.0, 0.05),
+  "RetrofitNNFFFrictionJerk": (0.0, 3.0, 0.05),
+}
+
+
 @dataclass(frozen=True)
 class KPPoint:
   speed: float
@@ -743,9 +754,8 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
           get_value=lambda: f"{stored_float(self._params, 'RetrofitPedalOffsetStandstill'):.2f}m/s²",
           on_click=lambda: self._show_slider(
             "RetrofitPedalOffsetStandstill",
-            -0.5,
-            0.2,
-            step=0.05,
+            *RETROFIT_SLIDER_RANGES["RetrofitPedalOffsetStandstill"][:2],
+            step=RETROFIT_SLIDER_RANGES["RetrofitPedalOffsetStandstill"][2],
             unit="m/s²",
             value_type="float",
             current_value=stored_float(self._params, "RetrofitPedalOffsetStandstill"),
@@ -797,9 +807,8 @@ class StarPilotNNFFTuneLayout(_RetrofitSubPage):
           get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionAccel'):.2f}",
           on_click=lambda: self._show_slider(
             "RetrofitNNFFFrictionAccel",
-            0.0,
-            3.0,
-            step=0.05,
+            *RETROFIT_SLIDER_RANGES["RetrofitNNFFFrictionAccel"][:2],
+            step=RETROFIT_SLIDER_RANGES["RetrofitNNFFFrictionAccel"][2],
             value_type="float",
             current_value=stored_float(self._params, "RetrofitNNFFFrictionAccel"),
             title="NNFF Friction: Tracking Error",
@@ -817,9 +826,8 @@ class StarPilotNNFFTuneLayout(_RetrofitSubPage):
           get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionJerk'):.2f}",
           on_click=lambda: self._show_slider(
             "RetrofitNNFFFrictionJerk",
-            0.0,
-            3.0,
-            step=0.05,
+            *RETROFIT_SLIDER_RANGES["RetrofitNNFFFrictionJerk"][:2],
+            step=RETROFIT_SLIDER_RANGES["RetrofitNNFFFrictionJerk"][2],
             value_type="float",
             current_value=stored_float(self._params, "RetrofitNNFFFrictionJerk"),
             title="NNFF Friction: Planned Turn-In",
@@ -1000,9 +1008,8 @@ class StarPilotCenterTaperLayout(_PreviewPage):
       get_value=lambda: f"{stored_float(self._params, 'RetrofitSteerAngleDeadzone'):.1f}°",
       on_click=lambda: self._show_slider(
         "RetrofitSteerAngleDeadzone",
-        0.0,
-        2.0,
-        step=0.1,
+        *RETROFIT_SLIDER_RANGES["RetrofitSteerAngleDeadzone"][:2],
+        step=RETROFIT_SLIDER_RANGES["RetrofitSteerAngleDeadzone"][2],
         unit="°",
         value_type="float",
         current_value=stored_float(self._params, "RetrofitSteerAngleDeadzone"),
@@ -1184,9 +1191,8 @@ class StarPilotRetrofitLayout(_SettingsPage):
           get_value=lambda: f"{stored_float(self._params, 'RetrofitSASOffset'):.0f}°",
           on_click=lambda: self._show_slider(
             "RetrofitSASOffset",
-            -180,
-            180,
-            step=1,
+            *RETROFIT_SLIDER_RANGES["RetrofitSASOffset"][:2],
+            step=RETROFIT_SLIDER_RANGES["RetrofitSASOffset"][2],
             unit="°",
             value_type="float",
             current_value=stored_float(self._params, "RetrofitSASOffset"),

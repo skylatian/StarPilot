@@ -1,5 +1,7 @@
+import json
 import math
 import re
+from pathlib import Path
 
 import pyray as rl
 import pytest
@@ -326,3 +328,14 @@ def test_tune_rows_show_the_spec_default_when_unset(fake_params):
   rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
   for p in retrofit.CENTER_PARAMS:
     assert rows[p.key].get_value() == retrofit.format_adjustor_value(p.default, step=p.step), p.key
+
+
+def test_galaxy_retrofit_section_uses_the_device_slider_ranges():
+  layout = json.loads((Path(BASEDIR) / "starpilot/common/assets/device_settings_layout.json").read_text(encoding="utf-8"))
+  galaxy = {p["key"]: p for s in layout if s["name"] == "Retrofit" for p in s["params"] if p["ui_type"] == "numeric"}
+  device = {p.key: (p.min, p.max, p.step) for p in ALL_SPECS} | retrofit.RETROFIT_SLIDER_RANGES
+
+  assert galaxy, "Galaxy's Retrofit section has no numeric settings"
+  for key, param in galaxy.items():
+    assert key in device, f"{key} has no device slider spec"
+    assert (param["min"], param["max"], param["step"]) == pytest.approx(device[key]), key
