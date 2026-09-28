@@ -682,7 +682,7 @@ class _RetrofitSubPage(_SettingsPage):
     return SettingRow(
       p.key, "value", p.label,
       subtitle=p.desc,
-      get_value=lambda: format_adjustor_value(self._params.get_float(p.key), step=p.step),
+      get_value=lambda: format_adjustor_value(self._params.get_float(p.key, default=p.default), step=p.step),
       on_click=lambda: self._slider(p, on_done),
     )
 

@@ -318,3 +318,11 @@ def test_controller_status_follows_controlsd_selection(monkeypatch, store, model
   rows = {row.id: row for section in layout._manager_view._sections for row in section.rows}
   assert rows["RetrofitTuneNav"].get_value() == tune_status
   assert rows["RetrofitNNFFTuneNav"].get_value() == nnff_status
+
+
+def test_tune_rows_show_the_spec_default_when_unset(fake_params):
+  # _value_row must display the same default its slider opens at, not 0.0 for a never-written key.
+  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tune_center"]
+  rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
+  for p in retrofit.CENTER_PARAMS:
+    assert rows[p.key].get_value() == retrofit.format_adjustor_value(p.default, step=p.step), p.key
