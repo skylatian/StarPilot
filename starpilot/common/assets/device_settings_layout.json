@@ -4545,6 +4545,15 @@
     "icon": "bi-hdd",
     "params": [
       {
+        "key": "OpenpilotEnabledToggle",
+        "label": "Enable openpilot",
+        "description": "Turn off to run in dashcam mode: the device records drives but sends no steering or speed commands. Takes effect on the next drive (offroad to onroad), not the current one.",
+        "picker_description": "Off = dashcam mode, starting next drive.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "settings_tier": "simple"
+      },
+      {
         "key": "DeviceManagement",
         "label": "Device Settings",
         "description": "Settings that control how the device runs, powers off, and manages driving data.",
