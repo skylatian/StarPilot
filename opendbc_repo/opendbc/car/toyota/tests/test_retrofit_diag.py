@@ -54,6 +54,16 @@ def vss_diag(boot=1, rolling=0, reset_kind=0, recovery_reason=0, force_drive=Tru
   return frame(0x502, [boot, (rolling << 4) | reset_kind, d2, eflg, tx_fails, pulses, loop_ms, 0])
 
 
+def version_frame(address: int, page: int, tag: str = "092726a", build=(26, 9, 27, 14, 3, 22)):
+  # send_version_page() as written in the sketches: no checksum, page byte first
+  data = [page, 0, 0, 0, 0, 0, 0, 0]
+  if page == 0:
+    data[1:8] = list(tag.encode())
+  else:
+    data[1:7] = list(build)
+  return address, bytes(data), 0
+
+
 class Harness:
   def __init__(self):
     self.cp = CANParser(DBC_NAME, retrofit_diag.PT_MESSAGES, 0)
@@ -165,3 +175,24 @@ class TestRetrofitDiag:
         assert (addr in cp.message_states) == expected, (car, name)
         if expected:
           assert cp.message_states[addr].ignore_alive
+
+  def test_firmware_version_pages(self):
+    h = Harness()
+    d = h.step([version_frame(0x504, 0, "092726a")])
+    assert d.stalk.firmwareVersion == "092726a"
+    assert d.stalk.buildTime == ""
+    d = h.step([version_frame(0x504, 1, build=(26, 9, 27, 14, 3, 22))])
+    assert d.stalk.buildTime == "2026-09-27 14:03:22"
+    assert d.stalk.firmwareVersion == "092726a"  # kept from the earlier page
+    d = h.step([vss_diag()])  # no version frame in this update: values persist
+    assert d.stalk.firmwareVersion == "092726a" and d.stalk.buildTime == "2026-09-27 14:03:22"
+
+  def test_both_pages_in_one_update_and_per_ecu(self):
+    h = Harness()
+    d = h.step([
+      version_frame(0x503, 0, "092726b"), version_frame(0x503, 1, build=(26, 12, 1, 0, 0, 5)),
+      version_frame(0x505, 0, "100126z"),
+    ])
+    assert (d.emulator.firmwareVersion, d.emulator.buildTime) == ("092726b", "2026-12-01 00:00:05")
+    assert d.vss.firmwareVersion == "100126z"
+    assert d.stalk.firmwareVersion == ""

@@ -1,7 +1,9 @@
 """Status of the TOYOTA_COROLLA_RETROFIT custom ECUs (corolla_emulator repo).
 
 The emulator (0x500), cruise stalk (0x501) and VSS (0x502) ECUs each send a 2 Hz
-diagnostic frame; the stalk's own 0x69 frame shows whether it is transmitting at all.
+diagnostic frame, plus a firmware version frame (0x503-0x505) alternating the
+FW_VERSION tag and the compile timestamp; the stalk's own 0x69 frame shows whether
+it is transmitting at all.
 This turns them into StarPilotCarState.retrofitDiag, and counts restarts (boot
 counter changes) and CAN controller recoveries so selfdrived can alert on them.
 
@@ -14,13 +16,18 @@ STALK_MSG = "CRUISE_STALK"
 EMULATOR_DIAG_MSG = "RETROFIT_EMULATOR_DIAG"
 STALK_DIAG_MSG = "RETROFIT_STALK_DIAG"
 VSS_DIAG_MSG = "RETROFIT_VSS_DIAG"
+EMULATOR_VERSION_MSG = "RETROFIT_EMULATOR_VERSION"
+STALK_VERSION_MSG = "RETROFIT_STALK_VERSION"
+VSS_VERSION_MSG = "RETROFIT_VSS_VERSION"
 
-PT_MESSAGES = [
-  (STALK_MSG, float('nan')),
-  (EMULATOR_DIAG_MSG, float('nan')),
-  (STALK_DIAG_MSG, float('nan')),
-  (VSS_DIAG_MSG, float('nan')),
-]
+PT_MESSAGES = [(name, float('nan')) for name in (
+  STALK_MSG,
+  EMULATOR_DIAG_MSG, STALK_DIAG_MSG, VSS_DIAG_MSG,
+  EMULATOR_VERSION_MSG, STALK_VERSION_MSG, VSS_VERSION_MSG,
+)]
+
+VERSION_CHARS = [f"VERSION_CHAR_{i}" for i in range(1, 8)]
+BUILD_FIELDS = ["BUILD_YEAR", "BUILD_MONTH", "BUILD_DAY", "BUILD_HOUR", "BUILD_MINUTE", "BUILD_SECOND"]
 
 
 def _last_seen_nanos(cp: CANParser, msg: str) -> int:
@@ -28,16 +35,35 @@ def _last_seen_nanos(cp: CANParser, msg: str) -> int:
 
 
 class _EcuTracker:
-  def __init__(self, msg: str, ecu: str):
+  def __init__(self, msg: str, version_msg: str, ecu: str):
     self.msg = msg
+    self.version_msg = version_msg
     self.ecu = ecu
+    self.firmware_version = ""
+    self.build_time = ""
     self.boot_count: int | None = None
     self.restarts = 0
     self.prev_recoveries: int | None = None
     self.recovery_events = 0
 
+  def _update_version(self, cp: CANParser) -> None:
+    # Every signal is decoded from every frame (the parser ignores the DBC
+    # multiplexer), so pair each frame's PAGE with its own bytes via vl_all.
+    frames = cp.vl_all[self.version_msg]
+    for i, page in enumerate(frames["PAGE"]):
+      if page == 0:
+        chars = bytes(int(frames[c][i]) for c in VERSION_CHARS)
+        self.firmware_version = chars.split(b"\0")[0].decode("ascii", "replace")
+      elif page == 1:
+        y, mo, d, h, mi, sec = (int(frames[f][i]) for f in BUILD_FIELDS)
+        self.build_time = f"{y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}:{sec:02d}"
+
   def update(self, cp: CANParser, now_nanos: int, out) -> tuple[bool, bool]:
     """Fill one RetrofitEcuDiag; returns (restarted, recovered) for this update."""
+    self._update_version(cp)
+    out.firmwareVersion = self.firmware_version
+    out.buildTime = self.build_time
+
     seen_nanos = _last_seen_nanos(cp, self.msg)
     out.seen = seen_nanos > 0
     out.restarts = self.restarts
@@ -76,9 +102,9 @@ class _EcuTracker:
 
 class RetrofitDiagTracker:
   def __init__(self):
-    self.emulator = _EcuTracker(EMULATOR_DIAG_MSG, "emulator")
-    self.stalk = _EcuTracker(STALK_DIAG_MSG, "stalk")
-    self.vss = _EcuTracker(VSS_DIAG_MSG, "vss")
+    self.emulator = _EcuTracker(EMULATOR_DIAG_MSG, EMULATOR_VERSION_MSG, "emulator")
+    self.stalk = _EcuTracker(STALK_DIAG_MSG, STALK_VERSION_MSG, "stalk")
+    self.vss = _EcuTracker(VSS_DIAG_MSG, VSS_VERSION_MSG, "vss")
     self.start_nanos = 0
     self.last_restart_ecu = "none"
     self.last_recovery_ecu = "none"

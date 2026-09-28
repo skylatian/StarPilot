@@ -106,3 +106,60 @@ BO_ 1282 RETROFIT_VSS_DIAG: 8 RETROFIT
 CM_ "BO_ RETROFIT_VSS_DIAG: Retrofit VSS speed ECU status, 2 Hz. Source: corolla_emulator/vss_speed. CAN_ERROR_FLAGS has the RX overflow bits masked (the device never reads RX).";
 VAL_ 1282 RESET_KIND 5 "DELIBERATE" 4 "WATCHDOG" 3 "EXTERNAL" 2 "BROWN_OUT" 1 "POWER_ON" 0 "UNKNOWN" ;
 VAL_ 1282 RECOVERY_REASON 3 "BUS_OFF" 2 "MODE_LOST" 1 "TX_STUCK" 0 "NONE" ;
+
+BO_ 1283 RETROFIT_EMULATOR_VERSION: 8 RETROFIT
+ SG_ PAGE M : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_1 m0 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_2 m0 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_3 m0 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_4 m0 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_5 m0 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_6 m0 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_7 m0 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_YEAR m1 : 15|8@0+ (1,2000) [2000|2255] "" XXX
+ SG_ BUILD_MONTH m1 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_DAY m1 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_HOUR m1 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_MINUTE m1 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_SECOND m1 : 55|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_EMULATOR_VERSION: Firmware version of the retrofit ECU (corolla_emulator/fakeecu), alternating pages at 2 Hz. Page 0: FW_VERSION tag as 7 ASCII bytes (MMDDYY + a-z/0-9). Page 1: compile timestamp. For our own records only, never used for fingerprinting.";
+VAL_ 1283 PAGE 1 "BUILD_TIME" 0 "VERSION" ;
+
+BO_ 1284 RETROFIT_STALK_VERSION: 8 RETROFIT
+ SG_ PAGE M : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_1 m0 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_2 m0 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_3 m0 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_4 m0 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_5 m0 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_6 m0 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_7 m0 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_YEAR m1 : 15|8@0+ (1,2000) [2000|2255] "" XXX
+ SG_ BUILD_MONTH m1 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_DAY m1 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_HOUR m1 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_MINUTE m1 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_SECOND m1 : 55|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_STALK_VERSION: Firmware version of the retrofit ECU (corolla_emulator/cruise_stalk), alternating pages at 2 Hz. Page 0: FW_VERSION tag as 7 ASCII bytes (MMDDYY + a-z/0-9). Page 1: compile timestamp. For our own records only, never used for fingerprinting.";
+VAL_ 1284 PAGE 1 "BUILD_TIME" 0 "VERSION" ;
+
+BO_ 1285 RETROFIT_VSS_VERSION: 8 RETROFIT
+ SG_ PAGE M : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_1 m0 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_2 m0 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_3 m0 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_4 m0 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_5 m0 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_6 m0 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ VERSION_CHAR_7 m0 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_YEAR m1 : 15|8@0+ (1,2000) [2000|2255] "" XXX
+ SG_ BUILD_MONTH m1 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_DAY m1 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_HOUR m1 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_MINUTE m1 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ BUILD_SECOND m1 : 55|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_VSS_VERSION: Firmware version of the retrofit ECU (corolla_emulator/vss_speed), alternating pages at 2 Hz. Page 0: FW_VERSION tag as 7 ASCII bytes (MMDDYY + a-z/0-9). Page 1: compile timestamp. For our own records only, never used for fingerprinting.";
+VAL_ 1285 PAGE 1 "BUILD_TIME" 0 "VERSION" ;

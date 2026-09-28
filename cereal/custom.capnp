@@ -130,6 +130,8 @@ struct RetrofitEcuDiag @0xc4e1a7d2b93f5e60 {
   txFails @10 :UInt8;        # failed sends over the last frame interval
   loopMaxMs @11 :UInt8;      # slowest loop over the last frame interval
   initRetries @12 :UInt8;    # stalk only: failed CAN inits at boot
+  firmwareVersion @13 :Text; # FW_VERSION tag (MMDDYY + a-z/0-9); empty until the version frame is seen
+  buildTime @14 :Text;       # compile timestamp, "YYYY-MM-DD HH:MM:SS"
 }
 
 struct RetrofitDiag @0xd81f3c6a0e7b2945 {
