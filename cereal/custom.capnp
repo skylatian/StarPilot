@@ -110,6 +110,52 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
   accelHardCruise @28 :Bool;  # current/releasing accel cruise button came from GM hard-press signal
   decelHardCruise @29 :Bool;  # current/releasing decel cruise button came from GM hard-press signal
   pulseAndGlide @30 :Bool;  # developer-only wheel-button pulse-and-glide mode is enabled
+  retrofitDiag @31 :RetrofitDiag;  # TOYOTA_COROLLA_RETROFIT custom ECU status (unset on other cars)
+}
+
+# Status of the retrofit's custom ECUs (corolla_emulator repo), decoded from their
+# diagnostic CAN frames: 0x500 emulator, 0x501 cruise stalk, 0x502 VSS. Raw codes use
+# the VAL_ tables in the Toyota DBC (_community.dbc).
+struct RetrofitEcuDiag @0xc4e1a7d2b93f5e60 {
+  seen @0 :Bool;             # diagnostic frame received at least once since card started
+  age @1 :Float32;           # seconds since the last diagnostic frame
+  bootCount @2 :UInt8;       # ECU boot counter (EEPROM, wraps at 255)
+  restarts @3 :UInt16;       # boot counter changes seen since card started
+  resetKind @4 :UInt8;       # RESET_KIND of the current boot
+  resetPhase @5 :UInt8;      # stalk only: loop phase the watchdog caught
+  canRecoveries @6 :UInt8;   # CAN controller re-inits since the ECU booted
+  recoveryEvents @7 :UInt16; # CAN recoveries seen since card started (all boots)
+  recoveryReason @8 :UInt8;  # stalk/VSS: reason for the last recovery
+  canErrorFlags @9 :UInt8;   # MCP2515 EFLG, latched over the last frame interval
+  txFails @10 :UInt8;        # failed sends over the last frame interval
+  loopMaxMs @11 :UInt8;      # slowest loop over the last frame interval
+  initRetries @12 :UInt8;    # stalk only: failed CAN inits at boot
+}
+
+struct RetrofitDiag @0xd81f3c6a0e7b2945 {
+  emulator @0 :RetrofitEcuDiag;
+  stalk @1 :RetrofitEcuDiag;
+  vss @2 :RetrofitEcuDiag;
+
+  stalkFrameAge @3 :Float32;         # seconds since the last 0x69 (cruise stalk) frame
+  stalkMainOn @4 :Bool;              # MAIN byte of the last 0x69
+  stalkC3Present @5 :Bool;           # stalk sees openpilot (0x2E4), relay energized
+  emulatorCruiseState @6 :UInt8;     # 0 OFF, 1 MAIN_ON, 2 ENGAGED, 3 CANCELLED
+  emulatorStalkPresent @7 :Bool;     # emulator is receiving 0x69
+  emulatorLastTransition @8 :UInt8;  # what last changed the emulator's cruise state
+  emulatorStalkLosses @9 :UInt8;     # stalk timeouts since the emulator booted
+  vssPulses @10 :UInt8;              # VSS pulses over the last frame interval
+  vssForceDrive @11 :Bool;           # FORCE_DRIVE compile override is on
+
+  lastRestartEcu @12 :RetrofitEcu;   # ECU behind the most recent restart
+  lastRecoveryEcu @13 :RetrofitEcu;  # ECU behind the most recent CAN recovery
+}
+
+enum RetrofitEcu {
+  none @0;
+  emulator @1;
+  stalk @2;
+  vss @3;
 }
 
 struct StarPilotDeviceState @0xda96579883444c35 {
@@ -189,6 +235,9 @@ struct StarPilotOnroadEvent @0xe344718567f9ce71 {
     teslaCCDisengaged @38;
     teslaCCNotArmed @39;
     pedalNotCalibrated @40;
+    retrofitStalkUnresponsive @41;
+    retrofitEcuRestarted @42;
+    retrofitEcuCanRecovered @43;
   }
 }
 

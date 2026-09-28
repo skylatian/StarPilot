@@ -461,6 +461,59 @@ def forcing_stop_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMas
     Priority.MID, VisualAlert.none, AudibleAlert.none, .1)
 
 
+# TOYOTA_COROLLA_RETROFIT custom ECUs (corolla_emulator repo). Codes match the VAL_
+# tables of RETROFIT_*_DIAG in the Toyota DBC (_community.dbc).
+RETROFIT_ECU_NAMES = {"emulator": "Main Emulator", "stalk": "Cruise Stalk", "vss": "VSS Speed"}
+RETROFIT_RESET_KINDS = {
+  0: "Power loss or brown-out",
+  1: "Power-on reset",
+  2: "Brown-out reset",
+  3: "Reset pin",
+  4: "Watchdog reset",
+  5: "Gave up on CAN recovery",
+}
+RETROFIT_STALK_PHASES = {
+  1: "setup", 2: "CAN init", 3: "CAN receive", 4: "stalk read", 5: "CAN send",
+  6: "CAN health check", 7: "serial print", 8: "CAN recovery", 9: "main loop",
+}
+RETROFIT_RECOVERY_REASONS = {1: "transmit stuck", 2: "controller left normal mode", 3: "bus-off"}
+
+
+def retrofit_ecu_restarted_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, starpilot_toggles: SimpleNamespace) -> Alert:
+  diag = sm['starpilotCarState'].retrofitDiag
+  ecu = str(diag.lastRestartEcu)
+  ecu_diag = getattr(diag, ecu, None) if ecu in RETROFIT_ECU_NAMES else None
+  reason = "Unknown cause"
+  if ecu_diag is not None:
+    reason = RETROFIT_RESET_KINDS.get(ecu_diag.resetKind, f"Reset kind {ecu_diag.resetKind}")
+    if ecu == "stalk" and ecu_diag.resetKind == 4 and ecu_diag.resetPhase in RETROFIT_STALK_PHASES:
+      reason = f"Watchdog: hung in {RETROFIT_STALK_PHASES[ecu_diag.resetPhase]}"
+  if ecu in ("emulator", "stalk"):
+    reason += ", cruise off"
+  return Alert(
+    f"{RETROFIT_ECU_NAMES.get(ecu, 'Retrofit')} ECU Restarted",
+    reason,
+    AlertStatus.userPrompt, AlertSize.mid,
+    Priority.MID, VisualAlert.none, AudibleAlert.prompt, 6.)
+
+
+def retrofit_ecu_can_recovered_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, starpilot_toggles: SimpleNamespace) -> Alert:
+  diag = sm['starpilotCarState'].retrofitDiag
+  ecu = str(diag.lastRecoveryEcu)
+  ecu_diag = getattr(diag, ecu, None) if ecu in RETROFIT_ECU_NAMES else None
+  reason = ""
+  if ecu_diag is not None and ecu != "emulator":
+    reason = RETROFIT_RECOVERY_REASONS.get(ecu_diag.recoveryReason, "")
+    reason = reason[:1].upper() + reason[1:]
+  if ecu == "stalk":
+    reason = f"{reason}, cruise off" if reason else "Cruise turned off"
+  return Alert(
+    f"{RETROFIT_ECU_NAMES.get(ecu, 'Retrofit')} CAN Controller Reset",
+    reason,
+    AlertStatus.userPrompt, AlertSize.mid if reason else AlertSize.small,
+    Priority.MID, VisualAlert.none, AudibleAlert.prompt, 6.)
+
+
 def holiday_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, starpilot_toggles: SimpleNamespace) -> Alert:
   holiday_messages = {
     "new_years": "Happy New Year! 🎉",
@@ -1324,6 +1377,22 @@ STARPILOT_EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   StarPilotEventName.teslaCCNotArmed: {
     ET.PERMANENT: NormalPermanentAlert("Arm Stock Cruise to Enable Speed Control"),
+  },
+
+  StarPilotEventName.retrofitStalkUnresponsive: {
+    ET.PERMANENT: Alert(
+      "Cruise Stalk Not Responding",
+      "Stalk presses will not work. Power-cycle the stalk ECU",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.MID, VisualAlert.none, AudibleAlert.prompt, .2),
+  },
+
+  StarPilotEventName.retrofitEcuRestarted: {
+    ET.PERMANENT: retrofit_ecu_restarted_alert,
+  },
+
+  StarPilotEventName.retrofitEcuCanRecovered: {
+    ET.PERMANENT: retrofit_ecu_can_recovered_alert,
   },
 
   StarPilotEventName.turningLeft: {

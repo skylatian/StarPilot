@@ -39,3 +39,70 @@ CM_ "BO_ SDSU: The sDSU is a modified DSU for use in TSS-P Toyotas. Learn more: 
 CM_ SG_ 767 FD_BUTTON "The follow distance button signal as forwarded by the sdsu";
 
 VAL_ 767 STATE 7 "STATE_AEB_CTRL" 6 "FAULT_INVALID" 5 "FAULT_TIMEOUT" 4 "FAULT_STARTUP" 3 "FAULT_SCE" 2 "FAULT_SEND" 1 "FAULT_BAD_CHECKSUM" 0 "NO_FAULT" ;
+
+BO_ 105 CRUISE_STALK: 3 RETROFIT
+ SG_ BUTTON_EVENT : 7|8@0+ (1,0) [0|4] "" XXX
+ SG_ MAIN_ON : 15|8@0+ (1,0) [0|1] "" XXX
+ SG_ CHECKSUM : 23|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ CRUISE_STALK: Retrofit (TOYOTA_COROLLA_RETROFIT) cruise stalk ECU, 20 Hz. BUTTON_EVENT is set for one frame per press; MAIN_ON is sent every frame. Source: corolla_emulator/cruise_stalk.";
+VAL_ 105 BUTTON_EVENT 4 "MAIN_TOGGLE" 3 "CANCEL" 2 "RES" 1 "SET" 0 "NONE" ;
+
+BO_ 1280 RETROFIT_EMULATOR_DIAG: 8 RETROFIT
+ SG_ BOOT_COUNT : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ ROLLING_COUNTER : 15|4@0+ (1,0) [0|15] "" XXX
+ SG_ RESET_KIND : 11|4@0+ (1,0) [0|15] "" XXX
+ SG_ CRUISE_STATE : 23|2@0+ (1,0) [0|3] "" XXX
+ SG_ STALK_PRESENT : 21|1@0+ (1,0) [0|1] "" XXX
+ SG_ STALK_MAIN_ON : 20|1@0+ (1,0) [0|1] "" XXX
+ SG_ LAST_TRANSITION : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ CAN_ERROR_FLAGS : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ CAN_RECOVERIES : 39|4@0+ (1,0) [0|15] "" XXX
+ SG_ STALK_LOSSES : 35|4@0+ (1,0) [0|15] "" XXX
+ SG_ TX_FAILS : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ LOOP_MAX_MS : 55|8@0+ (1,0) [0|255] "ms" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_EMULATOR_DIAG: Retrofit main emulator ECU status, 2 Hz plus one frame on every cruise transition. Source: corolla_emulator/fakeecu. ROLLING_COUNTER is deliberately not named COUNTER: the parser would treat the jump after an ECU reboot as a CAN error.";
+CM_ SG_ 1280 CAN_ERROR_FLAGS "MCP2515 EFLG OR-latched since the previous frame. Bit 6 RX0OVR = a stalk (0x69) frame was dropped; bit 7 RX1OVR = a 0xAA/0x343 frame was dropped; bit 5 TXBO = bus-off.";
+VAL_ 1280 RESET_KIND 5 "DELIBERATE" 4 "WATCHDOG" 3 "EXTERNAL" 2 "BROWN_OUT" 1 "POWER_ON" 0 "UNKNOWN" ;
+VAL_ 1280 CRUISE_STATE 3 "CANCELLED" 2 "ENGAGED" 1 "MAIN_ON" 0 "OFF" ;
+VAL_ 1280 LAST_TRANSITION 12 "RES_INC" 11 "SET_DEC" 10 "FIRST_SYNC" 9 "OP_CANCEL" 8 "STALK_LOST" 7 "MAIN_SYNC_OFF" 6 "MAIN_SYNC_ON" 5 "MAIN_OFF" 4 "MAIN_ON" 3 "CANCEL" 2 "RES" 1 "SET" 0 "BOOT" ;
+
+BO_ 1281 RETROFIT_STALK_DIAG: 8 RETROFIT
+ SG_ BOOT_COUNT : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ ROLLING_COUNTER : 15|4@0+ (1,0) [0|15] "" XXX
+ SG_ RESET_KIND : 11|4@0+ (1,0) [0|15] "" XXX
+ SG_ RESET_PHASE : 23|4@0+ (1,0) [0|15] "" XXX
+ SG_ RECOVERY_REASON : 19|2@0+ (1,0) [0|3] "" XXX
+ SG_ C3_PRESENT : 17|1@0+ (1,0) [0|1] "" XXX
+ SG_ MAIN_ON : 16|1@0+ (1,0) [0|1] "" XXX
+ SG_ CAN_ERROR_FLAGS : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ TX_FAILS : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ INIT_RETRIES : 47|4@0+ (1,0) [0|15] "" XXX
+ SG_ CAN_RECOVERIES : 43|4@0+ (1,0) [0|15] "" XXX
+ SG_ LOOP_MAX_MS : 55|8@0+ (1,0) [0|255] "ms" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_STALK_DIAG: Retrofit cruise stalk ECU status, 2 Hz plus one frame right after boot and after a CAN recovery. Source: corolla_emulator/cruise_stalk.";
+CM_ SG_ 1281 RESET_PHASE "Loop phase the watchdog caught the board in (only meaningful when RESET_KIND is WATCHDOG or DELIBERATE).";
+VAL_ 1281 RESET_KIND 5 "DELIBERATE" 4 "WATCHDOG" 3 "EXTERNAL" 2 "BROWN_OUT" 1 "POWER_ON" 0 "UNKNOWN" ;
+VAL_ 1281 RESET_PHASE 9 "LOOP" 8 "RECOVERY" 7 "SERIAL" 6 "HEALTH" 5 "CAN_TX" 4 "STALK" 3 "CAN_RX" 2 "CAN_INIT" 1 "SETUP" 0 "NONE" ;
+VAL_ 1281 RECOVERY_REASON 3 "BUS_OFF" 2 "MODE_LOST" 1 "TX_STUCK" 0 "NONE" ;
+
+BO_ 1282 RETROFIT_VSS_DIAG: 8 RETROFIT
+ SG_ BOOT_COUNT : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ ROLLING_COUNTER : 15|4@0+ (1,0) [0|15] "" XXX
+ SG_ RESET_KIND : 11|4@0+ (1,0) [0|15] "" XXX
+ SG_ RECOVERY_REASON : 23|2@0+ (1,0) [0|3] "" XXX
+ SG_ FORCE_DRIVE : 21|1@0+ (1,0) [0|1] "" XXX
+ SG_ CAN_RECOVERIES : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ CAN_ERROR_FLAGS : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ TX_FAILS : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ VSS_PULSES : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ LOOP_MAX_MS : 55|8@0+ (1,0) [0|255] "ms" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ RETROFIT_VSS_DIAG: Retrofit VSS speed ECU status, 2 Hz. Source: corolla_emulator/vss_speed. CAN_ERROR_FLAGS has the RX overflow bits masked (the device never reads RX).";
+VAL_ 1282 RESET_KIND 5 "DELIBERATE" 4 "WATCHDOG" 3 "EXTERNAL" 2 "BROWN_OUT" 1 "POWER_ON" 0 "UNKNOWN" ;
+VAL_ 1282 RECOVERY_REASON 3 "BUS_OFF" 2 "MODE_LOST" 1 "TX_STUCK" 0 "NONE" ;

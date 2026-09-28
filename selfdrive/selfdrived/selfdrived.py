@@ -171,6 +171,29 @@ def add_tesla_preap_starpilot_events(CP, CS, FPCS, starpilot_events: Events, pre
   return pedal_long_active
 
 
+RETROFIT_STALK_TIMEOUT = 1.0  # s without 0x69 — matches the emulator's own stalk timeout
+
+
+def add_retrofit_starpilot_events(CP, FPCS, starpilot_events: Events, prev_counts: tuple[int, int]) -> tuple[int, int]:
+  """Alerts for the TOYOTA_COROLLA_RETROFIT custom ECUs. prev_counts is (restarts,
+  CAN recoveries) seen so far; restart/recovery alerts fire once per new occurrence."""
+  if CP.carFingerprint != "TOYOTA_COROLLA_RETROFIT":
+    return prev_counts
+
+  diag = FPCS.retrofitDiag
+  if diag.stalkFrameAge > RETROFIT_STALK_TIMEOUT:
+    starpilot_events.add(StarPilotEventName.retrofitStalkUnresponsive)
+
+  ecus = (diag.emulator, diag.stalk, diag.vss)
+  restarts = sum(ecu.restarts for ecu in ecus)
+  recoveries = sum(ecu.recoveryEvents for ecu in ecus)
+  if restarts > prev_counts[0]:
+    starpilot_events.add(StarPilotEventName.retrofitEcuRestarted)
+  if recoveries > prev_counts[1]:
+    starpilot_events.add(StarPilotEventName.retrofitEcuCanRecovered)
+  return restarts, recoveries
+
+
 class SelfdriveD:
   def __init__(self, CP=None):
     self.params = Params()
@@ -269,6 +292,7 @@ class SelfdriveD:
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
     self.prev_pedal_long_active = False
+    self.retrofit_diag_counts = (0, 0)
     self._controller_openpilot_counters = {
       action: self.params_memory.get_int(CONTROLLER_ACTION_COUNTERS[action])
       for action in (CONTROLLER_ACTION_ENGAGE, CONTROLLER_ACTION_DISENGAGE)
@@ -522,6 +546,9 @@ class SelfdriveD:
 
       self.prev_pedal_long_active = add_tesla_preap_starpilot_events(
         self.CP, CS, self.sm['starpilotCarState'], self.starpilot_events, self.prev_pedal_long_active
+      )
+      self.retrofit_diag_counts = add_retrofit_starpilot_events(
+        self.CP, self.sm['starpilotCarState'], self.starpilot_events, self.retrofit_diag_counts
       )
 
       if (getattr(self.starpilot_toggles, "nostalgia_mode", False) and

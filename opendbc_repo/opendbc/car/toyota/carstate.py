@@ -6,6 +6,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.toyota import retrofit_diag
 from openpilot.common.params import Params
 from opendbc.car.toyota.values import ToyotaFlags, ToyotaStarPilotFlags, CAR, DBC, STEER_THRESHOLD, NO_STOP_TIMER_CAR, \
                                                   TSS2_CAR, RADAR_ACC_CAR, EPS_SCALE, UNSUPPORTED_DSU_CAR, \
@@ -92,6 +93,8 @@ class CarState(CarStateBase):
     self.has_SDSU = self.FPCP.flags & ToyotaStarPilotFlags.SMART_DSU.value
     self.has_ZSS = self.FPCP.flags & ToyotaStarPilotFlags.ZSS.value
     self.param_store = Params()
+
+    self.retrofit_diag = retrofit_diag.RetrofitDiagTracker() if CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT else None
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -295,6 +298,9 @@ class CarState(CarStateBase):
 
     ret.buttonEvents = buttonEvents
 
+    if self.retrofit_diag is not None:
+      self.retrofit_diag.update(cp, fp_ret)
+
     return ret, fp_ret
 
   @staticmethod
@@ -314,6 +320,10 @@ class CarState(CarStateBase):
 
     if CP.carFingerprint in DISTANCE_BUTTON_CAR:
       pt_messages.append(("PCM_CRUISE_4", 1))
+
+    # Custom retrofit ECU status frames (NaN frequency: never affect canValid)
+    if CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
+      pt_messages += retrofit_diag.PT_MESSAGES
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
