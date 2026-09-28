@@ -1011,6 +1011,93 @@ class StarPilotCenterTaperLayout(_PreviewPage):
     ))
 
 
+# ═══════════════════════════════════════════════════════════════
+# ECU status (live, onroad only)
+# ═══════════════════════════════════════════════════════════════
+
+ECU_FRAME_TIMEOUT = 1.0  # s without frames → "Missing"
+ECU_OFFROAD_NOTE = tr_noop("Onroad only")
+
+# (key, title, subtitle). Custom ECUs report firmware; EPS/SAS are stock parts.
+ECU_ROWS = (
+  ("emulator", tr_noop("Main Emulator"), tr_noop("Uno + CAN shield. Presence from PCM_CRUISE (0x1D2), status from 0x500.")),
+  ("stalk", tr_noop("Cruise Stalk"), tr_noop("CANBed. Presence from CRUISE_STALK (0x69), status from 0x501.")),
+  ("vss", tr_noop("VSS Speed"), tr_noop("CANBed. Presence from WHEEL_SPEEDS (0xAA), status from 0x502.")),
+  ("eps", tr_noop("EPS"), tr_noop("2016 Corolla EPS. Presence from EPS_STATUS (0x262).")),
+  ("sas", tr_noop("Steering Angle Sensor"), tr_noop("Presence from STEER_ANGLE_SENSOR (0x25).")),
+)
+
+
+def ecu_status_text(key: str, diag, started: bool) -> str:
+  """One-line status for the ECU Status page. `diag` is starpilotCarState.retrofitDiag,
+  or None when card isn't publishing. Nothing is shown offroad: the ECUs are only
+  powered (and the car only onroad) together, so an offroad value would be stale."""
+  if not started:
+    return ECU_OFFROAD_NOTE
+  if diag is None:
+    return tr_noop("No data")
+
+  age = {
+    "emulator": diag.emulatorFrameAge,
+    "stalk": diag.stalkFrameAge,
+    "vss": diag.vssFrameAge,
+    "eps": diag.epsFrameAge,
+    "sas": diag.sasFrameAge,
+  }[key]
+  if age > ECU_FRAME_TIMEOUT:
+    return tr_noop("Missing")
+
+  parts = [tr_noop("Connected")]
+  if key == "eps":
+    parts.append(f"LKA state {diag.epsLkaState}")
+  elif key in ("emulator", "stalk", "vss"):
+    ecu = getattr(diag, key)
+    if not ecu.seen:
+      parts.append(tr_noop("no status frame (old firmware)"))
+    else:
+      parts.append(ecu.firmwareVersion or tr_noop("version pending"))
+      if ecu.restarts:
+        parts.append(f"{ecu.restarts} restart{'s' if ecu.restarts != 1 else ''}")
+      if ecu.recoveryEvents:
+        parts.append(f"{ecu.recoveryEvents} CAN reset{'s' if ecu.recoveryEvents != 1 else ''}")
+  return " · ".join(parts)
+
+
+def _live_retrofit_diag():
+  from openpilot.selfdrive.ui.ui_state import ui_state
+  if not ui_state.started:
+    return False, None
+  if not ui_state.sm.valid.get("starpilotCarState", False):
+    return True, None
+  fpcs = ui_state.sm["starpilotCarState"]
+  return True, (fpcs.retrofitDiag if fpcs.has("retrofitDiag") else None)
+
+
+def live_ecu_status(key: str) -> str:
+  started, diag = _live_retrofit_diag()
+  return ecu_status_text(key, diag, started)
+
+
+class StarPilotEcuStatusLayout(_RetrofitSubPage):
+  """Live status + firmware version of each retrofit ECU (sub-panel key "ecus")."""
+
+  def __init__(self):
+    super().__init__()
+    rows = [
+      SettingRow(f"RetrofitEcuStatus_{key}", "value", title, subtitle=subtitle,
+                 get_value=lambda key=key: live_ecu_status(key))
+      for key, title, subtitle in ECU_ROWS
+    ]
+    self._manager_view = AetherSettingsView(
+      self,
+      [SettingSection(tr_noop("ECUs"), rows)],
+      header_title=tr_noop("ECU Status"),
+      header_subtitle=tr_noop("Live only while onroad. The ECUs are powered together with the car, "
+                              "so offroad there is nothing to show."),
+      panel_style=DEFAULT_PANEL_STYLE,
+    )
+
+
 class StarPilotRetrofitLayout(_SettingsPage):
   def __init__(self):
     super().__init__()
@@ -1025,6 +1112,7 @@ class StarPilotRetrofitLayout(_SettingsPage):
       "tune_ff": StarPilotFFWindowLayout(),
       "tune_turn": StarPilotTurnDynamicsLayout(),
       "tune_center": StarPilotCenterTaperLayout(),
+      "ecus": StarPilotEcuStatusLayout(),
     }
     self._wire_sub_panels()
     self._build_view()
@@ -1062,6 +1150,16 @@ class StarPilotRetrofitLayout(_SettingsPage):
 
   def _build_view(self):
     sections = [
+      SettingSection(tr_noop("Hardware"), [
+        SettingRow(
+          "RetrofitEcuStatusNav",
+          "value",
+          tr_noop("ECU Status"),
+          subtitle=tr_noop("Connection and firmware version of each retrofit ECU, EPS and SAS. Onroad only."),
+          get_value=lambda: tr_noop("View"),
+          navigate_to="ecus",
+        ),
+      ]),
       SettingSection(tr_noop("Controls"), [
         SettingRow(
           "RetrofitPauseSteering",

@@ -34,6 +34,13 @@ def _last_seen_nanos(cp: CANParser, msg: str) -> int:
   return cp.ts_nanos[msg]["CHECKSUM"]
 
 
+def _frame_age(cp: CANParser, msg: str, now: int, start: int) -> float:
+  # Messages carstate already reads (EPS, SAS, ...); vl access registers them if needed.
+  cp.vl[msg]
+  seen = max(cp.ts_nanos[msg].values(), default=0)
+  return max(now - (seen or start), 0) * 1e-9
+
+
 class _EcuTracker:
   def __init__(self, msg: str, version_msg: str, ecu: str):
     self.msg = msg
@@ -146,6 +153,12 @@ class RetrofitDiagTracker:
       diag.vss.recoveryReason = int(vss["RECOVERY_REASON"])
       diag.vssPulses = int(vss["VSS_PULSES"])
       diag.vssForceDrive = bool(vss["FORCE_DRIVE"])
+
+    diag.epsFrameAge = _frame_age(cp, "EPS_STATUS", now, self.start_nanos)
+    diag.sasFrameAge = _frame_age(cp, "STEER_ANGLE_SENSOR", now, self.start_nanos)
+    diag.emulatorFrameAge = _frame_age(cp, "PCM_CRUISE", now, self.start_nanos)
+    diag.vssFrameAge = _frame_age(cp, "WHEEL_SPEEDS", now, self.start_nanos)
+    diag.epsLkaState = int(cp.vl["EPS_STATUS"]["LKA_STATE"])
 
     diag.lastRestartEcu = self.last_restart_ecu
     diag.lastRecoveryEcu = self.last_recovery_ecu

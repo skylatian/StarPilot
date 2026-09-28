@@ -88,7 +88,7 @@ def test_steer_angle_deadzone_default_matches_car_interface():
 
 def test_layout_has_every_page_and_reenters_sub_pages():
   layout = retrofit.StarPilotRetrofitLayout()
-  assert set(layout._sub_panels) == {"tuning", "nnff", "nonlinear", "nonlinear_advanced", "tune", "tune_kp", "tune_ff", "tune_turn", "tune_center"}
+  assert set(layout._sub_panels) == {"tuning", "nnff", "nonlinear", "nonlinear_advanced", "tune", "tune_kp", "tune_ff", "tune_turn", "tune_center", "ecus"}
 
   pushed = []
   layout.set_navigate_callback(pushed.append)

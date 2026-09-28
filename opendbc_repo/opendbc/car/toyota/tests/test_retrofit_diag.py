@@ -161,9 +161,12 @@ class TestRetrofitDiag:
   def test_diag_messages_never_affect_can_valid(self):
     h = Harness()
     h.step([stalk_diag(), emulator_diag(), vss_diag(), stalk_0x69(0, True)])
-    for _ in range(100):  # 5 s of silence from all four
+    for _ in range(100):  # 5 s of silence from all of them
       h.step([(0x7FF, bytes(8), 0)])
-    assert h.cp.can_valid
+    names = {name for name, _ in retrofit_diag.PT_MESSAGES}
+    states = [st for st in h.cp.message_states.values() if st.name in names]
+    assert len(states) == len(names)
+    assert all(st.valid(h.t, False) for st in states)
 
   def test_registered_for_retrofit_only(self):
     toggles = SimpleNamespace(force_torque_controller=False, nnff=False, nnff_lite=False)
@@ -196,3 +199,15 @@ class TestRetrofitDiag:
     assert (d.emulator.firmwareVersion, d.emulator.buildTime) == ("092726b", "2026-12-01 00:00:05")
     assert d.vss.firmwareVersion == "100126z"
     assert d.stalk.firmwareVersion == ""
+
+  def test_device_frame_ages(self):
+    h = Harness()
+    h.step([])  # carstate reads these every update; the first read registers them
+    eps = frame(0x262, [0, 0, 0, 0x02, 0])  # LKA_STATE 1
+    d = h.step([eps, (0x25, bytes(8), 0)])
+    assert d.epsFrameAge < 0.01 and d.sasFrameAge < 0.01 and d.epsLkaState == 1
+    for _ in range(30):
+      d = h.step([eps])
+    assert d.epsFrameAge < 0.1
+    assert 1.4 < d.sasFrameAge < 1.6
+    assert d.emulatorFrameAge > 1.0 and d.vssFrameAge > 1.0  # never seen

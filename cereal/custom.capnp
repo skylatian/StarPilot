@@ -151,6 +151,13 @@ struct RetrofitDiag @0xd81f3c6a0e7b2945 {
 
   lastRestartEcu @12 :RetrofitEcu;   # ECU behind the most recent restart
   lastRecoveryEcu @13 :RetrofitEcu;  # ECU behind the most recent CAN recovery
+
+  # Seconds since the last frame from each device (measured from card start if never seen)
+  epsFrameAge @14 :Float32;          # 0x262 EPS_STATUS
+  sasFrameAge @15 :Float32;          # 0x25 STEER_ANGLE_SENSOR
+  emulatorFrameAge @16 :Float32;     # 0x1D2 PCM_CRUISE
+  vssFrameAge @17 :Float32;          # 0xAA WHEEL_SPEEDS
+  epsLkaState @18 :UInt8;            # EPS_STATUS.LKA_STATE
 }
 
 enum RetrofitEcu {
