@@ -88,7 +88,7 @@ def test_steer_angle_deadzone_default_matches_car_interface():
 
 def test_layout_has_every_page_and_reenters_sub_pages():
   layout = retrofit.StarPilotRetrofitLayout()
-  assert set(layout._sub_panels) == {"tuning", "nonlinear", "nonlinear_advanced", "tune", "tune_kp", "tune_ff", "tune_turn", "tune_center"}
+  assert set(layout._sub_panels) == {"tuning", "nnff", "nonlinear", "nonlinear_advanced", "tune", "tune_kp", "tune_ff", "tune_turn", "tune_center"}
 
   pushed = []
   layout.set_navigate_callback(pushed.append)
@@ -191,13 +191,19 @@ def test_tuning_rows_show_and_open_at_the_table_default_when_unset(monkeypatch):
   keys_src = open(f"{BASEDIR}/common/params_keys.h").read()
   table = dict(re.findall(r'\{"(Retrofit[A-Za-z0-9_]+)", \{PERSISTENT, FLOAT, "([^"]*)"', keys_src))
 
-  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
-  page._params = _UnsetParams(table)
+  layout = retrofit.StarPilotRetrofitLayout()
   opened = []
-  monkeypatch.setattr(page, "_show_slider", lambda key, lo, hi, **kw: opened.append((key, lo, hi, kw.get("current_value"))))
-
-  rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
-  for key in ("RetrofitNNFFFrictionAccel", "RetrofitNNFFFrictionJerk", "RetrofitSteerAngleDeadzone", "RetrofitPedalOffsetStandstill"):
+  pages = {
+    "RetrofitNNFFFrictionAccel": "nnff",
+    "RetrofitNNFFFrictionJerk": "nnff",
+    "RetrofitSteerAngleDeadzone": "tune_center",
+    "RetrofitPedalOffsetStandstill": "tuning",
+  }
+  for key, panel in pages.items():
+    page = layout._sub_panels[panel]
+    page._params = _UnsetParams(table)
+    monkeypatch.setattr(page, "_show_slider", lambda key, lo, hi, **kw: opened.append((key, lo, hi, kw.get("current_value"))))
+    rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
     default = float(table[key])
     assert default != 0.0, key  # otherwise this row cannot tell the bug from the fix
     assert f"{default:.1f}" in rows[key].get_value() or f"{default:.2f}" in rows[key].get_value(), key
@@ -213,7 +219,7 @@ def test_nnff_friction_rows_open_sliders_matching_the_toggle_range(monkeypatch):
     r'get_value\("(RetrofitNNFF[A-Za-z]+)", cast=float, default=[0-9.]+, min=([0-9.]+), max=([0-9.]+)\)', variables_src)}
   assert set(clamps) == {"RetrofitNNFFFrictionAccel", "RetrofitNNFFFrictionJerk"}
 
-  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
+  page = retrofit.StarPilotRetrofitLayout()._sub_panels["nnff"]
   opened = []
   monkeypatch.setattr(page, "_show_slider", lambda key, lo, hi, **kw: opened.append((key, lo, hi)))
   rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
@@ -245,12 +251,16 @@ def test_nnff_model_row_label(selection, label):
   assert retrofit.nnff_model_label("", []) == "None installed"
 
 
+@pytest.mark.parametrize("panel, row_id", [
+  ("nnff", "RetrofitNNFFModel"),  # NNFF Tune page
+  (None, "RetrofitNNFFModelShortcut"),  # shortcut on the Retrofit Options hub
+])
 @pytest.mark.parametrize("picked, stored", [
   ("Newest (v2_2026-02-01)", ""),  # newest is stored as empty, so later models are followed
   ("v2_2026-02-01", "v2_2026-02-01"),  # picking the newest by name pins it
   ("v1_2026-01-01", "v1_2026-01-01"),
 ])
-def test_nnff_model_picker_writes_selection(monkeypatch, picked, stored):
+def test_nnff_model_picker_writes_selection(monkeypatch, picked, stored, panel, row_id):
   from openpilot.system.ui.widgets import DialogResult
   monkeypatch.setattr(retrofit, "get_retrofit_nnff_models", lambda: ["v2_2026-02-01", "v1_2026-01-01"])
   dialogs = []
@@ -263,16 +273,48 @@ def test_nnff_model_picker_writes_selection(monkeypatch, picked, stored):
   monkeypatch.setattr(retrofit, "MultiOptionDialog", FakeDialog)
   monkeypatch.setattr(retrofit.gui_app, "push_widget", lambda w: None)
 
-  page = retrofit.StarPilotRetrofitLayout()._sub_panels["tuning"]
+  layout = retrofit.StarPilotRetrofitLayout()
+  page = layout._sub_panels[panel] if panel else layout
   store = {"RetrofitNNFFModel": "v1_2026-01-01"}
   page._params = _StringParams(store)
   rows = {row.id: row for section in page._manager_view._sections for row in section.rows}
-  assert rows["RetrofitNNFFModel"].get_value() == "v1_2026-01-01"
+  assert rows[row_id].get_value() == "v1_2026-01-01"
 
-  rows["RetrofitNNFFModel"].on_click()
+  rows[row_id].on_click()
   dialog = dialogs[-1]
   assert dialog.options == ["Newest (v2_2026-02-01)", "v2_2026-02-01", "v1_2026-01-01"]
   assert dialog.current == "v1_2026-01-01"
   dialog.selection = picked
   dialog.callback(DialogResult.CONFIRM)
   assert store["RetrofitNNFFModel"] == stored
+
+
+class _BoolParams:
+  def __init__(self, store):
+    self.store = store
+
+  def get_bool(self, key, **kwargs):
+    return self.store.get(key, key == "LateralTune")  # params_keys.h default: LateralTune on, NNFF/NNFFLite off
+
+
+@pytest.mark.parametrize("store, models, controller, tune_status, nnff_status", [
+  ({}, ["v1"], "torque", "Active", "Inactive (NNFF off)"),
+  ({"NNFF": True}, ["v1"], "nnff", "Inactive (NNFF on)", "Active"),
+  ({"NNFF": True}, [], "torque", "Active", "Inactive (NNFF off)"),  # no model: NNFF toggle is inert
+  ({"NNFF": True, "NNFFLite": True}, ["v1"], "nnff", "Inactive (NNFF on)", "Active"),  # NNFF wins over Lite
+  ({"NNFF": True, "NNFFLite": True}, [], "nnff_lite", "Inactive (NNFF Lite on)", "Inactive (NNFF Lite on)"),
+  ({"NNFFLite": True}, ["v1"], "nnff_lite", "Inactive (NNFF Lite on)", "Inactive (NNFF Lite on)"),
+  ({"NNFF": True, "LateralTune": False}, ["v1"], "torque", "Active", "Inactive (NNFF off)"),  # both need Lateral Tuning
+])
+def test_controller_status_follows_controlsd_selection(monkeypatch, store, models, controller, tune_status, nnff_status):
+  monkeypatch.setattr(retrofit, "get_retrofit_nnff_models", lambda: models)
+  params = _BoolParams(store)
+  assert retrofit.lateral_controller(params) == controller
+  assert retrofit.controller_tune_status(params) == tune_status
+  assert retrofit.nnff_tune_status(params) == nnff_status
+
+  layout = retrofit.StarPilotRetrofitLayout()
+  layout._params = params
+  rows = {row.id: row for section in layout._manager_view._sections for row in section.rows}
+  assert rows["RetrofitTuneNav"].get_value() == tune_status
+  assert rows["RetrofitNNFFTuneNav"].get_value() == nnff_status

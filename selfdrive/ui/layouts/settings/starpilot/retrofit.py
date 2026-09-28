@@ -247,6 +247,55 @@ def nnff_model_label(selection: str, models: list[str]) -> str:
   return f"{selection} {tr('missing')}, {tr('using')} {models[0]}"
 
 
+def lateral_controller(params) -> str:
+  """Which lateral controller controlsd builds with the current toggles: "nnff", "nnff_lite" or "torque".
+
+  Mirrors starpilot_variables (NNFF needs Lateral Tuning plus a retrofit model, NNFF Lite needs
+  Lateral Tuning and yields to NNFF) and controlsd, which swaps LatControlTorque for LatControlNNFF
+  when either is on. The controller is built once when controlsd starts, so a change here takes
+  effect on the next offroad cycle.
+  """
+  if not params.get_bool("LateralTune"):
+    return "torque"
+  if params.get_bool("NNFF") and get_retrofit_nnff_models():
+    return "nnff"
+  if params.get_bool("NNFFLite"):
+    return "nnff_lite"
+  return "torque"
+
+
+def controller_tune_status(params) -> str:
+  controller = lateral_controller(params)
+  if controller == "torque":
+    return tr("Active")
+  return tr("Inactive (NNFF Lite on)") if controller == "nnff_lite" else tr("Inactive (NNFF on)")
+
+
+def nnff_tune_status(params) -> str:
+  controller = lateral_controller(params)
+  if controller == "nnff":
+    return tr("Active")
+  return tr("Inactive (NNFF Lite on)") if controller == "nnff_lite" else tr("Inactive (NNFF off)")
+
+
+def show_nnff_model_select(params) -> None:
+  """Model picker shared by the NNFF Tune page and the Retrofit Options shortcut."""
+  models = get_retrofit_nnff_models()
+  if not models:
+    return
+  newest = nnff_newest_label(models)
+  selection = params.get("RetrofitNNFFModel", encoding="utf-8") or ""
+  current = selection if selection in models else newest
+
+  def on_select(res):
+    if res != DialogResult.CONFIRM or not dialog.selection:
+      return
+    params.put("RetrofitNNFFModel", "" if dialog.selection == newest else dialog.selection)
+
+  dialog = MultiOptionDialog(tr("NNFF Model"), [newest, *models], current, callback=on_select)
+  gui_app.push_widget(dialog)
+
+
 class _PlotWidget(Widget):
   """Rounded panel with a plot area, axis helpers, and per-page math in ``_draw_plot``.
 
@@ -675,86 +724,14 @@ class _PreviewPage(_RetrofitSubPage):
 
 
 class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
+  """Pedal Tuning (sub-panel key "tuning")."""
+
   def __init__(self):
     super().__init__()
     self._build_view()
 
   def _build_view(self):
     sections = [
-      SettingSection(tr_noop("Steering"), [
-        SettingRow(
-          "RetrofitSteerAngleDeadzone",
-          "value",
-          tr_noop("Center Deadzone"),
-          subtitle=tr_noop(
-            "Blind spot around straight-ahead for the friction compensation, so it stops flipping " +
-            "sign on tiny corrections and shaking the wheel. Raise if it hunts on the highway. " +
-            "Needs an offroad cycle."
-          ),
-          get_value=lambda: f"{stored_float(self._params, 'RetrofitSteerAngleDeadzone'):.1f}°",
-          on_click=lambda: self._show_slider(
-            "RetrofitSteerAngleDeadzone",
-            0.0,
-            2.0,
-            step=0.1,
-            unit="°",
-            value_type="float",
-            current_value=stored_float(self._params, "RetrofitSteerAngleDeadzone"),
-          ),
-        ),
-      ]),
-      SettingSection(tr_noop("Neural Feedforward (NNFF only)"), [
-        SettingRow(
-          "RetrofitNNFFModel",
-          "value",
-          tr_noop("NNFF Model"),
-          subtitle=tr_noop(
-            "Which trained model NNFF drives with. Newest follows new versions as they are added; " +
-            "picking one pins it. Needs an offroad cycle."
-          ),
-          get_value=lambda: nnff_model_label(self._params.get("RetrofitNNFFModel", encoding="utf-8") or "",
-                                             get_retrofit_nnff_models()),
-          on_click=self._show_nnff_model_select,
-        ),
-        SettingRow(
-          "RetrofitNNFFFrictionAccel",
-          "value",
-          tr_noop("NNFF Friction: Tracking Error"),
-          subtitle=tr_noop(
-            "How strongly NNFF's friction response reacts to steering that lags the plan. " +
-            "Only does anything with NNFF on (the Controller Tune knobs do nothing under NNFF). " +
-            "1.0 = current behaviour. Raise if the wheel sticks before moving; lower if it hunts. Applies live."
-          ),
-          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionAccel'):.2f}",
-          on_click=lambda: self._show_slider(
-            "RetrofitNNFFFrictionAccel",
-            0.0,
-            3.0,
-            step=0.05,
-            value_type="float",
-            current_value=stored_float(self._params, "RetrofitNNFFFrictionAccel"),
-          ),
-        ),
-        SettingRow(
-          "RetrofitNNFFFrictionJerk",
-          "value",
-          tr_noop("NNFF Friction: Planned Turn-In"),
-          subtitle=tr_noop(
-            "How much an upcoming turn-in or unwind adds to NNFF's friction response, so the " +
-            "column is already moving when the turn starts. Also feeds NNFF's feedback. " +
-            "NNFF only. 0.4 = stock. Applies live."
-          ),
-          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionJerk'):.2f}",
-          on_click=lambda: self._show_slider(
-            "RetrofitNNFFFrictionJerk",
-            0.0,
-            3.0,
-            step=0.05,
-            value_type="float",
-            current_value=stored_float(self._params, "RetrofitNNFFFrictionJerk"),
-          ),
-        ),
-      ]),
       SettingSection(tr_noop("Pedal"), [
         SettingRow(
           "RetrofitPedalOffsetStandstill",
@@ -779,26 +756,84 @@ class StarPilotRetrofitTuningLayout(_RetrofitSubPage):
     self._manager_view = AetherSettingsView(
       self,
       sections,
-      header_title=tr_noop("Retrofit Tuning"),
-      header_subtitle=tr_noop("Pedal and retrofit-specific adjustments."),
+      header_title=tr_noop("Pedal Tuning"),
+      header_subtitle=tr_noop("Interceptor pedal mapping for standstill launch and creep."),
       panel_style=DEFAULT_PANEL_STYLE,
     )
 
-  def _show_nnff_model_select(self):
-    models = get_retrofit_nnff_models()
-    if not models:
-      return
-    newest = nnff_newest_label(models)
-    selection = self._params.get("RetrofitNNFFModel", encoding="utf-8") or ""
-    current = selection if selection in models else newest
 
-    def on_select(res):
-      if res != DialogResult.CONFIRM or not dialog.selection:
-        return
-      self._params.put("RetrofitNNFFModel", "" if dialog.selection == newest else dialog.selection)
+class StarPilotNNFFTuneLayout(_RetrofitSubPage):
+  """Settings for the neural feedforward controller (LatControlNNFF)."""
 
-    dialog = MultiOptionDialog(tr("NNFF Model"), [newest, *models], current, callback=on_select)
-    gui_app.push_widget(dialog)
+  def __init__(self):
+    super().__init__()
+    self._build_view()
+
+  def _build_view(self):
+    sections = [
+      SettingSection(tr_noop("Model"), [
+        SettingRow(
+          "RetrofitNNFFModel",
+          "value",
+          tr_noop("NNFF Model"),
+          subtitle=tr_noop(
+            "Which trained model NNFF drives with. Newest follows new versions as they are added; " +
+            "picking one pins it. Needs an offroad cycle."
+          ),
+          get_value=lambda: nnff_model_label(self._params.get("RetrofitNNFFModel", encoding="utf-8") or "",
+                                             get_retrofit_nnff_models()),
+          on_click=lambda: show_nnff_model_select(self._params),
+        ),
+      ]),
+      SettingSection(tr_noop("Friction"), [
+        SettingRow(
+          "RetrofitNNFFFrictionAccel",
+          "value",
+          tr_noop("Tracking Error"),
+          subtitle=tr_noop(
+            "How strongly NNFF's friction response reacts to steering that lags the plan. " +
+            "1.0 = current behaviour. Raise if the wheel sticks before moving; lower if it hunts. Applies live."
+          ),
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionAccel'):.2f}",
+          on_click=lambda: self._show_slider(
+            "RetrofitNNFFFrictionAccel",
+            0.0,
+            3.0,
+            step=0.05,
+            value_type="float",
+            current_value=stored_float(self._params, "RetrofitNNFFFrictionAccel"),
+            title="NNFF Friction: Tracking Error",
+          ),
+        ),
+        SettingRow(
+          "RetrofitNNFFFrictionJerk",
+          "value",
+          tr_noop("Planned Turn-In"),
+          subtitle=tr_noop(
+            "How much an upcoming turn-in or unwind adds to NNFF's friction response, so the " +
+            "column is already moving when the turn starts. Also feeds NNFF's feedback. " +
+            "0.4 = stock. Applies live."
+          ),
+          get_value=lambda: f"{stored_float(self._params, 'RetrofitNNFFFrictionJerk'):.2f}",
+          on_click=lambda: self._show_slider(
+            "RetrofitNNFFFrictionJerk",
+            0.0,
+            3.0,
+            step=0.05,
+            value_type="float",
+            current_value=stored_float(self._params, "RetrofitNNFFFrictionJerk"),
+            title="NNFF Friction: Planned Turn-In",
+          ),
+        ),
+      ]),
+    ]
+    self._manager_view = AetherSettingsView(
+      self,
+      sections,
+      header_title=tr_noop("NNFF Tune"),
+      header_subtitle=tr_noop("Neural feedforward controller. Only used while NNFF is on. Steer KP (Advanced Lateral Tuning) also applies."),
+      panel_style=DEFAULT_PANEL_STYLE,
+    )
 
 
 class StarPilotNonlinearSteeringLayout(_PreviewPage):
@@ -945,10 +980,35 @@ class StarPilotTurnDynamicsLayout(_TuneGroupLayout):
                      header_subtitle=tr_noop("Turn-in / unwind shaping and friction phases. Live."), section_title=tr_noop("Dynamics"))
 
 
-class StarPilotCenterTaperLayout(_TuneGroupLayout):
+class StarPilotCenterTaperLayout(_PreviewPage):
   def __init__(self):
-    super().__init__(CenterTaperPreview(), CENTER_PARAMS, header_title=tr_noop("Center Taper"),
-                     header_subtitle=tr_noop("Output reduction near straight at speed. Live."), section_title=tr_noop("Taper"))
+    taper_rows: list[SettingRow] = []
+    deadzone_rows: list[SettingRow] = []
+    sections = [SettingSection(tr_noop("Taper"), taper_rows), SettingSection(tr_noop("Friction Deadzone"), deadzone_rows)]
+    super().__init__(CenterTaperPreview(), sections, header_title=tr_noop("Center Taper"),
+                     header_subtitle=tr_noop("Output reduction near straight at speed. Taper is live; the deadzone needs an offroad cycle."))
+    taper_rows.extend(self._value_row(p, self.refresh) for p in CENTER_PARAMS)
+    deadzone_rows.append(SettingRow(
+      "RetrofitSteerAngleDeadzone",
+      "value",
+      tr_noop("Center Deadzone"),
+      subtitle=tr_noop(
+        "Blind spot around straight-ahead for the friction compensation, so it stops flipping " +
+        "sign on tiny corrections and shaking the wheel. Raise if it hunts on the highway. " +
+        "Needs an offroad cycle."
+      ),
+      get_value=lambda: f"{stored_float(self._params, 'RetrofitSteerAngleDeadzone'):.1f}°",
+      on_click=lambda: self._show_slider(
+        "RetrofitSteerAngleDeadzone",
+        0.0,
+        2.0,
+        step=0.1,
+        unit="°",
+        value_type="float",
+        current_value=stored_float(self._params, "RetrofitSteerAngleDeadzone"),
+        title="Center Deadzone",
+      ),
+    ))
 
 
 class StarPilotRetrofitLayout(_SettingsPage):
@@ -957,6 +1017,7 @@ class StarPilotRetrofitLayout(_SettingsPage):
     self._active = False
     self._sub_panels = {
       "tuning": StarPilotRetrofitTuningLayout(),
+      "nnff": StarPilotNNFFTuneLayout(),
       "nonlinear": StarPilotNonlinearSteeringLayout(),
       "nonlinear_advanced": StarPilotNonlinearAdvancedLayout(),
       "tune": StarPilotControllerTuneLayout(),
@@ -1045,9 +1106,26 @@ class StarPilotRetrofitLayout(_SettingsPage):
           "RetrofitTuneNav",
           "value",
           tr_noop("Controller Tune"),
-          subtitle=tr_noop("KP gain curve, FF window, turn dynamics, and center taper. Most values take effect immediately."),
-          get_value=lambda: tr_noop("Configure"),
+          subtitle=tr_noop("Torque controller: KP curve, FF window, turn dynamics, center taper. Not used while NNFF is on."),
+          get_value=lambda: controller_tune_status(self._params),
           navigate_to="tune",
+        ),
+        SettingRow(
+          "RetrofitNNFFTuneNav",
+          "value",
+          tr_noop("NNFF Tune"),
+          subtitle=tr_noop("Neural feedforward controller: model and friction. Switching controllers needs an offroad cycle."),
+          get_value=lambda: nnff_tune_status(self._params),
+          navigate_to="nnff",
+        ),
+        SettingRow(
+          "RetrofitNNFFModelShortcut",
+          "value",
+          tr_noop("NNFF Model"),
+          subtitle=tr_noop("Shortcut to the model picker in NNFF Tune. Needs an offroad cycle."),
+          get_value=lambda: nnff_model_label(self._params.get("RetrofitNNFFModel", encoding="utf-8") or "",
+                                             get_retrofit_nnff_models()),
+          on_click=lambda: show_nnff_model_select(self._params),
         ),
       ]),
       SettingSection(tr_noop("Longitudinal"), [
