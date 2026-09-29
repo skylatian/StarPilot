@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pyray as rl
 
 from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -1077,12 +1078,17 @@ def _live_retrofit_diag():
   if not ui_state.sm.valid.get("starpilotCarState", False):
     return True, None
   fpcs = ui_state.sm["starpilotCarState"]
-  return True, (fpcs.retrofitDiag if fpcs.has("retrofitDiag") else None)
+  return True, (fpcs.retrofitDiag if fpcs._has("retrofitDiag") else None)
 
 
 def live_ecu_status(key: str) -> str:
-  started, diag = _live_retrofit_diag()
-  return ecu_status_text(key, diag, started)
+  # Runs every frame inside the settings render loop: a bad read must never take the UI down.
+  try:
+    started, diag = _live_retrofit_diag()
+    return ecu_status_text(key, diag, started)
+  except Exception:
+    cloudlog.exception("retrofit ECU status read failed")
+    return tr_noop("Error")
 
 
 class StarPilotEcuStatusLayout(_RetrofitSubPage):

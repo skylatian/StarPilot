@@ -29,3 +29,29 @@ def test_onroad_statuses():
   assert ecu_status_text("eps", diag, True) == "Connected · LKA state 1"
   assert ecu_status_text("sas", diag, True) == "Connected"
   assert ecu_status_text("stalk", None, True) == "No data"
+
+
+def test_live_path_reads_published_message(monkeypatch):
+  # Exercise the real SubMaster-style reader path (the onroad crash was here: readers have
+  # _has(), not has()).
+  from types import SimpleNamespace
+  from cereal import messaging
+  from openpilot.selfdrive.ui.layouts.settings.starpilot import retrofit
+  import openpilot.selfdrive.ui.ui_state as ui_state_mod
+
+  msg = messaging.new_message("starpilotCarState")
+  diag = msg.starpilotCarState.init("retrofitDiag")
+  diag.stalkFrameAge = 0.05
+  diag.stalk.seen = True
+  diag.stalk.firmwareVersion = "092726a"
+  reader = msg.as_reader().starpilotCarState
+
+  fake = SimpleNamespace(started=True, sm={"starpilotCarState": reader})
+  fake.sm = type("SM", (dict,), {"valid": {"starpilotCarState": True}})(fake.sm)
+  monkeypatch.setattr(ui_state_mod, "ui_state", fake)
+  assert retrofit.live_ecu_status("stalk") == "Connected · 092726a"
+
+  # Message without retrofitDiag set (another car / old card): no crash
+  empty = messaging.new_message("starpilotCarState").as_reader().starpilotCarState
+  fake.sm = type("SM", (dict,), {"valid": {"starpilotCarState": True}})({"starpilotCarState": empty})
+  assert retrofit.live_ecu_status("stalk") == "No data"
