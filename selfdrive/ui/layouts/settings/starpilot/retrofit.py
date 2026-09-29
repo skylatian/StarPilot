@@ -1068,14 +1068,16 @@ def ecu_status_text(key: str, diag, started: bool) -> str:
         parts.append(f"{ecu.restarts} restart{'s' if ecu.restarts != 1 else ''}")
       if ecu.recoveryEvents:
         parts.append(f"{ecu.recoveryEvents} CAN reset{'s' if ecu.recoveryEvents != 1 else ''}")
-  return " · ".join(parts)
+  return " | ".join(parts)  # the Raylib font has no "·" glyph (renders as "?")
 
 
 def _live_retrofit_diag():
   from openpilot.selfdrive.ui.ui_state import ui_state
   if not ui_state.started:
     return False, None
-  if not ui_state.sm.valid.get("starpilotCarState", False):
+  # Not sm.valid: card marks starpilotCarState invalid whenever CAN is invalid (e.g. an
+  # ECU unplugged), which is exactly when this page matters. Only require fresh data.
+  if not ui_state.sm.alive.get("starpilotCarState", False):
     return True, None
   fpcs = ui_state.sm["starpilotCarState"]
   return True, (fpcs.retrofitDiag if fpcs._has("retrofitDiag") else None)
