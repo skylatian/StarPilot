@@ -2,6 +2,7 @@ from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota import retrofit as corolla_retrofit
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, MIN_ACC_SPEED, \
                                                   EPS_SCALE, ToyotaSafetyFlags, TOYOTA_AUTO_HOLD_CARS, uses_toyota_auto_hold_aeb
 from opendbc.car.disable_ecu import disable_ecu
@@ -192,6 +193,10 @@ class CarInterface(CarInterfaceBase):
       # this platform is kept out of the camera-fingerprint takeover check above and never reads
       # fingerprint[2], so it can't go dashcam-only or require ACC_CONTROL from it.
       ret.radarUnavailable = True
+
+      # Center deadzone of the friction term. The saved RetrofitSteerAngleDeadzone replaces this
+      # default at startup (corolla_retrofit.apply_steer_angle_deadzone), before CarParams is published.
+      ret.lateralTuning.torque.steeringAngleDeadzoneDeg = corolla_retrofit.STEER_ANGLE_DEADZONE_DEFAULT_DEG
 
     if smart_dsu:
       ret.flags |= int(ToyotaFlags.HYBRID | ToyotaFlags.LONG_FILTER)
