@@ -165,5 +165,27 @@ class TestNoDsuBypassDetection(unittest.TestCase):
     self.assertNotIn('ACC_CONTROL', bus.CI.can_parsers[Bus.pt].vl)
 
 
+class TestLkaStateZero(unittest.TestCase):
+  def test_lka_state_zero_is_not_a_temporary_fault(self):
+    from opendbc.car.toyota.carstate import TEMP_STEER_FAULTS
+    self.assertIn(0, TEMP_STEER_FAULTS)
+    for lka_state, retrofit_fault, stock_fault in ((0, False, True), (1, False, False), (5, False, False),
+                                                   (9, True, True), (11, True, True), (21, True, True), (25, True, True)):
+      with self.subTest(lka_state=lka_state):
+        values = {'EPS_STATUS': {'LKA_STATE': lka_state}}
+        retrofit = CarBus(RETROFIT, values=values).run(150)
+        stock = CarBus(STOCK, values=values).run(150)
+        self.assertEqual(retrofit.steerFaultTemporary, retrofit_fault)
+        self.assertEqual(stock.steerFaultTemporary, stock_fault)
+        self.assertFalse(retrofit.steerFaultPermanent)
+
+  def test_permanent_faults_unchanged(self):
+    for lka_state in (3, 17):
+      with self.subTest(lka_state=lka_state):
+        values = {'EPS_STATUS': {'LKA_STATE': lka_state}}
+        self.assertTrue(CarBus(RETROFIT, values=values).run(150).steerFaultPermanent)
+        self.assertTrue(CarBus(STOCK, values=values).run(150).steerFaultPermanent)
+
+
 if __name__ == "__main__":
   unittest.main()
