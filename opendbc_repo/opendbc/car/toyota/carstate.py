@@ -52,6 +52,8 @@ class CarState(CarStateBase):
     self.accurate_steer_angle_seen = False
     self.angle_offset = FirstOrderFilter(None, 60.0, DT_CTRL, initialized=False)
     self.dashboard_limit = LimitTracker()
+    # TOYOTA_COROLLA_RETROFIT steering angle sensor mounting offset, set at startup by retrofit.apply_sas_offset
+    self.sas_offset_deg = 0.0
 
     self.pedal_ready = False
     self.lkas_button = 0
@@ -119,6 +121,9 @@ class CarState(CarStateBase):
                                     for whl in ("FL", "FR", "RL", "RR"))
 
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
+      # Applied to the raw sensor angle, before it feeds the torque-sensor angle offset filter below
+      ret.steeringAngleDeg -= self.sas_offset_deg
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
     torque_sensor_angle_deg = cp.vl["STEER_TORQUE_SENSOR"]["STEER_ANGLE"]
 
