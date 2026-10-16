@@ -3,6 +3,7 @@ from openpilot.starpilot.car.subaru.smoothing import Snapshot, read_snapshot, pr
 
 from opendbc.car.gm.startup_preferences import prepare_disable_longitudinal
 from opendbc.car.toyota.interface import apply_toyota_auto_hold
+from opendbc.car.toyota.retrofit import SAS_OFFSET_DEFAULT_DEG
 from opendbc.car.toyota.values import ToyotaFlags
 from openpilot.starpilot.saved_source import read_saved
 from openpilot.starpilot.car.tesla.radar_settings import RadarSettings
@@ -47,6 +48,7 @@ class VehicleStartupPreferences:
   toyota_radar_mode: int = 0
   gm_cancel_remap: bool = False
   vw_stock_long: bool = field(default=False, kw_only=True)
+  toyota_retrofit_sas_offset: float = SAS_OFFSET_DEFAULT_DEG
 
   @classmethod
   def read(cls, params, *, enabled: bool):
@@ -56,12 +58,15 @@ class VehicleStartupPreferences:
     from openpilot.starpilot.car.tesla.preap_preferences import stock_configuration
     from openpilot.starpilot.car.tesla.radar_settings import read_radar_settings
     from openpilot.starpilot.car.tesla.pedal_preferences import read_pedal_settings
+    from openpilot.starpilot.car.toyota import retrofit_preferences
     smoothing = read_snapshot(params, enabled=enabled)
     radar = read_radar_settings(params)
     pedal = read_pedal_settings(params)
     preap_stock = stock_configuration(params, radar, pedal)
     from openpilot.starpilot.car.volkswagen.preferences import stock_long_requested
     vw_stock_long = stock_long_requested(params)
+    # Sensor calibration for TOYOTA_COROLLA_RETROFIT; independent of the feature toggles below
+    retrofit = {'toyota_retrofit_sas_offset': retrofit_preferences.sas_offset(params)}
     try:
       raw_radar, radar_readable = read_saved(params, "HondaBoschARadar", 8)
       honda_radar = radar_readable and raw_radar in (None, b"1")
@@ -88,7 +93,7 @@ class VehicleStartupPreferences:
       return cls(vw_stock_long=vw_stock_long,
                  subaru_smoothing=smoothing, disable_bolt_long=disable_bolt, honda_bosch_a_radar=honda_radar, tesla_preap_stock=preap_stock,
                  tesla_preap_radar=radar, tesla_preap_pedal=pedal,
-                 gm_camera_pedal=False, toyota_filter=False)
+                 gm_camera_pedal=False, toyota_filter=False, **retrofit)
     try:
       pitch, pitch_readable = read_saved(params, "LongPitch", 8)
       pitch_enabled = not (enabled and pitch_readable and pitch == b"0" and readable and safe in (None, b"0"))
@@ -126,7 +131,7 @@ class VehicleStartupPreferences:
                toyota_filter=bool(enabled and not disable_bolt and readable and safe in (None, b"0")),
                turn_assist=bool(enabled and assist and readable and safe in (None, b"0")),
                gm_long_pitch=pitch_enabled, disable_bolt_long=disable_bolt, honda_bosch_a_radar=honda_radar,
-               tesla_preap_stock=preap_stock, tesla_preap_radar=radar, tesla_preap_pedal=pedal)
+               tesla_preap_stock=preap_stock, tesla_preap_radar=radar, tesla_preap_pedal=pedal, **retrofit)
 
   def _prepare_honda_radar(self, cp) -> None:
     if cp.brand != "honda":
@@ -270,6 +275,9 @@ class VehicleStartupPreferences:
     from opendbc.car.gm.values import (CAR, is_bolt_euv_longitudinal, is_volt_longitudinal, is_gm_auto_hold,
                                      is_volt_one_pedal, camera_acc_pedal_profile, volt_cc_pedal_profile)
     cp = ci.CP
+    if cp.brand == "toyota":
+      from opendbc.car.toyota.retrofit import apply_sas_offset
+      apply_sas_offset(ci.CS, self.toyota_retrofit_sas_offset)
     if ci.CC is not None and cp.brand == "toyota" and not cp.passive and not cp.dashcamOnly and not cp.notCar:
       ci.CC.door_locks.lock = self.toyota_lock_doors
       ci.CC.door_locks.unlock = self.toyota_unlock_doors
