@@ -38,6 +38,10 @@ MAX_STEER_RATE_FRAMES = 17  # tx control frames needed before torque can be cut
 # EPS allows user torque above threshold for 50 frames before permanently faulting
 MAX_USER_TORQUE = 500
 
+# TOYOTA_COROLLA_RETROFIT: no lateral beyond this steering angle. The column turns +/-540 deg lock to
+# lock, and the EPS must not fight the hydraulic rack near its stops.
+MAX_STEER_ANGLE_DEG = 300
+
 
 TOYOTA_AUTO_HOLD_ACCEL = -1.0
 TOYOTA_AUTO_HOLD_ACTIVATION_FRAMES = 100
@@ -224,6 +228,8 @@ class CarController(CarControllerBase):
     if guarded_advert:
       lat_active = lat_active and legacy_advert_source_ready
     CS.zss_lateral_active = bool(CC.latActive)
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and abs(CS.out.steeringAngleDeg) > MAX_STEER_ANGLE_DEG:
+      lat_active = False
 
     if len(CC.orientationNED) == 3:
       self.pitch.update(CC.orientationNED[1])
