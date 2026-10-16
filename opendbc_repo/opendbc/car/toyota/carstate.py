@@ -141,6 +141,9 @@ class CarState(CarStateBase):
     # Check EPS LKA/LTA fault status
     ret.steerFaultTemporary = cp.vl["EPS_STATUS"]["LKA_STATE"] in TEMP_STEER_FAULTS
     ret.steerFaultPermanent = cp.vl["EPS_STATUS"]["LKA_STATE"] in PERM_STEER_FAULTS
+    # Without a camera the retrofit's EPS reports LKA_STATE 0 until the first steer request activates it
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT and cp.vl["EPS_STATUS"]["LKA_STATE"] == 0:
+      ret.steerFaultTemporary = False
 
     if self.CP.steerControlType == SteerControlType.angle:
       ret.steerFaultTemporary = ret.steerFaultTemporary or cp.vl["EPS_STATUS"]["LTA_STATE"] in TEMP_STEER_FAULTS
