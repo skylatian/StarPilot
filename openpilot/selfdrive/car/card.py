@@ -1030,6 +1030,9 @@ class Car:
         companion = feedback_companion
       except Exception:
         self.learning_feedback_publication = None
+    if getattr(self.CI.CS, 'retrofit_diag', None) is not None:
+      from openpilot.starpilot.car.toyota.retrofit_diag_publisher import attach as attach_retrofit_diag
+      companion = attach_retrofit_diag(self.CI.CS, companion, cs_send)
     self.car_gps_publisher.update(self.CI.CS, self.pm, companion)
     self.pm.send('carState', cs_send)
     if getattr(self, 'learning_stamp_observer', None) is not None:
