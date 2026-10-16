@@ -6,7 +6,7 @@ from opendbc.car import Bus
 from opendbc.car.interfaces import get_torque_params
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.tests.test_auto_hold import decode
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaSafetyFlags
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags
 
 RETROFIT = CAR.TOYOTA_COROLLA_RETROFIT
 STOCK = CAR.TOYOTA_COROLLA
@@ -139,6 +139,30 @@ class TestNoCameraParser(unittest.TestCase):
         # TOYOTA_COROLLA copies the (never received, zero-filled) bus-2 LKAS_HUD into the TX
         self.assertEqual(bus.CI.CS.lkas_hud['LANE_SWAY_FLD'], 0)
         self.assertEqual(decoded['LANE_SWAY_FLD'], 0)
+
+
+# The car's fingerprint: bus 2 holds the bus-0 mirror, including the emulated EPS-init 0x4CB
+MIRRORED_FINGERPRINT = {0: {0x4CB: 8, 0x1D2: 8, 0x260: 8}, 1: {}, 2: {0x4CB: 8, 0x1D2: 8, 0x260: 8}}
+
+
+class TestNoDsuBypassDetection(unittest.TestCase):
+  def test_mirrored_eps_init_is_not_a_bypass(self):
+    for fingerprint in (MIRRORED_FINGERPRINT, {0: {}, 1: {}, 2: {0x343: 8, 0x4CB: 8}}):
+      for alpha_long in (False, True):
+        with self.subTest(fingerprint=fingerprint, alpha_long=alpha_long):
+          retrofit = get_params(RETROFIT, fingerprint, alpha_long)
+          self.assertFalse(retrofit.dashcamOnly)
+          self.assertFalse(retrofit.flags & ToyotaFlags.LONG_FILTER)
+          self.assertEqual(retrofit.to_dict(), get_params(RETROFIT, empty_fingerprint(), alpha_long).to_dict())
+          # TOYOTA_COROLLA has no camera-fingerprint takeover check either; it stays unaffected.
+          self.assertFalse(get_params(STOCK, fingerprint, alpha_long).dashcamOnly)
+          # The alpha's other Corolla-body retrofit shows the hazard: the same mirror makes it dashcam-only.
+          self.assertTrue(get_params(CAR.TOYOTA_MATRIX_RETROFIT, fingerprint, alpha_long).dashcamOnly)
+
+  def test_carstate_does_not_require_acc_control(self):
+    bus = CarBus(RETROFIT, fingerprint=MIRRORED_FINGERPRINT)
+    self.assertTrue(bus.run(300).canValid)
+    self.assertNotIn('ACC_CONTROL', bus.CI.can_parsers[Bus.pt].vl)
 
 
 if __name__ == "__main__":
