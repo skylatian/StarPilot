@@ -161,6 +161,13 @@ class CarInterface(CarInterfaceBase):
       ret.openpilotLongitudinalControl = smart_dsu
       ret.alphaLongitudinalAvailable = False
 
+    if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
+      # No camera, radar, DSU or bypass adapter. Bus 2 permanently mirrors bus 0, so the emulated
+      # EPS-init 0x4CB always appears in fingerprint[2]. That is not a DSU bypass or takeover device:
+      # this platform is kept out of the camera-fingerprint takeover check above and never reads
+      # fingerprint[2], so it can't go dashcam-only or require ACC_CONTROL from it.
+      ret.radarUnavailable = True
+
     if smart_dsu:
       ret.flags |= int(ToyotaFlags.HYBRID | ToyotaFlags.LONG_FILTER)
       ret.safetyConfigs[0].safetyParam = 4169
