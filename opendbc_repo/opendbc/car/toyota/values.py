@@ -215,6 +215,14 @@ class CAR(Platforms):
     CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=18.27, tireStiffnessFactor=0.444),
     dbc_dict('toyota_new_mc_pt_generated', 'toyota_adas'),
   )
+  # 2005 Corolla research retrofit: 2016 Corolla (TSS-P) EPS and steering angle sensor, no camera, radar or DSU.
+  # The PCM, VSS and cruise stalk are emulated on bus 0. There is deliberately no Bus.radar entry, so
+  # radarUnavailable is derived as True, and no Bus.cam entry: bus 2 only mirrors bus 0 on this car.
+  TOYOTA_COROLLA_RETROFIT = PlatformConfig(
+    [ToyotaCommunityCarDocs("Toyota Corolla Retrofit 2005", package="Custom retrofit; 2016 Corolla EPS, no camera or radar")],
+    CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=17.4, tireStiffnessFactor=0.444),
+    {Bus.pt: 'toyota_new_mc_pt_generated'},
+  )
   TOYOTA_MATRIX_RETROFIT = PlatformConfig(
     [ToyotaCommunityCarDocs("Toyota Matrix Retrofit 2005", package="Custom retrofit; stock longitudinal")],
     TOYOTA_COROLLA.specs,
@@ -614,7 +622,7 @@ STEER_THRESHOLD = 100
 
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,
-                        {CAR.TOYOTA_PRIUS: 66, CAR.TOYOTA_COROLLA: 88, CAR.TOYOTA_MATRIX_RETROFIT: 88,
+                        {CAR.TOYOTA_PRIUS: 66, CAR.TOYOTA_COROLLA: 88, CAR.TOYOTA_COROLLA_RETROFIT: 88, CAR.TOYOTA_MATRIX_RETROFIT: 88,
                          CAR.LEXUS_IS: 77, CAR.LEXUS_RC: 77, CAR.LEXUS_CTH: 100, CAR.TOYOTA_PRIUS_V: 100})
 
 DBC = CAR.create_dbc_map()
