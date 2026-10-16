@@ -165,6 +165,9 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 "KIA_RAY_EV" = [1.8, 2.0, 0.15]
 
 "TOYOTA_MATRIX_RETROFIT" = [4.05, 1.84, 0.10]
+# Corolla retrofit: 2016 EPS motor on a hydraulic rack. Friction is the value the car runs today (set by
+# hand on 6.7.8); 7.0 has no manual friction for Toyota, so the baseline carries it.
+"TOYOTA_COROLLA_RETROFIT" = [4.05, 1.84, 0.15]
 
 "TESLA_MODEL_S_HW1" = [nan, 2.5, nan]
 
