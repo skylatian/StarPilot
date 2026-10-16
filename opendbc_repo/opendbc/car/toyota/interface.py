@@ -173,6 +173,12 @@ class CarInterface(CarInterfaceBase):
       # default at startup (corolla_retrofit.apply_steer_angle_deadzone), before CarParams is published.
       ret.lateralTuning.torque.steeringAngleDeadzoneDeg = corolla_retrofit.STEER_ANGLE_DEADZONE_DEFAULT_DEG
 
+      # openpilot longitudinal is behind the alpha-long toggle (AlphaLongitudinalEnabled). It is always
+      # offered, so the toggle is visible before it has first been enabled. The emulated ECU is the
+      # PCM, so pcmCruise stays True either way.
+      ret.alphaLongitudinalAvailable = True
+      ret.openpilotLongitudinalControl = alpha_long
+
     if smart_dsu:
       ret.flags |= int(ToyotaFlags.HYBRID | ToyotaFlags.LONG_FILTER)
       ret.safetyConfigs[0].safetyParam = 4169

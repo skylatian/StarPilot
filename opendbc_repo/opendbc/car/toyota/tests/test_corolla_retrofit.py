@@ -265,5 +265,47 @@ class TestSteerAngleDeadzone(unittest.TestCase):
         self.assertEqual(steer_angle_deadzone_deg(value), expected)
 
 
+class TestLongitudinal(unittest.TestCase):
+  def test_alpha_long_toggle_selects_openpilot_long(self):
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        retrofit, stock = get_params(RETROFIT, alpha_long=alpha_long), get_params(STOCK, alpha_long=alpha_long)
+        self.assertTrue(retrofit.alphaLongitudinalAvailable)
+        self.assertEqual(retrofit.openpilotLongitudinalControl, alpha_long)
+        self.assertTrue(retrofit.pcmCruise)
+        self.assertEqual(bool(retrofit.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL), not alpha_long)
+        self.assertEqual(retrofit.safetyConfigs[0].safetyParam, 344 if alpha_long else 856)
+        # TOYOTA_COROLLA stays on stock longitudinal with no alpha-long offer
+        self.assertFalse(stock.alphaLongitudinalAvailable)
+        self.assertFalse(stock.openpilotLongitudinalControl)
+        self.assertTrue(stock.pcmCruise)
+        self.assertEqual(stock.safetyConfigs[0].safetyParam, 856)
+
+  def test_existing_panda_safety_admits_acc_control_only_with_openpilot_long(self):
+    from opendbc.car.structs import CarParams
+    from opendbc.safety.tests.common import CANPackerSafety
+    from opendbc.safety.tests.libsafety import libsafety_py
+    safety = libsafety_py.libsafety
+    packer = CANPackerSafety('toyota_new_mc_pt_generated')
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        cp = get_params(RETROFIT, alpha_long=alpha_long)
+        self.assertEqual(safety.set_safety_hooks(CarParams.SafetyModel.toyota, cp.safetyConfigs[0].safetyParam), 0)
+        safety.init_tests()
+        safety.set_controls_allowed(True)
+        self.assertEqual(safety.safety_tx_hook(packer.make_can_msg_safety('ACC_CONTROL', 0, {'ACCEL_CMD': 0.5})), alpha_long)
+
+  def test_controller_sends_acc_control_only_with_openpilot_long(self):
+    from opendbc.car import structs
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        bus = CarBus(RETROFIT, alpha_long=alpha_long)
+        bus.run(150)
+        CC = structs.CarControl()
+        CC.enabled = CC.longActive = True
+        sends = [frame for _ in range(3) for frame in bus.CI.apply(CC.as_reader(), 2_500_000_000)[1]]
+        self.assertEqual(any(frame[0] == 0x343 for frame in sends), alpha_long)
+
+
 if __name__ == "__main__":
   unittest.main()
