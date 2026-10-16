@@ -187,5 +187,26 @@ class TestLkaStateZero(unittest.TestCase):
         self.assertTrue(CarBus(STOCK, values=values).run(150).steerFaultPermanent)
 
 
+class TestSteerAngleLimit(unittest.TestCase):
+  def test_lateral_dropped_beyond_300_deg(self):
+    from opendbc.car.toyota.carcontroller import MAX_STEER_ANGLE_DEG
+    from opendbc.car.toyota.tests.test_auto_hold import setup_hold, step_hold
+    self.assertEqual(MAX_STEER_ANGLE_DEG, 300)
+    for car in (RETROFIT, STOCK):
+      for angle in (0., 299.9, -299.9, 300.1, -300.1, 450., -540.):
+        with self.subTest(car=car, angle=angle):
+          cp, controller, command, state = setup_hold(car, enabled=False)
+          state.out.standstill = False
+          state.out.steeringAngleDeg = angle
+          command.enabled = command.latActive = True
+          command.actuators.torque = 0.5
+          frames = [frame for _ in range(5) for frame in step_hold(controller, command, state) if frame[0] == 0x2E4]
+          steering = decode(cp, frames[-1], 'STEERING_LKA')
+          applied = car == STOCK or abs(angle) <= 300.
+          self.assertEqual(steering['STEER_REQUEST'], int(applied))
+          self.assertEqual(steering['STEER_TORQUE_CMD'] != 0, applied)
+          self.assertEqual(controller.last_torque != 0, applied)
+
+
 if __name__ == "__main__":
   unittest.main()
