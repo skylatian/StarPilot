@@ -14,6 +14,7 @@ from opendbc.car.dashboard_speed_limit import Tracker as LimitTracker, parser_ex
 from opendbc.can.dbc import DBC as CANDBC
 from opendbc.car.toyota.prius_longitudinal import configured as prius_filter_configured
 from opendbc.car.toyota.rav4h_filter import Rav4hCANParser, configured as rav4h_filter_configured
+from opendbc.car.toyota import retrofit_diag
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, uses_toyota_auto_hold_aeb
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -54,6 +55,7 @@ class CarState(CarStateBase):
     self.dashboard_limit = LimitTracker()
     # TOYOTA_COROLLA_RETROFIT steering angle sensor mounting offset, set at startup by retrofit.apply_sas_offset
     self.sas_offset_deg = 0.0
+    self.retrofit_diag = retrofit_diag.RetrofitDiagTracker() if CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT else None
 
     self.pedal_ready = False
     self.lkas_button = 0
@@ -333,6 +335,9 @@ class CarState(CarStateBase):
       speed = int(cp_cam.vl["RSA1"]["SPDVAL1"])
       status, value_mps = toyota_sign(sign, speed)
       self.dashboard_limit.update(timestamp, status, value_mps, valid_until_ns=expiry)
+
+    if self.retrofit_diag is not None:
+      self.retrofit_diag.update(cp)
     return ret
 
   @staticmethod
@@ -378,6 +383,10 @@ class CarState(CarStateBase):
       pt_messages.append(("SDSU", 50))
     if CP.flags & ToyotaFlags.ZSS:
       pt_messages.append(("SECONDARY_STEER_ANGLE", math.nan))
+
+    # Retrofit custom-ECU status frames, NaN frequency: they never affect canValid
+    if CP.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
+      pt_messages += retrofit_diag.PT_MESSAGES
 
     if pedal.configured(CP):
       pt_messages.append(("GAS_SENSOR", 50))
