@@ -47,7 +47,7 @@ class ToyotaTorqueFamilyTests(unittest.TestCase):
     registry = {str(car.value) for car in CAR if (cp := params_for(str(car.value))).brand == 'toyota' and
                 cp.steerControlType == structs.CarParams.SteerControlType.torque and cp.lateralTuning.which() == 'torque'}
     self.assertEqual(len(TOYOTA_VEHICLES), 38)
-    self.assertEqual(registry - TOYOTA_VEHICLES, {'TOYOTA_PRIUS_RETROFIT', 'TOYOTA_MATRIX_RETROFIT'})
+    self.assertEqual(registry - TOYOTA_VEHICLES, {'TOYOTA_PRIUS_RETROFIT', 'TOYOTA_MATRIX_RETROFIT', 'TOYOTA_COROLLA_RETROFIT'})
     self.assertTrue(TOYOTA_VEHICLES <= registry)
     for identity in registry - TOYOTA_VEHICLES:
       self.assertTrue(supported_cp(params_for(identity)))
