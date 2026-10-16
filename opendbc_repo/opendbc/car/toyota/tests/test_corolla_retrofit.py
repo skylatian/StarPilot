@@ -208,5 +208,42 @@ class TestSteerAngleLimit(unittest.TestCase):
           self.assertEqual(controller.last_torque != 0, applied)
 
 
+class TestSasOffset(unittest.TestCase):
+  def test_offset_applies_only_to_retrofit(self):
+    from opendbc.car.toyota.retrofit import apply_sas_offset
+    # STEER_ANGLE_SENSOR has 1.5 deg resolution
+    values = {'STEER_ANGLE_SENSOR': {'STEER_ANGLE': 6.}, 'STEER_TORQUE_SENSOR': {'STEER_ANGLE': 6.}}
+    for car, applied in ((RETROFIT, True), (STOCK, False)):
+      with self.subTest(car=car):
+        bus = CarBus(car, values=values)
+        self.assertEqual(bus.CI.CS.sas_offset_deg, 0.)
+        self.assertEqual(apply_sas_offset(bus.CI.CS, -48.), applied)
+        state = bus.run(150)
+        self.assertAlmostEqual(state.steeringAngleDeg, 54. if applied else 6., places=3)
+        # The torque-sensor angle offset filter sees the corrected angle
+        self.assertAlmostEqual(state.steeringAngleOffsetDeg, -48. if applied else 0., delta=0.05)
+
+  def test_offset_is_applied_before_angle_offset_filter(self):
+    from opendbc.car.toyota.retrofit import apply_sas_offset
+    # Raw 99 deg is outside the filter's +/-90 deg update window; corrected 39 deg is inside it
+    values = {'STEER_ANGLE_SENSOR': {'STEER_ANGLE': 99.}, 'STEER_TORQUE_SENSOR': {'STEER_ANGLE': 6.}}
+    retrofit, stock = CarBus(RETROFIT, values=values), CarBus(STOCK, values=values)
+    apply_sas_offset(retrofit.CI.CS, 60.)
+    apply_sas_offset(stock.CI.CS, 60.)
+    retrofit_state, stock_state = retrofit.run(150), stock.run(150)
+    self.assertTrue(retrofit.CI.CS.angle_offset.initialized)
+    self.assertAlmostEqual(retrofit_state.steeringAngleDeg, 39., places=3)
+    self.assertAlmostEqual(retrofit_state.steeringAngleOffsetDeg, -33., delta=0.05)
+    self.assertFalse(stock.CI.CS.angle_offset.initialized)
+    self.assertAlmostEqual(stock_state.steeringAngleDeg, 99., places=3)
+
+  def test_offset_validation(self):
+    from opendbc.car.toyota.retrofit import sas_offset_deg
+    for value, expected in ((-48., -48.), (0., 0.), (180., 180.), (-180., -180.), (180.5, 0.), (-200., 0.),
+                            (float('nan'), 0.), (float('inf'), 0.), ('x', 0.), (None, 0.), ('-48', -48.)):
+      with self.subTest(value=value):
+        self.assertEqual(sas_offset_deg(value), expected)
+
+
 if __name__ == "__main__":
   unittest.main()
