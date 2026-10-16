@@ -74,14 +74,15 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
-    cp_cam = can_parsers[Bus.cam]
+    # None on TOYOTA_COROLLA_RETROFIT, which has no camera (see get_can_parsers)
+    cp_cam = can_parsers.get(Bus.cam)
 
-    if self.CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD and uses_toyota_auto_hold_aeb(self.CP):
+    if cp_cam is not None and self.CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD and uses_toyota_auto_hold_aeb(self.CP):
       self.pre_collision_2 = copy.copy(cp_cam.vl["PRE_COLLISION_2"])
 
     ret = structs.CarState()
     bypass = dsu_bypass.configured(self.CP)
-    cp_acc = cp_cam if bypass or (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC) else cp
+    cp_acc = cp_cam if cp_cam is not None and (bypass or (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC)) else cp
 
     if not self.CP.flags & ToyotaFlags.SECOC.value:
       self.gvc = cp.vl["VSC1S07"]["GVC"]
@@ -228,7 +229,8 @@ class CarState(CarStateBase):
       ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1)
       ret.rightBlindspot = (cp.vl["BSM"]["R_ADJACENT"] == 1) or (cp.vl["BSM"]["R_APPROACHING"] == 1)
 
-    if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V:
+    # Without a camera, lkas_hud stays {} and create_ui_command sends its static defaults
+    if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V and cp_cam is not None:
       self.lkas_hud = copy.copy(cp_cam.vl["LKAS_HUD"])
 
     if not (self.CP.flags & ToyotaFlags.UNSUPPORTED_DSU):
@@ -239,8 +241,8 @@ class CarState(CarStateBase):
     buttonEvents = create_button_events(int(pcm_acc_status) if pcm_acc_status in (9, 10) else 0,
                                        int(previous_pcm_acc_status) if previous_pcm_acc_status in (9, 10) else 0,
                                        {9: ButtonType.accelCruise, 10: ButtonType.decelCruise})
-    if (self.CP.flags & (ToyotaFlags.TSS2 | ToyotaFlags.LONG_FILTER) or self.CP.carFingerprint == CAR.TOYOTA_PRIUS_RETROFIT or
-        self.CP.flags & ToyotaFlags.RADAR_CAN_FILTER and legacy_advert_filter.configured(self.CP)):
+    if cp_cam is not None and (self.CP.flags & (ToyotaFlags.TSS2 | ToyotaFlags.LONG_FILTER) or self.CP.carFingerprint == CAR.TOYOTA_PRIUS_RETROFIT or
+                               self.CP.flags & ToyotaFlags.RADAR_CAN_FILTER and legacy_advert_filter.configured(self.CP)):
       # lkas button is wired to the camera
       prev_lkas_button = self.lkas_button
       self.lkas_button = cp_cam.vl["LKAS_HUD"]["LDA_ON_MESSAGE"]
@@ -317,8 +319,8 @@ class CarState(CarStateBase):
       ret.gasPressed = (ret.gasPressed or pedal_gas) if pedal_composite.configured(self.CP) else pedal_gas
       ret.accFaulted = ret.accFaulted or not self.pedal_ready
     ret.buttonEvents = buttonEvents
-    timestamp, expiry = parser_expiry(cp_cam, "RSA1", "TSGN1")
-    if timestamp > self.dashboard_limit.observation.observed_ns:
+    timestamp, expiry = parser_expiry(cp_cam, "RSA1", "TSGN1") if cp_cam is not None else (0, 0)
+    if cp_cam is not None and timestamp > self.dashboard_limit.observation.observed_ns:
       sign = int(cp_cam.vl["RSA1"]["TSGN1"])
       speed = int(cp_cam.vl["RSA1"]["SPDVAL1"])
       status, value_mps = toyota_sign(sign, speed)
@@ -379,7 +381,12 @@ class CarState(CarStateBase):
                  LexusIsCANParser if CP.carFingerprint == CAR.LEXUS_IS else pedal.PedalCANParser if pedal.configured(CP) else
                  advert_filter.AdvertFilterCANParser if advert_filter.configured(CP) else
                  Rav4hCANParser if rav4h_filter_configured(CP) else CANParser)
-    return {
+    parsers = {
       Bus.pt: pt_parser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0, **({"alternate_main": alternate_sdsu_main} if legacy_advert else {})),
-      Bus.cam: CANParser(dbc_name, cam_messages, 2),
     }
+    # TOYOTA_COROLLA_RETROFIT has no camera, and bus 2 only mirrors bus 0. A bus-2 parser would lazily
+    # add LKAS_HUD (and RSA1) on first access; nothing sends LKAS_HUD, so it would time out and hold
+    # canValid False. Every other platform keeps the camera parser.
+    if CP.carFingerprint != CAR.TOYOTA_COROLLA_RETROFIT:
+      parsers[Bus.cam] = CANParser(dbc_name, cam_messages, 2)
+    return parsers

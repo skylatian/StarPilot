@@ -1,9 +1,11 @@
 """TOYOTA_COROLLA_RETROFIT gates. Every test checks the retrofit and TOYOTA_COROLLA side by side."""
 import unittest
 
+from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.interfaces import get_torque_params
 from opendbc.car.toyota.interface import CarInterface
+from opendbc.car.toyota.tests.test_auto_hold import decode
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaSafetyFlags
 
 RETROFIT = CAR.TOYOTA_COROLLA_RETROFIT
@@ -16,6 +18,57 @@ def empty_fingerprint():
 
 def get_params(car, fingerprint=None, alpha_long=False):
   return CarInterface.get_params(car, fingerprint or empty_fingerprint(), [], alpha_long, False, False)
+
+
+# What the retrofit's devices put on bus 0 (message: period in 10 ms frames), per the CAN coverage table:
+# emulator (PCM stand-in + background), VSS, cruise stalk, real EPS and SAS. Nothing sends LKAS_HUD.
+CAR_BUS = {
+  'VSC1S07': 2, 'BODY_CONTROL_STATE': 33, 'BRAKE_MODULE': 2, 'ESP_CONTROL': 10, 'PCM_CRUISE': 3,
+  'GEAR_PACKET': 10, 'PRE_COLLISION': 3, 'WHEEL_SPEEDS': 1, 'STEER_ANGLE_SENSOR': 1, 'STEER_TORQUE_SENSOR': 2,
+  'BLINKERS_STATE': 5, 'EPS_STATUS': 4, 'PCM_CRUISE_2': 3, 'PCM_CRUISE_SM': 10, 'BODY_CONTROL_STATE_2': 10,
+  'LIGHT_STALK': 10, 'RSA1': 10,
+}
+
+
+class CarBus:
+  """Replays the retrofit's bus 0 into a CarInterface. mirror=True also copies every frame to bus 2,
+  as on the car; mirror=False leaves bus 2 silent."""
+  def __init__(self, car, mirror=True, values=None, fingerprint=None, alpha_long=False):
+    self.CP = get_params(car, fingerprint, alpha_long)
+    self.CI = CarInterface(self.CP)
+    self.packer = CANPacker(DBC[car][Bus.pt])
+    self.mirror = mirror
+    self.values = {
+      'WHEEL_SPEEDS': {f'WHEEL_SPEED_{w}': 20. for w in ('FL', 'FR', 'RL', 'RR')},
+      'GEAR_PACKET': {'GEAR': 0},
+      'STEER_TORQUE_SENSOR': {'STEER_ANGLE': 5.},
+      'STEER_ANGLE_SENSOR': {'STEER_ANGLE': 5.},
+      'EPS_STATUS': {'LKA_STATE': 1},
+      'PCM_CRUISE': {'GAS_RELEASED': 1},
+      'PCM_CRUISE_2': {'MAIN_ON': 1},
+    }
+    for name, sigs in (values or {}).items():
+      self.values.setdefault(name, {}).update(sigs)
+    self.frame = 0
+    self.extra = []
+
+  def step(self, extra=None):
+    frames = []
+    for name, period in CAR_BUS.items():
+      if self.frame % period == 0:
+        frames.append(self.packer.make_can_msg(name, 0, self.values.get(name, {})))
+    frames += list(extra or []) + self.extra
+    if self.mirror:
+      frames += [(addr, dat, 2) for addr, dat, src in frames if src == 0]
+    now = 1_000_000_000 + self.frame * 10_000_000
+    self.frame += 1
+    return self.CI.update([(now, frames)])
+
+  def run(self, frames, extra=None):
+    out = None
+    for _ in range(frames):
+      out = self.step(extra)
+    return out
 
 
 class TestCorollaRetrofitPlatform(unittest.TestCase):
@@ -48,6 +101,44 @@ class TestCorollaRetrofitPlatform(unittest.TestCase):
     self.assertAlmostEqual(retrofit.lateralTuning.torque.latAccelFactor, 4.05, places=5)
     self.assertAlmostEqual(retrofit.lateralTuning.torque.friction, 0.15, places=5)
     self.assertNotAlmostEqual(stock.lateralTuning.torque.friction, 0.15, places=5)
+
+
+class TestNoCameraParser(unittest.TestCase):
+  def test_parsers(self):
+    retrofit, stock = CarBus(RETROFIT), CarBus(STOCK)
+    self.assertEqual(set(retrofit.CI.can_parsers), {Bus.pt})
+    self.assertEqual(set(stock.CI.can_parsers), {Bus.pt, Bus.cam})
+
+  def test_can_valid_with_bus2_mirrored_or_silent(self):
+    for mirror in (True, False):
+      with self.subTest(mirror=mirror):
+        retrofit, stock = CarBus(RETROFIT, mirror=mirror), CarBus(STOCK, mirror=mirror)
+        for _ in range(300):
+          retrofit_state, stock_state = retrofit.step(), stock.step()
+        self.assertTrue(retrofit_state.canValid)
+        self.assertFalse(retrofit_state.canTimeout)
+        # The same bus on TOYOTA_COROLLA: the camera parser waits for LKAS_HUD, which nobody sends.
+        self.assertFalse(stock_state.canValid)
+        self.assertEqual(stock_state.canTimeout, not mirror)
+        self.assertIn('LKAS_HUD', stock.CI.can_parsers[Bus.cam].vl)
+
+  def test_lkas_hud_tx_uses_static_defaults(self):
+    from opendbc.car import structs
+    for car in (RETROFIT, STOCK):
+      bus = CarBus(car)
+      bus.run(150)
+      CC = structs.CarControl()
+      CC.enabled = CC.latActive = True
+      _, sends = bus.CI.apply(CC.as_reader(), 2_500_000_000)
+      hud = next(frame for frame in sends if frame[0] == 0x412)
+      decoded = decode(bus.CP, hud, 'LKAS_HUD')
+      if car == RETROFIT:
+        self.assertEqual(bus.CI.CS.lkas_hud, {})
+        self.assertEqual((decoded['LANE_SWAY_FLD'], decoded['LANE_SWAY_SENSITIVITY'], decoded['LANE_SWAY_TOGGLE']), (7, 2, 1))
+      else:
+        # TOYOTA_COROLLA copies the (never received, zero-filled) bus-2 LKAS_HUD into the TX
+        self.assertEqual(bus.CI.CS.lkas_hud['LANE_SWAY_FLD'], 0)
+        self.assertEqual(decoded['LANE_SWAY_FLD'], 0)
 
 
 if __name__ == "__main__":
