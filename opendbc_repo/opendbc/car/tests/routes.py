@@ -41,6 +41,7 @@ non_tested_cars = [
   HYUNDAI.KIA_EV9,
   HYUNDAI.KIA_RAY_EV,
   TESLA.TESLA_MODEL_S_PREAP,
+  TOYOTA.TOYOTA_COROLLA_RETROFIT,
   TOYOTA.TOYOTA_MATRIX_RETROFIT,
   VOLVO.VOLVO_V40,
   # These additional source-tested configurations still lack recorded routes.
