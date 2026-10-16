@@ -1107,6 +1107,9 @@ class Car:
         companion = messaging.new_message('starpilotCarState', valid=bool(cs_send.valid), logMonoTime=int(cs_send.logMonoTime))
       companion.starpilotCarState.sourceCarStateMonoTime = int(cs_send.logMonoTime)
       self.v_cruise_helper.toyota.publish(companion.starpilotCarState.toyotaCruise)
+    if getattr(self.CI.CS, 'retrofit_diag', None) is not None:
+      from openpilot.starpilot.car.toyota.retrofit_diag_publisher import attach as attach_retrofit_diag
+      companion = attach_retrofit_diag(self.CI.CS, companion, cs_send)
     self.car_gps_publisher.update(self.CI.CS, self.pm, companion)
     self.pm.send('carState', cs_send)
     if getattr(self, 'learning_stamp_observer', None) is not None:

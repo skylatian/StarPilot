@@ -215,6 +215,7 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
   learningApplication @36 :LearningApplication;
   feedbackPublication @37 :FeedbackPublication;
   toyotaCruise @38 :ToyotaCruise;
+  retrofitDiag @39 :RetrofitDiag;  # TOYOTA_COROLLA_RETROFIT custom ECU status (unset on other cars)
 
   struct ToyotaCruise {
     version @0 :UInt16;
@@ -225,6 +226,61 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
     sessionId @5 :Text;
     acceptedMonoTime @6 :UInt64;
     approvedTargetMps @7 :Float32;
+  }
+
+  # Status of the TOYOTA_COROLLA_RETROFIT custom ECUs (corolla_emulator repo), decoded from their
+  # 0x500-0x505 status/version frames and the stalk's 0x69 (opendbc toyota/retrofit_diag.py).
+  # Was retrofitDiag @31 in StarPilot 6.7.8 logs, @37 before feedbackPublication took it, and @38 on the
+  # 7.0 port until 2026-10-28 (toyotaCruise took it): decode older 7.0 port logs with the old schema.
+  struct RetrofitEcuDiag {
+    seen @0 :Bool;             # diagnostic frame received at least once since card started
+    age @1 :Float32;           # seconds since the last diagnostic frame
+    bootCount @2 :UInt8;       # ECU boot counter (EEPROM, wraps at 255)
+    restarts @3 :UInt16;       # boot counter changes seen since card started
+    resetKind @4 :UInt8;       # RESET_KIND of the current boot
+    resetPhase @5 :UInt8;      # stalk only: loop phase the watchdog caught
+    canRecoveries @6 :UInt8;   # CAN controller re-inits since the ECU booted
+    recoveryEvents @7 :UInt16; # CAN recoveries seen since card started (all boots)
+    recoveryReason @8 :UInt8;  # stalk/VSS: reason for the last recovery
+    canErrorFlags @9 :UInt8;   # MCP2515 EFLG, latched over the last frame interval
+    txFails @10 :UInt8;        # failed sends over the last frame interval
+    loopMaxMs @11 :UInt8;      # slowest loop over the last frame interval
+    initRetries @12 :UInt8;    # stalk only: failed CAN inits at boot
+    firmwareVersion @13 :Text; # FW_VERSION tag (MMDDYY + a-z/0-9); empty until the version frame is seen
+    buildTime @14 :Text;       # compile timestamp, "YYYY-MM-DD HH:MM:SS"
+  }
+
+  struct RetrofitDiag {
+    emulator @0 :RetrofitEcuDiag;
+    stalk @1 :RetrofitEcuDiag;
+    vss @2 :RetrofitEcuDiag;
+
+    stalkFrameAge @3 :Float32;         # seconds since the last 0x69 (cruise stalk) frame
+    stalkMainOn @4 :Bool;              # MAIN byte of the last 0x69
+    stalkC3Present @5 :Bool;           # stalk sees openpilot (0x2E4), relay energized
+    emulatorCruiseState @6 :UInt8;     # 0 OFF, 1 MAIN_ON, 2 ENGAGED, 3 CANCELLED
+    emulatorStalkPresent @7 :Bool;     # emulator is receiving 0x69
+    emulatorLastTransition @8 :UInt8;  # what last changed the emulator's cruise state
+    emulatorStalkLosses @9 :UInt8;     # stalk timeouts since the emulator booted
+    vssPulses @10 :UInt8;              # VSS pulses over the last frame interval
+    vssForceDrive @11 :Bool;           # FORCE_DRIVE compile override is on
+
+    lastRestartEcu @12 :RetrofitEcu;   # ECU behind the most recent restart
+    lastRecoveryEcu @13 :RetrofitEcu;  # ECU behind the most recent CAN recovery
+
+    # Seconds since the last frame from each device (measured from card start if never seen)
+    epsFrameAge @14 :Float32;          # 0x262 EPS_STATUS
+    sasFrameAge @15 :Float32;          # 0x25 STEER_ANGLE_SENSOR
+    emulatorFrameAge @16 :Float32;     # 0x1D2 PCM_CRUISE
+    vssFrameAge @17 :Float32;          # 0xAA WHEEL_SPEEDS
+    epsLkaState @18 :UInt8;            # EPS_STATUS.LKA_STATE
+  }
+
+  enum RetrofitEcu {
+    none @0;
+    emulator @1;
+    stalk @2;
+    vss @3;
   }
 
   struct Gps {
