@@ -307,5 +307,37 @@ class TestLongitudinal(unittest.TestCase):
         self.assertEqual(any(frame[0] == 0x343 for frame in sends), alpha_long)
 
 
+class TestRetrofitDiagnostics(unittest.TestCase):
+  def test_tracker_only_on_retrofit(self):
+    retrofit, stock = CarBus(RETROFIT), CarBus(STOCK)
+    retrofit.run(5)
+    stock.run(5)
+    self.assertIsNone(stock.CI.CS.retrofit_diag)
+    self.assertNotIn('RETROFIT_EMULATOR_DIAG', stock.CI.can_parsers[Bus.pt].vl)
+    self.assertIsNotNone(retrofit.CI.CS.retrofit_diag.state)
+    self.assertEqual(retrofit.CI.CS.retrofit_diag.state['epsLkaState'], 1)
+
+  def test_silent_or_rebooting_ecus_never_affect_can_valid(self):
+    from opendbc.can.dbc import DBC as CANDBC, SignalType
+    from opendbc.car.toyota import retrofit_diag
+    from opendbc.car.toyota.tests.test_retrofit_diag import emulator_diag, stalk_0x69, stalk_diag, vss_diag
+    dbc = CANDBC(DBC[RETROFIT][Bus.pt])
+    for name, _ in retrofit_diag.PT_MESSAGES:
+      self.assertNotIn(SignalType.COUNTER, {sig.type for sig in dbc.name_to_msg[name].sigs.values()}, name)
+
+    bus = CarBus(RETROFIT)
+    # Reboots every frame: boot count and ROLLING_COUNTER jump on all three ECUs
+    for i in range(100):
+      state = bus.step([stalk_0x69(0, True), stalk_diag(boot=i % 256, rolling=(i * 7) % 16),
+                        emulator_diag(boot=i % 256, rolling=(i * 5) % 16), vss_diag(boot=i % 256, rolling=(i * 3) % 16)])
+    self.assertTrue(state.canValid)
+    self.assertGreater(bus.CI.CS.retrofit_diag.state['stalk']['restarts'], 90)
+    # Then 5 s of silence from every custom ECU
+    state = bus.run(500)
+    self.assertTrue(state.canValid)
+    self.assertFalse(state.canTimeout)
+    self.assertGreater(bus.CI.CS.retrofit_diag.state['stalkFrameAge'], 4.9)
+
+
 if __name__ == "__main__":
   unittest.main()
