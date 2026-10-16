@@ -117,6 +117,25 @@ class TestToyotaInterfaces(unittest.TestCase):
         frame = next(frame for frame in step_hold(controller, command, state) if frame[0] == 0x2E4)
         self.assertEqual(decode(cp, frame, 'STEERING_LKA')['STEER_REQUEST'], 1)
 
+  def test_corolla_retrofit_friction_and_center_deadzone(self):
+    # Ported from 6.7.8. The retrofit column has real breakaway stiction: it gets a non-zero center
+    # deadzone, so the friction term stops flipping sign on every zero crossing of the lateral accel
+    # error, and carries the friction the car runs today (7.0 has no manual friction for Toyota).
+    from opendbc.car.toyota.interface import CarInterface
+    params = CarInterface.get_params(CAR.TOYOTA_COROLLA_RETROFIT, {bus: {} for bus in range(8)}, [], False, False, False)
+    stock = CarInterface.get_params(CAR.TOYOTA_COROLLA, {bus: {} for bus in range(8)}, [], False, False, False)
+
+    assert params.lateralTuning.which() == "torque"
+    assert params.lateralTuning.torque.steeringAngleDeadzoneDeg > 0.0
+    assert abs(params.lateralTuning.torque.friction - 0.15) < 1e-6
+    assert abs(params.lateralTuning.torque.latAccelFactor - 4.05) < 1e-6
+    # Stock Corolla must be untouched by the retrofit entry (in 7.0 it comes from params.toml).
+    from opendbc.car.interfaces import get_torque_params
+    corolla = get_torque_params()[CAR.TOYOTA_COROLLA]
+    assert stock.lateralTuning.torque.steeringAngleDeadzoneDeg == 0.0
+    assert abs(stock.lateralTuning.torque.friction - corolla['FRICTION']) < 1e-6
+    assert abs(stock.lateralTuning.torque.latAccelFactor - corolla['LAT_ACCEL_FACTOR']) < 1e-6
+
   def test_car_flags(self):
     # Angle and radar-ACC cars are always TSS2 cars
     assert not (cars_with(ToyotaFlags.ANGLE_CONTROL | ToyotaFlags.RADAR_ACC) - cars_with(ToyotaFlags.TSS2))
