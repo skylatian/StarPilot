@@ -3,7 +3,7 @@ from openpilot.starpilot.car.subaru.smoothing import Snapshot, read_snapshot, pr
 
 from opendbc.car.gm.startup_preferences import prepare_disable_longitudinal
 from opendbc.car.toyota.interface import apply_toyota_auto_hold
-from opendbc.car.toyota.retrofit import SAS_OFFSET_DEFAULT_DEG
+from opendbc.car.toyota.retrofit import SAS_OFFSET_DEFAULT_DEG, STEER_ANGLE_DEADZONE_DEFAULT_DEG
 from opendbc.car.toyota.values import ToyotaFlags
 from openpilot.starpilot.saved_source import read_saved
 from openpilot.starpilot.car.tesla.radar_settings import RadarSettings
@@ -49,6 +49,7 @@ class VehicleStartupPreferences:
   gm_cancel_remap: bool = False
   vw_stock_long: bool = field(default=False, kw_only=True)
   toyota_retrofit_sas_offset: float = SAS_OFFSET_DEFAULT_DEG
+  toyota_retrofit_steer_deadzone: float = STEER_ANGLE_DEADZONE_DEFAULT_DEG
 
   @classmethod
   def read(cls, params, *, enabled: bool):
@@ -66,7 +67,8 @@ class VehicleStartupPreferences:
     from openpilot.starpilot.car.volkswagen.preferences import stock_long_requested
     vw_stock_long = stock_long_requested(params)
     # Sensor calibration for TOYOTA_COROLLA_RETROFIT; independent of the feature toggles below
-    retrofit = {'toyota_retrofit_sas_offset': retrofit_preferences.sas_offset(params)}
+    retrofit = {'toyota_retrofit_sas_offset': retrofit_preferences.sas_offset(params),
+                'toyota_retrofit_steer_deadzone': retrofit_preferences.steer_angle_deadzone(params)}
     try:
       raw_radar, radar_readable = read_saved(params, "HondaBoschARadar", 8)
       honda_radar = radar_readable and raw_radar in (None, b"1")
@@ -224,6 +226,8 @@ class VehicleStartupPreferences:
       apply_toyota_auto_hold(cp, self.toyota_auto_hold)
       from opendbc.car.toyota.ars510_preferences import apply_radar_mode
       apply_radar_mode(cp, self.toyota_radar_mode)
+      from opendbc.car.toyota.retrofit import apply_steer_angle_deadzone
+      apply_steer_angle_deadzone(cp, self.toyota_retrofit_steer_deadzone)
     from opendbc.bluepilot_lateral.hosts.starpilot import select as select_ford_lateral
     select_ford_lateral(cp, self.ford_lateral_mode)
     return cp
@@ -268,6 +272,8 @@ class VehicleStartupPreferences:
       apply_toyota_auto_hold(cp, self.toyota_auto_hold and admitted)
       from opendbc.car.toyota.ars510_preferences import apply_radar_mode
       apply_radar_mode(cp, self.toyota_radar_mode)
+      from opendbc.car.toyota.retrofit import apply_steer_angle_deadzone
+      apply_steer_angle_deadzone(cp, self.toyota_retrofit_steer_deadzone)
 
     prepare_smoothing(cp, self.subaru_smoothing)
 

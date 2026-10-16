@@ -245,5 +245,25 @@ class TestSasOffset(unittest.TestCase):
         self.assertEqual(sas_offset_deg(value), expected)
 
 
+class TestSteerAngleDeadzone(unittest.TestCase):
+  def test_default_deadzone(self):
+    self.assertAlmostEqual(get_params(RETROFIT).lateralTuning.torque.steeringAngleDeadzoneDeg, 0.3, places=5)
+    self.assertEqual(get_params(STOCK).lateralTuning.torque.steeringAngleDeadzoneDeg, 0.)
+
+  def test_saved_deadzone_applies_only_to_retrofit(self):
+    from opendbc.car.toyota.retrofit import apply_steer_angle_deadzone
+    retrofit, stock = get_params(RETROFIT), get_params(STOCK)
+    self.assertTrue(apply_steer_angle_deadzone(retrofit, 0.8))
+    self.assertFalse(apply_steer_angle_deadzone(stock, 0.8))
+    self.assertAlmostEqual(retrofit.lateralTuning.torque.steeringAngleDeadzoneDeg, 0.8, places=5)
+    self.assertEqual(stock.lateralTuning.torque.steeringAngleDeadzoneDeg, 0.)
+
+  def test_deadzone_validation(self):
+    from opendbc.car.toyota.retrofit import steer_angle_deadzone_deg
+    for value, expected in ((0., 0.), (0.3, 0.3), (2., 2.), (2.1, 0.3), (-0.1, 0.3), (float('nan'), 0.3), ('x', 0.3), (None, 0.3)):
+      with self.subTest(value=value):
+        self.assertEqual(steer_angle_deadzone_deg(value), expected)
+
+
 if __name__ == "__main__":
   unittest.main()
