@@ -244,6 +244,14 @@ assert seen[-2:] == ['full', 'clear'], seen
       local.unlink()
       self.assertIsNone(first_log_identifier(args))
 
+  def test_data_dir_finds_flat_explorer_files(self):
+    # comma-explorer downloads put every segment in one folder as <dongle>_<route>--<seg>--rlog.zst
+    route = "0123456789abcdef|00000256--3472968bc9/1"
+    with tempfile.TemporaryDirectory() as directory:
+      local = Path(directory) / "0123456789abcdef_00000256--3472968bc9--1--rlog.zst"
+      local.write_bytes(b"fixture")
+      self.assertEqual(first_log_identifier(parse_replay_args(["--data_dir", directory, route])), str(local))
+
   def test_seed_recorded_typed_settings_and_preserve_explicit_choices(self):
     with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, OPENPILOT_PREFIX="replay-test-seed"):
       params = Params(directory)
