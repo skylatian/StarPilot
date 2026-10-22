@@ -85,9 +85,11 @@ def first_log_identifier(replay: ReplayArgs) -> str | None:
       data_root = Path(replay.data_dir)
       route_token = segment_range.route_name.replace("/", "|")
       for suffix in ("rlog.zst", "rlog.bz2", "qlog.zst", "qlog.bz2"):
+        # flat comma-explorer files are named <dongle>_<route>--<seg>--rlog.zst, not <dongle>|<route>
         for candidate in (data_root / f"{route_token}--{segment}" / suffix,
                           data_root / f"{segment_range.log_id}--{segment}" / suffix,
-                          data_root / f"{route_token}--{segment}--{suffix}"):
+                          data_root / f"{route_token}--{segment}--{suffix}",
+                          data_root / f"{route_token.replace('|', '_')}--{segment}--{suffix}"):
           if candidate.is_file():
             return str(candidate)
       return None  # An explicitly local replay must not fetch metadata from a remote route.
