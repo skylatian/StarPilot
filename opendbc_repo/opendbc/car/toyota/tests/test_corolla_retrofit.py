@@ -103,6 +103,15 @@ class TestCorollaRetrofitPlatform(unittest.TestCase):
     self.assertNotAlmostEqual(stock.lateralTuning.torque.friction, 0.15, places=5)
 
 
+class TestNoSteerAtStandstill(unittest.TestCase):
+  def test_steer_at_standstill_off_only_for_retrofit(self):
+    for alpha_long in (False, True):
+      retrofit, stock = get_params(RETROFIT, alpha_long=alpha_long), get_params(STOCK, alpha_long=alpha_long)
+      self.assertFalse(retrofit.steerAtStandstill)
+      self.assertTrue(stock.steerAtStandstill)
+      self.assertEqual(retrofit.minSteerSpeed, stock.minSteerSpeed)
+
+
 class TestNoCameraParser(unittest.TestCase):
   def test_parsers(self):
     retrofit, stock = CarBus(RETROFIT), CarBus(STOCK)
