@@ -235,6 +235,10 @@ class CarInterface(CarInterfaceBase):
     # Toyota EPS accepts lateral commands down to zero. Keep the existing
     # native/axis/fault gates; a stock cruise stop does not withdraw steering.
     ret.steerAtStandstill = ret.minSteerSpeed <= 0.
+    if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
+      # No lateral at standstill, as in StarPilot 6.7.8 (which never set steerAtStandstill). Set the flag
+      # directly: a non-zero minSteerSpeed would also change the minimum steering speed while moving.
+      ret.steerAtStandstill = False
     ret.autoResumeSng = ret.openpilotLongitudinalControl and (
       (rav4h_sdsu and candidate in (CAR.TOYOTA_RAV4H, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA)) or
       (eps8_filter and bool(ret.flags & ToyotaFlags.TSS2)) or
