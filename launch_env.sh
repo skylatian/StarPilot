@@ -27,3 +27,8 @@ fi
 export AGNOS_UPDATE_POLICY="auto"
 
 export STAGING_ROOT="/data/safe_staging"
+
+# TOYOTA_COROLLA_RETROFIT: nothing on the bus answers the firmware query, so force the platform.
+# card honours FINGERPRINT ahead of the VehicleSelection param, which the first-start wipe clears.
+export FINGERPRINT="TOYOTA_COROLLA_RETROFIT"
+export SKIP_FW_QUERY="1"
