@@ -6,7 +6,7 @@ from opendbc.car import Bus
 from opendbc.car.interfaces import get_torque_params
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.tests.test_auto_hold import decode
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, MIN_ACC_SPEED, ToyotaFlags, ToyotaSafetyFlags
 
 RETROFIT = CAR.TOYOTA_COROLLA_RETROFIT
 STOCK = CAR.TOYOTA_COROLLA
@@ -289,6 +289,12 @@ class TestLongitudinal(unittest.TestCase):
         self.assertFalse(stock.openpilotLongitudinalControl)
         self.assertTrue(stock.pcmCruise)
         self.assertEqual(stock.safetyConfigs[0].safetyParam, 856)
+
+  def test_no_minimum_enable_speed_only_for_retrofit(self):
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        self.assertEqual(get_params(RETROFIT, alpha_long=alpha_long).minEnableSpeed, -1.)
+        self.assertAlmostEqual(get_params(STOCK, alpha_long=alpha_long).minEnableSpeed, MIN_ACC_SPEED, places=5)
 
   def test_existing_panda_safety_admits_acc_control_only_with_openpilot_long(self):
     from opendbc.car.structs import CarParams

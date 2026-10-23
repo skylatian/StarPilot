@@ -208,6 +208,10 @@ class CarInterface(CarInterfaceBase):
     # min speed to enable ACC. if car can do stop and go, then set enabling speed
     # to a negative value, so it won't matter.
     ret.minEnableSpeed = -1. if stop_and_go else MIN_ACC_SPEED
+    if candidate == CAR.TOYOTA_COROLLA_RETROFIT:
+      # No minimum, as in StarPilot 6.7.8, where the emulator's spoofed 0x201 enabled the interceptor path.
+      # Without a pedal openpilot longitudinal moves nothing; revisit when the Comma Pedal goes in.
+      ret.minEnableSpeed = -1.
 
     if ret.flags & (ToyotaFlags.TSS2 | ToyotaFlags.LONG_FILTER) and not rav4h_sdsu:
       ret.flags |= ToyotaFlags.RAISED_ACCEL_LIMIT.value
