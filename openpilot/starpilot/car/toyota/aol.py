@@ -121,6 +121,9 @@ def qualified(cp, *, marked_only=False):
   if base is not cp:
     from opendbc.car.toyota.interface import toyota_auto_hold_supported
     return toyota_auto_hold_supported(cp) and qualified(base, marked_only=marked_only)
+  from opendbc.car.toyota import retrofit as corolla_retrofit
+  if corolla_retrofit.configured(cp):
+    return cp.alternativeExperience in ((32,) if marked_only else (0, 32))
   from opendbc.car.toyota import dsu_bypass
   if dsu_bypass.configured(cp):
     return cp.alternativeExperience in ((32,) if marked_only else (0, 32))
