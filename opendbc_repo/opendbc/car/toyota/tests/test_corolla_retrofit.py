@@ -4,6 +4,7 @@ import unittest
 from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.interfaces import get_torque_params
+from opendbc.car.toyota import retrofit as corolla_retrofit
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.tests.test_auto_hold import decode
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags
@@ -272,6 +273,50 @@ class TestSteerAngleDeadzone(unittest.TestCase):
     for value, expected in ((0., 0.), (0.3, 0.3), (2., 2.), (2.1, 0.3), (-0.1, 0.3), (float('nan'), 0.3), ('x', 0.3), (None, 0.3)):
       with self.subTest(value=value):
         self.assertEqual(steer_angle_deadzone_deg(value), expected)
+
+
+class TestStockLongitudinal(unittest.TestCase):
+  def test_stock_pcm_longitudinal_with_any_alpha_toggle(self):
+    # The emulated PCM keeps longitudinal; without a pedal openpilot longitudinal would move nothing.
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        cp = get_params(RETROFIT, alpha_long=alpha_long)
+        self.assertFalse(cp.alphaLongitudinalAvailable)
+        self.assertFalse(cp.openpilotLongitudinalControl)
+        self.assertTrue(cp.pcmCruise)
+        self.assertEqual(cp.flags, 0)
+        self.assertEqual(cp.safetyConfigs[0].safetyParam, corolla_retrofit.STOCK_WORD)
+        self.assertEqual(corolla_retrofit.STOCK_WORD, 856)
+        self.assertTrue(corolla_retrofit.configured(cp))
+    self.assertFalse(corolla_retrofit.configured(get_params(STOCK)))
+
+  def test_panda_admits_acc_control_only_as_a_cancel(self):
+    from opendbc.car.structs import CarParams
+    from opendbc.safety.tests.common import CANPackerSafety
+    from opendbc.safety.tests.libsafety import libsafety_py
+    safety = libsafety_py.libsafety
+    packer = CANPackerSafety('toyota_new_mc_pt_generated')
+    cp = get_params(RETROFIT)
+    self.assertEqual(safety.set_safety_hooks(CarParams.SafetyModel.toyota, cp.safetyConfigs[0].safetyParam), 0)
+    safety.init_tests()
+    safety.set_controls_allowed(True)
+    self.assertFalse(safety.safety_tx_hook(packer.make_can_msg_safety('ACC_CONTROL', 0, {'ACCEL_CMD': 0.5})))
+    self.assertTrue(safety.safety_tx_hook(packer.make_can_msg_safety('ACC_CONTROL', 0, {'ACCEL_CMD': 0, 'CANCEL_REQ': 1})))
+
+  def test_controller_sends_acc_control_only_to_cancel(self):
+    # The emulator cancels its cruise on ACC_CONTROL CANCEL_REQ (corolla_emulator, 0x343).
+    from opendbc.car import structs
+    for cancel in (False, True):
+      with self.subTest(cancel=cancel):
+        bus = CarBus(RETROFIT)
+        bus.run(150)
+        CC = structs.CarControl()
+        CC.enabled = CC.longActive = True
+        CC.cruiseControl.cancel = cancel
+        sends = [frame for _ in range(3) for frame in bus.CI.apply(CC.as_reader(), 2_500_000_000)[1] if frame[0] == 0x343]
+        self.assertEqual(bool(sends), cancel)
+        for frame in sends:
+          self.assertEqual(decode(bus.CP, frame, 'ACC_CONTROL')['CANCEL_REQ'], 1)
 
 
 class TestRetrofitDiagnostics(unittest.TestCase):
