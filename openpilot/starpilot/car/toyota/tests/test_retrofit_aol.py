@@ -1,6 +1,8 @@
 """Always On Lateral admission for TOYOTA_COROLLA_RETROFIT (safety word 344, 5-byte EPS_STATUS)."""
 import os
+import re
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -33,6 +35,21 @@ class TestRetrofitAolAdmission(unittest.TestCase):
     self.assertTrue(native_matches_cp(cp, TOYOTA, 344))
     self.assertTrue(native_accepts_cp(cp, TOYOTA, 344))
     self.assertFalse(native_matches_cp(cp, TOYOTA, 73))
+
+  def test_word_lists_agree_across_host_pandad_and_panda(self):
+    # The Toyota AOL words live in three places; a word missing from pandad's list leaves aolSafetyWire
+    # unpublished (no AOL, and controlsMismatch on every engagement): 2026-10-23 drive, 00000003.
+    root = Path(__file__).resolve().parents[5]
+    def words(path, function):
+      source = (root / path).read_text()
+      body = source[source.index(function):]
+      body = body[:body.index('\n}')]
+      return {int(n, 0) for n in re.findall(r'param == (0x[0-9A-Fa-f]+|\d+)U', body)}
+    pandad = words('openpilot/starpilot/car/toyota/aol_policy.h', 'inline bool toyota_aol_param')
+    panda = words('opendbc_repo/opendbc/safety/modes/toyota_aol.h', 'static void toyota_aol_configure')
+    self.assertIn(344, AOL_WORDS)
+    self.assertEqual(pandad, set(AOL_WORDS))
+    self.assertEqual(panda, set(AOL_WORDS))
 
   def test_stock_longitudinal_is_not_admitted(self):
     # Alpha long off sets STOCK_LONGITUDINAL (word 856), which the panda's AOL list does not hold.
