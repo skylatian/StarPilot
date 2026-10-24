@@ -141,6 +141,10 @@ def fast_update(repo, branch, *, params, parked, expected_commit, current_os=Non
 
   git('check-ref-format', '--branch', branch)
   initial_branch = git('symbolic-ref', '--short', 'HEAD').strip()
+  if not versions_only and git('ls-tree', 'HEAD', '--', 'prebuilt').strip().split()[:1] != ['100644']:
+    # A source build rewrites tracked build outputs, so decide incompatibility before the clean-tree check
+    # and let an automatic update fall back to the full update, which works in its own staging copy.
+    raise FastUpdateIncompatible('Fast Update requires prebuilt releases; use a full validated update')
   admitted()
   previous = git('rev-parse', 'HEAD^{commit}').strip()
   if not isinstance(expected_commit, str) or not re.fullmatch(r'[0-9a-f]{40}', expected_commit) or previous != expected_commit:

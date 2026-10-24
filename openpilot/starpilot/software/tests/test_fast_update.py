@@ -79,6 +79,19 @@ class TestFastUpdate(unittest.TestCase):
     arguments.update(kwargs)
     return owner.fast_update(self.repo, 'Dom', **arguments)
 
+  def test_source_build_with_dirty_outputs_is_incompatible_not_dirty(self):
+    # An installed source build (no prebuilt) whose build rewrote tracked outputs must be routed to the
+    # full update, and the fast path must not touch the working tree.
+    self.git(self.repo, 'config', 'user.name', 'Test')
+    self.git(self.repo, 'config', 'user.email', 'test@example.invalid')
+    self.git(self.repo, 'rm', '-q', 'prebuilt')
+    self.git(self.repo, 'commit', '-qm', 'source build')
+    (self.repo / 'msgq_repo' / 'source').write_text('rebuilt output')
+    with self.assertRaisesRegex(owner.FastUpdateIncompatible, 'prebuilt'):
+      self.update()
+    self.assertEqual((self.repo / 'msgq_repo' / 'source').read_text(), 'rebuilt output')
+    self.assertEqual(self.invalidations, [])
+
   def test_recent_listing_preserves_installed_state_and_rollback_receipt(self):
     self.git(self.repo, 'update-ref', 'refs/starpilot/previous', self.previous)
     (self.repo / 'private-data').write_text('preserved')
