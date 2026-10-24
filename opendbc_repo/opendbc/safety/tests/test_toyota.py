@@ -743,3 +743,123 @@ class TestToyotaHighlanderAol(unittest.TestCase):
         self.assertEqual(self.safety.aol_get_permission_mask(), 0)
         self.physical()
         self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+
+
+class TestToyotaCorollaRetrofitAol(unittest.TestCase):
+  """TOYOTA_COROLLA_RETROFIT: word 344 (EPS scale 88 | ALT_BRAKE), 5-byte EPS_STATUS, brake on 0x224."""
+  WORD = 344
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.packer = common.CANPackerSafety("toyota_new_mc_pt_generated")
+
+  def tearDown(self):
+    self.safety.set_alternative_experience(0)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.noOutput, 0)
+
+  def init(self, word=WORD, ae=32):
+    self.safety.init_tests()
+    self.safety.set_alternative_experience(ae)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, word)
+    self.safety.set_timer(1_000_000)
+    self.safety.set_aol_test_heartbeat(True)
+
+  def rx(self, address, data, checksum=False):
+    data = bytearray(data)
+    if checksum:
+      data[-1] = ((address & 255) + (address >> 8) + len(data) + sum(data[:-1])) & 255
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(address, 0, bytes(data))))
+
+  def eps(self, state=1, length=5):
+    # EPS_STATUS: LKA_STATE in byte 3 bits 7..1, Toyota checksum in the last byte.
+    self.rx(0x262, bytes(3) + bytes([state << 1]) + bytes(length - 4), True)
+
+  def physical(self, *, cruise=False, main=True, gear=0, door=False, eps=1, brake=False):
+    # The bus as the emulator, VSS device and stalk send it (logs/starpilot-7.0, 2026-10-23).
+    self.rx(0xAA, bytes([0x1A, 0x6F] * 4))
+    self.rx(0x260, bytes(8), True)
+    self.rx(0x1D2, bytes([16 | (32 if cruise else 0)]) + bytes(7), True)
+    self.rx(0x224, bytes([32 if brake else 0]) + bytes(7))
+    self.rx(0x1D3, bytes([0, 128 if main else 0]) + bytes(6), True)
+    self.rx(0x3BC, bytes([0, gear]) + bytes(6))
+    self.rx(0x620, bytes(5) + bytes([4 if door else 0, 0, 0]))
+    self.eps(eps)
+    self.safety.aol_set_host_request(3)
+
+  def steer(self, torque):
+    return self.safety.safety_tx_hook(self.packer.make_can_msg_safety("STEERING_LKA", 0, {
+      "STEER_TORQUE_CMD": torque, "STEER_REQUEST": 1 if torque else 0, "SET_ME_1": 1}))
+
+  def test_main_grants_lateral_with_short_eps_status(self):
+    self.init()
+    self.physical()
+    self.assertEqual(self.safety.aol_get_request_mask(), 3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertTrue(self.steer(10))
+    self.physical(cruise=True)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 3)
+
+  def test_dbc_eps_status_is_the_short_frame(self):
+    self.init()
+    self.physical(eps=0)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+    self.assertTrue(self.safety.safety_rx_hook(self.packer.make_can_msg_safety("EPS_STATUS", 0, {"LKA_STATE": 1})))
+    self.safety.aol_set_host_request(3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+
+  def test_physical_withdrawal(self):
+    for changes in ({'main': False}, {'gear': 32}, {'door': True}, {'eps': 0}, {'eps': 3}, {'eps': 9}, {'eps': 17}):
+      with self.subTest(changes=changes):
+        self.init()
+        self.physical()
+        self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+        self.physical(**changes)
+        self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+        self.assertFalse(self.steer(10))
+        self.assertTrue(self.steer(0))
+
+  def test_brake_keeps_lateral_only(self):
+    self.init()
+    self.physical(cruise=True)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 3)
+    self.physical(cruise=True, brake=True)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+
+  def test_eps_status_length_is_per_profile(self):
+    # An 8-byte EPS_STATUS drops the retrofit's EPS source; TSS2 word 73 still needs 8 bytes.
+    self.init()
+    self.physical()
+    self.eps(1, length=8)
+    self.safety.aol_set_host_request(3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+    self.eps(1)
+    self.safety.aol_set_host_request(3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+    self.init(word=73)
+    self.rx(0x226, bytes(8))  # word 73 has no ALT_BRAKE: brake on 0x226
+    self.physical()
+    self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+    self.eps(1, length=8)
+    self.safety.aol_set_host_request(3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+
+  def test_eps_status_checksum_and_freshness(self):
+    self.init()
+    self.physical()
+    self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x262, 0, bytes(3) + bytes([2, 0])))  # bad checksum
+    self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+    self.physical()
+    self.assertEqual(self.safety.aol_get_permission_mask(), 1)
+    self.safety.set_timer(1_400_001)
+    self.safety.aol_set_host_request(3)
+    self.assertEqual(self.safety.aol_get_permission_mask(), 0)
+
+  def test_exact_word_and_experience(self):
+    # 856 = 344 | STOCK_LONGITUDINAL (alpha long off); 88 = no ALT_BRAKE; 345/343 = other EPS scales.
+    for word, ae in ((344, 0), (344, 160), (344, 288), (344, 33), (856, 32), (88, 32), (343, 32), (345, 32)):
+      with self.subTest(word=word, ae=ae):
+        self.init(word=word, ae=ae)
+        self.physical(cruise=True)
+        self.assertEqual(self.safety.aol_get_request_mask(), 0)
+        self.assertEqual(self.safety.aol_get_permission_mask(), 0)

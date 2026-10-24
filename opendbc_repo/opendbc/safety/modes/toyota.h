@@ -165,7 +165,7 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 
 static void toyota_optional_rx_hook(const CANPacket_t *msg) {
   const bool aol_checksum_source = (msg->addr == 0x1D3U) || (msg->addr == 0x262U) || (toyota_aol_secoc && (msg->addr == 0x127U));
-  const unsigned int aol_source_len = (toyota_aol_rav4h_filter && (msg->addr == 0x262U)) ? 5U : 8U;
+  const unsigned int aol_source_len = (msg->addr == 0x262U) ? toyota_aol_eps_status_len() : 8U;
   if (!aol_checksum_source || ((GET_LEN(msg) == aol_source_len) && (toyota_get_checksum(msg) == toyota_compute_checksum(msg)))) {
     toyota_aol_observe(msg);
   } else if (toyota_aol_enabled && (msg->bus == 0U)) {

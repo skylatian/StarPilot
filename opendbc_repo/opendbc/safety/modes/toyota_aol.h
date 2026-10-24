@@ -6,6 +6,8 @@ static bool toyota_pedal = false;
 static bool toyota_aol_secoc = false;
 static bool toyota_aol_stock = false;
 static bool toyota_aol_rav4h_filter = false;
+// TOYOTA_COROLLA_RETROFIT: 2016 non-TSS2 EPS (5-byte 0x262) on an emulated 2005 Corolla bus.
+static bool toyota_aol_retrofit = false;
 static bool toyota_sdsu_control = false;
 static bool toyota_aol_main = false;
 static bool toyota_aol_drive = false;
@@ -14,6 +16,10 @@ static bool toyota_aol_belt = false;
 static bool toyota_aol_eps = false;
 static bool toyota_aol_seen[4] = {false, false, false, false};
 static uint32_t toyota_aol_ts[4] = {0U, 0U, 0U, 0U};
+
+static unsigned int toyota_aol_eps_status_len(void) {
+  return (toyota_aol_rav4h_filter || toyota_aol_retrofit) ? 5U : 8U;
+}
 
 static void toyota_aol_reset(void) {
   toyota_sdsu_control = false;
@@ -58,7 +64,7 @@ static uint8_t toyota_aol_permission(void) {
 
 static void toyota_aol_observe(const CANPacket_t *msg) {
   const uint32_t gear_addr = toyota_aol_secoc ? 0x127U : 0x3BCU;
-  const unsigned int expected_len = (toyota_aol_rav4h_filter && (msg->addr == 0x262U)) ? 5U : 8U;
+  const unsigned int expected_len = (msg->addr == 0x262U) ? toyota_aol_eps_status_len() : 8U;
   if (toyota_aol_enabled && (msg->bus == 0U) && (GET_LEN(msg) != expected_len)) {
     unsigned int index = 4U;
     if (msg->addr == 0x1D3U) {
@@ -111,6 +117,7 @@ static void toyota_aol_configure(uint16_t param) {
   toyota_aol_reset();
   toyota_pedal = (param == 0x2049U) || (param == 0x2249U);
   toyota_aol_rav4h_filter = (param == 0x9049U) || (param == 0x9249U);
+  toyota_aol_retrofit = (param == 344U);
   toyota_aol_stock = (param == 585U) || (param == 4681U) || (param == 0x9249U) || (param == 0x2249U);
 #ifdef ALLOW_DEBUG
   toyota_aol_secoc = (param == 2121U);
@@ -124,6 +131,7 @@ static void toyota_aol_configure(uint16_t param) {
                        ((param == 0x9049U) && ((alternative_experience == 32) || (alternative_experience == 160))) ||
                        ((param == 0x2049U) && (alternative_experience == 32)) ||
                        ((param == 4169U) && (alternative_experience == 32)) ||
+                       ((param == 344U) && (alternative_experience == 32)) ||
                        ((param == 73U) && ((alternative_experience == 32) || (alternative_experience == 160) || (alternative_experience == 288)));
   if (toyota_aol_enabled) {
     static const AolSafetyPolicy policy = {

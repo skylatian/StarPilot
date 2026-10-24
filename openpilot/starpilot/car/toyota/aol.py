@@ -5,7 +5,7 @@ from opendbc.car.toyota.values import CAR, ToyotaFlags, ToyotaSafetyFlags, EPS_S
 from openpilot.starpilot.aol.policy import AolVehiclePolicy
 from openpilot.starpilot.aol.intent import AolCardIntent, AOL_TOGGLE
 
-AOL_WORDS = frozenset((73, 585, 4169, 4681, 2121, 0x9049, 0x9249, 0x2049, 0x2249))
+AOL_WORDS = frozenset((73, 585, 4169, 4681, 2121, 0x9049, 0x9249, 0x2049, 0x2249, 344))
 
 
 SECOC_TORQUE_CARS = frozenset((CAR.TOYOTA_SIENNA_4TH_GEN,))
@@ -33,7 +33,21 @@ def secoc_qualified(cp, *, marked_only=False):
           config.safetyParam == EPS_SCALE[cp.carFingerprint] | int(ToyotaSafetyFlags.SECOC))
 
 
+def retrofit_qualified(cp, *, marked_only=False):
+  """TOYOTA_COROLLA_RETROFIT: OP longitudinal on the emulated PCM, word EPS scale | ALT_BRAKE (344)."""
+  if (cp is None or cp.brand != 'toyota' or cp.carFingerprint != CAR.TOYOTA_COROLLA_RETROFIT or
+      cp.notCar or cp.passive or cp.dashcamOnly or not cp.pcmCruise or not cp.openpilotLongitudinalControl or
+      cp.steerControlType != structs.CarParams.SteerControlType.torque or len(cp.safetyConfigs) != 1 or
+      cp.alternativeExperience not in ((32,) if marked_only else (0, 32)) or int(cp.flags) != 0):
+    return False
+  config = cp.safetyConfigs[0]
+  return (config.safetyModel == structs.CarParams.SafetyModel.toyota and
+          config.safetyParam == EPS_SCALE[cp.carFingerprint] | int(ToyotaSafetyFlags.ALT_BRAKE))
+
+
 def qualified(cp, *, marked_only=False):
+  if cp is not None and cp.carFingerprint == CAR.TOYOTA_COROLLA_RETROFIT:
+    return retrofit_qualified(cp, marked_only=marked_only)
   from opendbc.car.toyota import pedal
   if pedal.configured(cp):
     return cp.alternativeExperience in ((32,) if marked_only else (0, 32))
