@@ -126,6 +126,8 @@ class Controls:
                                        "friction": self.LaC.torque_params.friction},
                      "startupPidGain": [list(row) for row in self.LaC.pid._k_p],
                      "startupPidLimits": [self.LaC.pid.neg_limit, self.LaC.pid.pos_limit]})
+    from openpilot.starpilot.lateral import retrofit_torque_log
+    self.retrofit_torque_log = retrofit_torque_log if retrofit_torque_log.supported(self.CP, self.LaC) else None
 
     from openpilot.starpilot.flm.live_trial_store import load_confirmed_history
     self.global_learning = GlobalRuntime(self.CP, self.CI, self.LaC, confirmed_live_history=load_confirmed_history(self.params))
@@ -536,6 +538,8 @@ class Controls:
         self.learning_feedback_prior_publish_ns = 0
     else:
       self.learning_feedback_prior_publish_ns = 0
+    if self.retrofit_torque_log is not None:
+      self.retrofit_torque_log.write(feedback.starpilotLateralState, self.LaC, self.torque_host)
     self.pm.send('starpilotLateralState', feedback)
 
   def run(self):
