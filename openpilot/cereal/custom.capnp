@@ -885,6 +885,26 @@ struct StarPilotLateralState @0xc2243c65e0340384 {
   learningApplication @10 :LearningApplication;
   feedbackConsumption @11 :FeedbackConsumption;
   trackingApplication @12 :LiveTrackingApplication;
+  retrofitAppliedTorque @13 :RetrofitAppliedTorque;  # TOYOTA_COROLLA_RETROFIT only (unset on other cars)
+
+  # Torque values the lateral controller ran with this frame. The torque settings
+  # document is not logged and lateralTorqueParameters carries the learner's own
+  # estimate, so neither shows a custom value in use.
+  struct RetrofitAppliedTorque {
+    latAccelFactor @0 :Float32;
+    latAccelOffset @1 :Float32;
+    friction @2 :Float32;
+    source @3 :Source;
+    userFactor @4 :Float32;    # torque settings custom value; NaN when unset or not read
+    userFriction @5 :Float32;
+
+    enum Source {
+      native @0;   # no torque settings host this drive: startup values or native learning
+      vehicle @1;
+      user @2;
+      learned @3;
+    }
+  }
 
   struct LaneCentering {
     version @0 :UInt16;
