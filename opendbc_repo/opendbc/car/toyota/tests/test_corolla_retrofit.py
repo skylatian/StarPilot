@@ -8,6 +8,7 @@ from opendbc.car.toyota import retrofit as corolla_retrofit
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.tests.test_auto_hold import decode
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.vehicle_model import VehicleModel, calc_slip_factor
 
 RETROFIT = CAR.TOYOTA_COROLLA_RETROFIT
 STOCK = CAR.TOYOTA_COROLLA
@@ -93,6 +94,18 @@ class TestCorollaRetrofitPlatform(unittest.TestCase):
       self.assertEqual(cp.safetyConfigs[0].safetyParam & 0xFF, 88)
       self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.ALT_BRAKE)
       self.assertFalse(cp.dashcamOnly)
+
+  def test_tire_stiffness_gives_measured_understeer(self):
+    retrofit, stock = get_params(RETROFIT), get_params(STOCK)
+    self.assertAlmostEqual(retrofit.tireStiffnessFactor, 0.30, places=5)
+    self.assertAlmostEqual(stock.tireStiffnessFactor, 0.444, places=5)
+    self.assertAlmostEqual(retrofit.tireStiffnessFront / stock.tireStiffnessFront, 0.30 / 0.444, places=5)
+    self.assertAlmostEqual(retrofit.tireStiffnessRear / stock.tireStiffnessRear, 0.30 / 0.444, places=5)
+    # same understeer as the IMU fit's stiffness 0.66-0.70 on the old 0.444 base (slip factor scales as 1/stiffness)
+    k_retrofit, k_stock = calc_slip_factor(VehicleModel(retrofit)), calc_slip_factor(VehicleModel(stock))
+    self.assertLess(k_retrofit, 0)  # still understeering
+    self.assertGreater(k_retrofit / k_stock, 1 / 0.70)
+    self.assertLess(k_retrofit / k_stock, 1 / 0.66)
 
   def test_torque_params(self):
     params = get_torque_params()

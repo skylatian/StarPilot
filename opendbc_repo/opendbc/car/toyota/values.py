@@ -218,9 +218,12 @@ class CAR(Platforms):
   # 2005 Corolla research retrofit: 2016 Corolla (TSS-P) EPS and steering angle sensor, no camera, radar or DSU.
   # The PCM, VSS and cruise stalk are emulated on bus 0. There is deliberately no Bus.radar entry, so
   # radarUnavailable is derived as True, and no Bus.cam entry: bus 2 only mirrors bus 0 on this car.
+  # tireStiffnessFactor: the car understeers ~1.5x more than at the Corolla's 0.444 once paramsd's road roll is in
+  # the vehicle model (IMU fit: ratio ~20.6 at stiffness 0.66). paramsd resets its stiffness to 1.0 every drive,
+  # so at 0.444 the learned steer ratio absorbed the difference (24-25 after highway driving).
   TOYOTA_COROLLA_RETROFIT = PlatformConfig(
     [ToyotaCommunityCarDocs("Toyota Corolla Retrofit 2005", package="Custom retrofit; 2016 Corolla EPS, no camera or radar")],
-    CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=17.4, tireStiffnessFactor=0.444),
+    CarSpecs(mass=2860. * CV.LB_TO_KG, wheelbase=2.7, steerRatio=17.4, tireStiffnessFactor=0.30),
     {Bus.pt: 'toyota_new_mc_pt_generated'},
   )
   TOYOTA_MATRIX_RETROFIT = PlatformConfig(
