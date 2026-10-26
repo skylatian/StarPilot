@@ -136,6 +136,7 @@ class TestCorollaRetrofitAol(unittest.TestCase):
         with patch('openpilot.selfdrive.selfdrived.selfdrived.REPLAY', False):
           sd = SelfdriveD(CP=selected.CP)
         self.assertTrue(controls.aol_replay)
+        self.assertIsNotNone(controls.aol_transition_diagnostic)  # logs why AOL steering dropped
         self.assertTrue(sd.aol_replay)
         state = structs.CarState(canValid=True, gearShifter=structs.CarState.GearShifter.drive)
         state.cruiseState.available = True
@@ -199,6 +200,31 @@ def test_held_pedal_source_gap_keeps_retrofit_restrictions(fault):
     assert not axis.lateralActive and not command.latActive and not host.enabled
     if fault != 'latch_withdrawn':
       assert str(axis.faultReason) != 'availabilityPause'
+
+
+def test_lateral_withdrawal_is_logged():
+  """firestar's GM withdrawal diagnostic also runs for the retrofit: one bounded record of why AOL steering dropped."""
+  from openpilot.selfdrive.controls import controlsd
+  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (ExitStack, OpenpilotPrefix, fixture,
+                                                                         refresh_saved_settings, rolling)
+  with ExitStack() as cleanup:
+    cleanup.enter_context(OpenpilotPrefix())
+    case = fixture.IoniqAvailabilityTests(methodName='runTest')
+    cleanup.callback(case.doCleanups)
+    sd, controls, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
+    refresh_saved_settings(sd)
+    for tick in (0, 1):
+      axis, _, command = drive(tick, observed_state=rolling(False, False), native_request_long=False)
+      assert axis.lateralActive and command.latActive
+    records = []
+    cleanup.enter_context(patch.object(controlsd.cloudlog, 'event',
+                                       side_effect=lambda name, **kw: records.append((name, kw.get('diagnostic')))))
+    _, _, command = drive(2, allowed=False, observed_state=rolling(False, False), native_request_long=False)
+    assert not command.latActive
+    (name, record), = records
+    assert name == 'aol_lateral_withdrawal' and controls.aol_transition_diagnostic.emitted == 1
+    assert record['native']['param'] == 856 and not record['native']['allowed']
+    assert record['physical']['mainAvailable'] and record['physical']['gear'] == 'drive' and record['reason']
 
 
 if __name__ == '__main__':
