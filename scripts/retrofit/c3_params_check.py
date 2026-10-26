@@ -8,7 +8,7 @@ from opendbc.car.structs import car
 
 p = Params()
 print("env FINGERPRINT:", os.environ.get("FINGERPRINT"), "SKIP_FW_QUERY:", os.environ.get("SKIP_FW_QUERY"))
-for k in ("RetrofitSASOffset", "RetrofitSteerAngleDeadzone"):
+for k in ("RetrofitSASOffset", "RetrofitSteerAngleDeadzone", "RetrofitSteerKD"):
   try:
     print(f"{k}: type={p.get_type(k)} value={p.get(k)!r}")
   except Exception as e:

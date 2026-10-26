@@ -130,6 +130,8 @@ class Controls:
                                        "friction": self.LaC.torque_params.friction},
                      "startupPidGain": [list(row) for row in self.LaC.pid._k_p],
                      "startupPidLimits": [self.LaC.pid.neg_limit, self.LaC.pid.pos_limit]})
+    from openpilot.starpilot.lateral.retrofit_steer_damping import create_kd_owner
+    self.retrofit_kd_owner = create_kd_owner(self.params, self.LaC)
     from openpilot.starpilot.lateral import retrofit_torque_log
     self.retrofit_torque_log = retrofit_torque_log if retrofit_torque_log.supported(self.CP, self.LaC) else None
     from openpilot.starpilot.car.toyota import retrofit_withdrawal_log
@@ -202,6 +204,9 @@ class Controls:
     self.flm_native_witness = None
     if self.lateral_gain_owner is not None:
       self.lateral_gain_owner.refresh()
+    retrofit_kd_owner = getattr(self, 'retrofit_kd_owner', None)
+    if retrofit_kd_owner is not None:
+      retrofit_kd_owner.refresh()
 
     # Update VehicleModel
     lp = self.sm['vehicleParameters']

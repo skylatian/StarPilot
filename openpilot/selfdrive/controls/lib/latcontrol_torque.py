@@ -62,6 +62,8 @@ class LatControlTorque(LatControl):
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
     self.turn_assist = create_turn_assist(CP, turn_assist)
     self.starpilot_extension = create_extension(self, CP, self.controller_mode, self.controller_policy, turn_assist=turn_assist)
+    from openpilot.starpilot.lateral import retrofit_steer_damping
+    self.retrofit_damping = retrofit_steer_damping.create(CP, self.controller_mode, self.dt)
     self.flm_source = flm.GmLiveSource(CP, self.controller_mode)
     self.flm_surface = None
     from openpilot.starpilot.flm.runtime_adapter_registry import baseline_values
@@ -99,6 +101,8 @@ class LatControlTorque(LatControl):
     else:
       result = self.update_standard(active, CS, VM, params, steer_limited_by_safety,
                                     desired_curvature, curvature_limited, lat_delay)
+      if self.retrofit_damping is not None:
+        result = self.retrofit_damping.apply(self, active, CS, result)
     return auto_stages.apply_selected_output(self, CS, VM, params, desired_curvature, result,
       active=active, limited=steer_limited_by_safety or curvature_limited, curvature_limited=curvature_limited)
 
