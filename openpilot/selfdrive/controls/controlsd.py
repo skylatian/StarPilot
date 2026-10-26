@@ -73,9 +73,7 @@ class Controls:
       self.params, enabled=self.params.get_bool("OpenpilotEnabledToggle"))
     self.torque_learning_allowed = learning_allowed(self.params, self.CP, selection=self.lateral_controller_selection)
     self.aol_replay = feature_enabled(self.params, self.CP, 'aol', os.environ)
-    from opendbc.car.toyota import retrofit as corolla_retrofit
-    self.aol_transition_diagnostic = (TransitionDiagnostic() if self.aol_replay and
-                                      (self.CP.brand == 'gm' or corolla_retrofit.configured(self.CP)) else None)
+    self.aol_transition_diagnostic = TransitionDiagnostic() if self.aol_replay and self.CP.brand == 'gm' else None
     self.ordinary_axis_ack_required = axis_policy_for(self.CP).ordinary_axis_ack_required
     self.longitudinal_inputs = LongitudinalInputs(self.CP, self.params, lambda: self.sm)
 
@@ -134,6 +132,8 @@ class Controls:
                      "startupPidLimits": [self.LaC.pid.neg_limit, self.LaC.pid.pos_limit]})
     from openpilot.starpilot.lateral import retrofit_torque_log
     self.retrofit_torque_log = retrofit_torque_log if retrofit_torque_log.supported(self.CP, self.LaC) else None
+    from openpilot.starpilot.car.toyota import retrofit_withdrawal_log
+    self.aol_transition_diagnostic = self.aol_transition_diagnostic or retrofit_withdrawal_log.create(self.CP, self.aol_replay)
 
     from openpilot.starpilot.flm.live_trial_store import load_confirmed_history
     self.global_learning = GlobalRuntime(self.CP, self.CI, self.LaC, confirmed_live_history=load_confirmed_history(self.params))
