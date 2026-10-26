@@ -5,6 +5,7 @@ sides are upstream's. The host admission is our own (opendbc toyota/retrofit.py 
 """
 import os
 import unittest
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from opendbc.car import gen_empty_fingerprint, structs
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, ToyotaFlags
 from openpilot.cereal import log
+from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.starpilot.aol.vehicle import native_matches_cp, policy_for
 from openpilot.starpilot.car.toyota.aol import ToyotaCardIntent, matrix_stock_qualified, native_accepts_cp, qualified
 
@@ -145,25 +147,47 @@ class TestCorollaRetrofitAol(unittest.TestCase):
         del controls, sd, selected
 
 
+# The tests below run firestar's shared AOL caller fixture (selfdrived + controlsd + a native
+# panda grant) with the retrofit's CarParams.
+
+def _retrofit_callers(cleanup):
+  """(selfdrived, controls, drive) for the retrofit, from firestar's public AOL test helpers."""
+  from openpilot.starpilot.aol.tests.stock_lateral_test_helpers import authority_case
+  from openpilot.starpilot.aol.tests.test_toyota_parking_brake_deadline import refresh_saved_settings
+  cleanup.enter_context(OpenpilotPrefix())
+  case = authority_case()
+  cleanup.callback(case.doCleanups)
+  sd, controls, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
+  refresh_saved_settings(sd)
+  return sd, controls, drive
+
+
+def _rolling(brake=False, gas=False):
+  """Moving in drive with MAIN on and cruise not engaged (the state of firestar's RAV4 held-pedal route)."""
+  from openpilot.starpilot.aol.tests.stock_lateral_test_helpers import car_state
+  state = car_state(brake=brake)
+  state.gasPressed = gas
+  state.vEgo = state.vEgoRaw = 17.76392555237 if gas else .63179683685
+  state.standstill = False
+  state.cruiseState.available = True
+  state.cruiseState.enabled = False
+  return state
+
+
 # firestar's held-pedal intent (car/toyota/aol.py held_lateral_pedal) keys off qualified(marked_only=True),
-# so it reaches the retrofit through our admission. Run his RAV4 route scenario with our CarParams.
+# so it reaches the retrofit through our admission. Run his RAV4 source-gap scenario with our CarParams.
 @pytest.mark.parametrize('pedal', ('brake', 'gas'))
 def test_held_pedal_source_gap_keeps_retrofit_intent(pedal):
-  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (BASE, ExitStack, OpenpilotPrefix, fixture,
-                                                                         intent, refresh_saved_settings, rolling)
+  from openpilot.starpilot.aol.tests.test_input_deadline_continuity import BASE, intent
   brake, gas = pedal == 'brake', pedal == 'gas'
   with ExitStack() as cleanup:
-    cleanup.enter_context(OpenpilotPrefix())
-    case = fixture.IoniqAvailabilityTests(methodName='runTest')
-    cleanup.callback(case.doCleanups)
-    sd, _, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
-    refresh_saved_settings(sd)
+    sd, _, drive = _retrofit_callers(cleanup)
     assert qualified(sd.CP, marked_only=True)
     for tick in (0, 1):
-      axis, _, command = drive(tick, observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+      axis, _, command = drive(tick, observed_state=_rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
       assert axis.lateralActive and command.latActive and not command.longActive
     prior, _, command = drive(2, offset_ns=5_209_427, state_stamp=BASE,
-      intent_message=intent(BASE, 3), observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+      intent_message=intent(BASE, 3), observed_state=_rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
     assert prior.lateralActive and command.latActive
     axis, host, command = drive(5, offset_ns=2_073_802, timeout=True,
       state_stamp=BASE, intent_message=intent(BASE, 3), brake=brake, gas=gas, native_request_long=False)
@@ -172,60 +196,79 @@ def test_held_pedal_source_gap_keeps_retrofit_intent(pedal):
     assert axis.desiredLateral and axis.nativeAcknowledged and not sd.aol_authority_lost
     source = BASE + 28_454_011
     axis, _, command = drive(6, state_stamp=source, intent_message=intent(source, 4),
-      observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+      observed_state=_rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
     assert axis.lateralActive and command.latActive and not command.longActive
 
 
-@pytest.mark.parametrize('fault', ('native_denied', 'rx_fault', 'latch_withdrawn', 'missing_anchor', 'dm_lockout'))
+@pytest.mark.parametrize('fault', ('native_denied', 'native_invalid', 'rx_fault', 'relay_fault',
+                                  'latch_withdrawn', 'missing_anchor', 'pause_setting', 'dm_lockout'))
 def test_held_pedal_source_gap_keeps_retrofit_restrictions(fault):
-  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (BASE, ExitStack, OpenpilotPrefix, fixture,
-                                                                         intent, refresh_saved_settings, rolling)
+  from openpilot.starpilot.aol.tests.test_input_deadline_continuity import BASE, intent
+  from openpilot.starpilot.aol.tests.test_toyota_parking_brake_deadline import refresh_saved_settings
   with ExitStack() as cleanup:
-    cleanup.enter_context(OpenpilotPrefix())
-    case = fixture.IoniqAvailabilityTests(methodName='runTest')
-    cleanup.callback(case.doCleanups)
-    sd, _, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
-    refresh_saved_settings(sd)
-    for tick in (0, 1, 2):
-      drive(tick, offset_ns=5_209_427 if tick == 2 else 0, state_stamp=BASE if tick == 2 else None,
-            intent_message=intent(BASE, 3) if tick == 2 else None, observed_state=rolling(), brake=True,
-            native_request_long=False)
+    sd, _, drive = _retrofit_callers(cleanup)
+    for tick in (0, 1):
+      axis, _, command = drive(tick, observed_state=_rolling(brake=True), brake=True, native_request_long=False)
+      assert axis.lateralActive and command.latActive
+    prior, _, command = drive(2, offset_ns=5_209_427, state_stamp=BASE,
+      intent_message=intent(BASE, 3), observed_state=_rolling(brake=True), brake=True, native_request_long=False)
+    assert prior.lateralActive and command.latActive
     if fault == 'missing_anchor':
       sd.aol_ordinary_source_anchor = None
+    elif fault == 'pause_setting':
+      sd.params.put('PauseAOLOnBrake', 30., block=True)
+      refresh_saved_settings(sd)
     elif fault == 'dm_lockout':
       sd.aol_dm_lateral_inhibit = True
     axis, host, command = drive(5, offset_ns=2_073_802, timeout=True,
       state_stamp=BASE, intent_message=intent(BASE, 3, latched=fault != 'latch_withdrawn'),
-      brake=True, native_request_long=False, allowed=fault != 'native_denied', panda_fault=fault == 'rx_fault')
+      brake=True, native_request_long=False, allowed=fault != 'native_denied',
+      native_valid=fault != 'native_invalid', panda_fault=fault == 'rx_fault', relay_fault=fault == 'relay_fault')
     assert not axis.lateralActive and not command.latActive and not host.enabled
-    if fault != 'latch_withdrawn':
+    if fault == 'latch_withdrawn':
+      assert not axis.desiredLateral and sd.aol_last_intent is None
+    else:
       assert str(axis.faultReason) != 'availabilityPause'
 
 
-def test_lateral_withdrawal_is_logged():
-  """firestar's GM withdrawal diagnostic also runs for the retrofit: one bounded record of why AOL steering dropped."""
+def _withdrawal_records(cleanup):
   from openpilot.selfdrive.controls import controlsd
-  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (ExitStack, OpenpilotPrefix, fixture,
-                                                                         refresh_saved_settings, rolling)
+  records = []
+  cleanup.enter_context(patch.object(controlsd.cloudlog, 'event',
+                                     side_effect=lambda name, **kw: records.append((name, kw.get('diagnostic')))))
+  return records
+
+
+def test_lateral_withdrawal_is_logged():
+  """retrofit_withdrawal_log: one bounded record of why AOL steering dropped."""
   with ExitStack() as cleanup:
-    cleanup.enter_context(OpenpilotPrefix())
-    case = fixture.IoniqAvailabilityTests(methodName='runTest')
-    cleanup.callback(case.doCleanups)
-    sd, controls, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
-    refresh_saved_settings(sd)
+    _, controls, drive = _retrofit_callers(cleanup)
     for tick in (0, 1):
-      axis, _, command = drive(tick, observed_state=rolling(False, False), native_request_long=False)
+      axis, _, command = drive(tick, observed_state=_rolling(), native_request_long=False)
       assert axis.lateralActive and command.latActive
-    records = []
-    cleanup.enter_context(patch.object(controlsd.cloudlog, 'event',
-                                       side_effect=lambda name, **kw: records.append((name, kw.get('diagnostic')))))
-    _, _, command = drive(2, allowed=False, observed_state=rolling(False, False), native_request_long=False)
+    records = _withdrawal_records(cleanup)
+    _, _, command = drive(2, allowed=False, observed_state=_rolling(), native_request_long=False)
     assert not command.latActive
     (name, record), = records
     assert name == 'aol_lateral_withdrawal' and controls.aol_transition_diagnostic.emitted == 1
     assert record['native']['param'] == 856 and not record['native']['allowed']
     assert record['physical']['mainAvailable'] and record['physical']['gear'] == 'drive' and record['reason']
 
+
+def test_stopping_is_not_logged_as_a_withdrawal():
+  """The retrofit never steers at standstill, so a stop ends lateral without using up the 64 records."""
+  with ExitStack() as cleanup:
+    _, controls, drive = _retrofit_callers(cleanup)
+    for tick in (0, 1):
+      axis, _, command = drive(tick, observed_state=_rolling(), native_request_long=False)
+      assert axis.lateralActive and command.latActive
+    records = _withdrawal_records(cleanup)
+    stopped = _rolling()
+    stopped.vEgo = stopped.vEgoRaw = 0.
+    stopped.standstill = True
+    _, _, command = drive(2, observed_state=stopped, native_request_long=False)
+    assert not command.latActive
+    assert records == [] and controls.aol_transition_diagnostic.emitted == 0
 
 if __name__ == '__main__':
   unittest.main()
