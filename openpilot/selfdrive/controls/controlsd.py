@@ -134,6 +134,9 @@ class Controls:
     self.retrofit_torque_log = retrofit_torque_log if retrofit_torque_log.supported(self.CP, self.LaC) else None
     from openpilot.starpilot.car.toyota import retrofit_withdrawal_log
     self.aol_transition_diagnostic = self.aol_transition_diagnostic or retrofit_withdrawal_log.create(self.CP, self.aol_replay)
+    from openpilot.starpilot.lateral import retrofit_lane_gate_log
+    self.lane_centering_controller, self.lane_centering_host = retrofit_lane_gate_log.wrap(
+      self.CP, self.lane_centering_controller, self.lane_centering_host, self.params)
 
     from openpilot.starpilot.flm.live_trial_store import load_confirmed_history
     self.global_learning = GlobalRuntime(self.CP, self.CI, self.LaC, confirmed_live_history=load_confirmed_history(self.params))
