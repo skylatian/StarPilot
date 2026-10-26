@@ -73,7 +73,9 @@ class Controls:
       self.params, enabled=self.params.get_bool("OpenpilotEnabledToggle"))
     self.torque_learning_allowed = learning_allowed(self.params, self.CP, selection=self.lateral_controller_selection)
     self.aol_replay = feature_enabled(self.params, self.CP, 'aol', os.environ)
-    self.aol_transition_diagnostic = TransitionDiagnostic() if self.aol_replay and self.CP.brand == 'gm' else None
+    from opendbc.car.toyota import retrofit as corolla_retrofit
+    self.aol_transition_diagnostic = (TransitionDiagnostic() if self.aol_replay and
+                                      (self.CP.brand == 'gm' or corolla_retrofit.configured(self.CP)) else None)
     self.ordinary_axis_ack_required = axis_policy_for(self.CP).ordinary_axis_ack_required
     self.longitudinal_inputs = LongitudinalInputs(self.CP, self.params, lambda: self.sm)
 
