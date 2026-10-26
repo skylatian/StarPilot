@@ -8,6 +8,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from opendbc.car import gen_empty_fingerprint, structs
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, ToyotaFlags
@@ -140,6 +142,63 @@ class TestCorollaRetrofitAol(unittest.TestCase):
         selected.aol_card_intent.update(state.as_reader())
         self.assertEqual(selected.aol_card_intent.allowed_latch, enabled)
         del controls, sd, selected
+
+
+# firestar's held-pedal intent (car/toyota/aol.py held_lateral_pedal) keys off qualified(marked_only=True),
+# so it reaches the retrofit through our admission. Run his RAV4 route scenario with our CarParams.
+@pytest.mark.parametrize('pedal', ('brake', 'gas'))
+def test_held_pedal_source_gap_keeps_retrofit_intent(pedal):
+  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (BASE, ExitStack, OpenpilotPrefix, fixture,
+                                                                         intent, refresh_saved_settings, rolling)
+  brake, gas = pedal == 'brake', pedal == 'gas'
+  with ExitStack() as cleanup:
+    cleanup.enter_context(OpenpilotPrefix())
+    case = fixture.IoniqAvailabilityTests(methodName='runTest')
+    cleanup.callback(case.doCleanups)
+    sd, _, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
+    refresh_saved_settings(sd)
+    assert qualified(sd.CP, marked_only=True)
+    for tick in (0, 1):
+      axis, _, command = drive(tick, observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+      assert axis.lateralActive and command.latActive and not command.longActive
+    prior, _, command = drive(2, offset_ns=5_209_427, state_stamp=BASE,
+      intent_message=intent(BASE, 3), observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+    assert prior.lateralActive and command.latActive
+    axis, host, command = drive(5, offset_ns=2_073_802, timeout=True,
+      state_stamp=BASE, intent_message=intent(BASE, 3), brake=brake, gas=gas, native_request_long=False)
+    assert log.OnroadEvent.EventName.controlsMismatch not in sd.events.names
+    assert str(axis.faultReason) == 'availabilityPause' and not command.latActive and not host.enabled
+    assert axis.desiredLateral and axis.nativeAcknowledged and not sd.aol_authority_lost
+    source = BASE + 28_454_011
+    axis, _, command = drive(6, state_stamp=source, intent_message=intent(source, 4),
+      observed_state=rolling(brake, gas), brake=brake, gas=gas, native_request_long=False)
+    assert axis.lateralActive and command.latActive and not command.longActive
+
+
+@pytest.mark.parametrize('fault', ('native_denied', 'rx_fault', 'latch_withdrawn', 'missing_anchor', 'dm_lockout'))
+def test_held_pedal_source_gap_keeps_retrofit_restrictions(fault):
+  from openpilot.starpilot.aol.tests.test_toyota_brake_source_gap import (BASE, ExitStack, OpenpilotPrefix, fixture,
+                                                                         intent, refresh_saved_settings, rolling)
+  with ExitStack() as cleanup:
+    cleanup.enter_context(OpenpilotPrefix())
+    case = fixture.IoniqAvailabilityTests(methodName='runTest')
+    cleanup.callback(case.doCleanups)
+    sd, _, drive = case._authority_callers(False, cp=retrofit_cp(), genuine_events=True)
+    refresh_saved_settings(sd)
+    for tick in (0, 1, 2):
+      drive(tick, offset_ns=5_209_427 if tick == 2 else 0, state_stamp=BASE if tick == 2 else None,
+            intent_message=intent(BASE, 3) if tick == 2 else None, observed_state=rolling(), brake=True,
+            native_request_long=False)
+    if fault == 'missing_anchor':
+      sd.aol_ordinary_source_anchor = None
+    elif fault == 'dm_lockout':
+      sd.aol_dm_lateral_inhibit = True
+    axis, host, command = drive(5, offset_ns=2_073_802, timeout=True,
+      state_stamp=BASE, intent_message=intent(BASE, 3, latched=fault != 'latch_withdrawn'),
+      brake=True, native_request_long=False, allowed=fault != 'native_denied', panda_fault=fault == 'rx_fault')
+    assert not axis.lateralActive and not command.latActive and not host.enabled
+    if fault != 'latch_withdrawn':
+      assert str(axis.faultReason) != 'availabilityPause'
 
 
 if __name__ == '__main__':
